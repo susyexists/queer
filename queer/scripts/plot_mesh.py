@@ -1,5 +1,5 @@
 # Import typy library
-from typy import *
+from queer import *
 # Input files
 file_path = f"./input/"
 nscf = "nscf.out"

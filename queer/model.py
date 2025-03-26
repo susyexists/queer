@@ -176,7 +176,7 @@ def Symmetries(fstring):
 def plot_fs(band, fs_thickness=0.01, title=None):
     # Imaging cross sections of fermi surface using a single calculation
     df = pd.DataFrame()
-    x,y = t_mesh(int(np.sqrt(len(band))))
+    x,y = mesh_crystal(int(np.sqrt(len(band))))
     df['x'] = x
     df['y'] = y
     df['E'] = band
@@ -233,7 +233,7 @@ def read_efermi(path):
             return e_fermi
 
 def plot_electron_mesh(band, N, metallic_band_index, xlim, ylim, plot_factor=5, save=None, temp=None, cmap='jet'):
-    x, y = t_mesh(N)
+    x, y = mesh_crystal(N)
     plt.figure(figsize=(plot_factor*xlim+1, plot_factor*ylim))
     plt.scatter(x, y, c=band[metallic_band_index], cmap=cmap)
     plt.colorbar()

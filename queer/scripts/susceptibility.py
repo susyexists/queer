@@ -1,5 +1,5 @@
 # Tightbinding Library
-from TB import *
+from queer import *
 # Location of data files
 file_path = f"./data/"
 nscf = "nscf.out"
@@ -18,7 +18,7 @@ shift_search = np.linspace(-0.15, 0.15, 100)
 suscep = np.zeros(shape=(len(shift_search), len(path)))
 # Calculate and print susceptibility
 for i in range(len(suscep)):
-    model = TB(file_path, nscf, wout, hr, shift=shift_search[i])
+    model = queer(file_path, nscf, wout, hr, shift=shift_search[i])
     mesh_energy = model.parallel_solver(mesh)[metallic_band_index]
     mesh_fermi = model.fermi(mesh_energy)
     sus_mesh = [model.suscep(q, mesh, mesh_energy, mesh_fermi) for q in path]
