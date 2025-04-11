@@ -14,7 +14,7 @@ import multiprocessing
 g_vec = np.array([[0.86602505, 0.5], [0, 1]])
 inverse_g = np.linalg.inv(g_vec)
 import psutil
-plt.style.use('./src/neon.mplstyle')
+# plt.style.use('./queer/resources/neon.mplstyle')
 
 from .functions import fd
 
@@ -102,9 +102,9 @@ class model:
 
     def plot_electron_path(self, band, sym, labels, ylim=None, save=None, temp=None):
         # Plot band
-        plt.figure(figsize=(7, 6))
+        plt.figure(figsize=(6, 6))
         for i in band:
-            plt.plot(i, c="blue")
+            plt.plot(i, c="blue",)
         plt.xticks(ticks=sym, labels=labels, fontsize=15)
         plt.xlim(sym[0], sym[-1])
         for i in sym[1:-1]:
