@@ -2,7 +2,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.constants import electron_mass, Planck
-from .model import mesh_cartesian, mesh_crystal, triangle_mesh, hexagon_crystal
+from .mesh import mesh_cartesian, mesh_crystal
 
 def arpes_equation(Ek, V0, k_xy):
     kx, ky = k_xy
@@ -36,9 +36,8 @@ def arpes_equation(Ek, V0, k_xy):
 
 def arpes_mesh(light_energy,binding_energy,V0,N,factor):
     Ek = light_energy - binding_energy
-    k_xy = mesh_cartesian(N=N, dimension=2,factor=factor).T-factor/2
-    kx,ky = k_xy
-    kz = arpes_equation(Ek, V0, k_xy)
+    kx,ky,kz = mesh_cartesian(N=[N,N,1],factor=factor).T-factor/2
+    kz = arpes_equation(Ek, V0, [kx,ky])
     
     # Combine kx, ky, kz into a single array
     k_points = np.vstack((kx, ky, kz)).T

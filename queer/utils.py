@@ -151,6 +151,24 @@ def mesh_cartesian(num_points=[6,6,6], factor=1):
     three_dim = np.array([[i, j,k] for i in x for j in y for k in z])
     return (three_dim*factor)
 
+
+def read_gvec(path,dim=3):
+    lines = open(path, 'r').readlines()
+    g_vec = np.zeros(shape=(3, 3))
+    count = 0
+    for i in lines:
+        if "b(" in i:
+            if count == 3:
+                continue
+            else:
+                g_vec[count] = i.split()[3:6]
+                count += 1
+        elif "lattice parameter (alat)" in i:
+            alat = float(i.split()[-2])
+    factor = 2*np.pi/(alat *0.529177)
+    return (g_vec*factor)
+
+
 def fermi_bands(bands, window=0.5):
     near_bands = []
     for j,i in enumerate(bands):

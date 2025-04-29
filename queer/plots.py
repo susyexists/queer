@@ -20,4 +20,23 @@ def plot_susceptibility(suscep,sym,labels,show=False,save=False,path=False):
         plt.savefig(f'{path}/susceptibility.pdf')
         
 
-        
+def plot_electron_mesh(band, mesh, metallic_band_index, fig_size=[5,5], save=None, temp=None, cmap='jet',s=1):
+    x, y,z = mesh
+
+    plt.figure(figsize=(fig_size[0],fig_size[1]))
+    plt.scatter(x, y, c=band[metallic_band_index], cmap=cmap,s=s)
+    plt.colorbar()
+    # plt.xlim(xlim[0], xlim[1])
+    # plt.ylim(ylim[0], ylim[1])
+    plt.axis("equal")
+    # plt.xticks([])
+    # plt.yticks([])
+    plt.xlabel(r"$k_x$ [$\AA^{-1}$]")
+    plt.ylabel(r"$k_y$ [$\AA^{-1}$]")
+    plt.axis("equal")
+    if temp == None:
+        plt.title("")
+    else:
+        plt.title(f"σ = {temp}")
+    if save != None:
+        plt.savefig(save)

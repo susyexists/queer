@@ -11,8 +11,8 @@ import pandas as pd
 from joblib import Parallel, delayed
 import multiprocessing
 # Physical constants
-g_vec = np.array([[0.86602505, 0.5], [0, 1]])
-inverse_g = np.linalg.inv(g_vec)
+# g_vec = np.array([[0.86602505, 0.5], [0, 1]])
+# inverse_g = np.linalg.inv(g_vec)
 import psutil
 # plt.style.use('./queer/resources/neon.mplstyle')
 
@@ -36,7 +36,7 @@ class model:
         else:
             self.fermi_energy=ef
         if nscf:
-            self.g_vec = read_gvec(path+nscf)
+            self.g_vec = utils.read_gvec(path+nscf)
         if poscar:
             lattice_vector = utils.read_poscar(path+poscar)
             self.g_vec = utils.crystal2reciprocal(lattice_vector)
@@ -123,25 +123,7 @@ class model:
         if save != None:
             plt.savefig(save)
 
-            
-def mesh_cartesian(N,dimension, factor=1):
-    if type(N)== int:
-        N = [N,N,N]
-    if dimension == 3:
-        x = np.linspace(0, 1, N[0])
-        y = np.linspace(0, 1, N[1])
-        z = np.linspace(0, 1, N[2])
-        mesh = np.array([[i, j,k] for i in x for j in y for k in z])
-    elif dimension == 2:
-        x = np.linspace(0, 1, N[0])
-        y = np.linspace(0, 1, N[1])
-        mesh = np.array([[i, j] for i in x for j in y])
-    return (mesh*factor)
 
-def mesh_crystal(N,dimension = 3,factor=1):
-    mesh = mesh_cartesian(N, dimension,factor)
-    t_mesh = np.dot(g_vec.T, mesh.T)
-    return t_mesh
 
 
 def GMKG(num_points, g_length=1):
@@ -196,19 +178,7 @@ def delta_function(x, epsilon=0.00001):
     return (1 / np.pi) * epsilon / (x ** 2 + epsilon ** 2)
 
 
-def read_gvec(path):
-    lines = open(path, 'r').readlines()
-    g_vec = np.zeros(shape=(3, 3))
-    count = 0
-    for i in lines:
-        if "b(" in i:
-            if count == 3:
-                continue
-            else:
-                g_vec[count] = i.split()[3:6]
-                count += 1
-    g_vec = g_vec.T[:2].T[:2]
-    return (g_vec)
+
 
 
 def read_hr(path):
@@ -232,22 +202,6 @@ def read_efermi(path):
             e_fermi = float(i.split()[-2])
             return e_fermi
 
-def plot_electron_mesh(band, N, metallic_band_index, xlim, ylim, plot_factor=5, save=None, temp=None, cmap='jet'):
-    x, y = mesh_crystal(N)
-    plt.figure(figsize=(plot_factor*xlim+1, plot_factor*ylim))
-    plt.scatter(x, y, c=band[metallic_band_index], cmap=cmap)
-    plt.colorbar()
-    plt.xlim(-xlim, xlim)
-    plt.ylim(-ylim, ylim)
-    # plt.axis("equal")
-    plt.xticks([])
-    plt.yticks([])
-    if temp == None:
-        plt.title("")
-    else:
-        plt.title(f"σ = {temp}")
-    if save != None:
-        plt.savefig(save)
 
 
 def density_of_states(energy, band_index=False, dE=1e-2):
@@ -284,27 +238,8 @@ def triangle_mesh(N):
     triangle = df.query("y<=sqrt(3)*x").query("y<=-sqrt(3)*x+sqrt(3)").values
     return triangle.T
 
-def hexagon_cartesian(N):
-    triangle = triangle_mesh(N).T
-    fold =6 
-    grid = np.zeros(shape=(fold,len(triangle),2))
-    for n in range(0,fold):
-        theta = n*np.pi/3
-        # rx, ry =rotate(triangle, theta)
-        grid[n]=rotate(triangle, theta).T
-        # print(len(rx))
-        # plt.scatter(rx,ry)
-    grid = grid.reshape(-1,2).T
-    grid = grid/max(grid[1])/2
-    return grid
-    
-def hexagon_crystal(N,g_vec=g_vec):
-    grid = np.dot(hexagon_cartesian(N).T,inverse_g)
-    return grid
 
-def cartesian2crystal(cartesian):
-    grid = np.dot(g_vec,cartesian)
-    return grid
+    
 
 
 def find_cross(band,parameter):
