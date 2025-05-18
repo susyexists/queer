@@ -33,3 +33,13 @@ def crystal2cartesian(crystal,g_vec):
     g_inv = np.linalg.inv(g_vec)
     cartesian = np.dot(crystal.T,g_inv)
     return cartesian
+
+
+def reciprocal2angstrom(reciprocal,g_vec):
+    angstrom = np.dot(g_vec.T, reciprocal.T)
+    return angstrom.T
+
+def angstrom2reciprocal(angstrom,g_vec):
+    g_inv = np.linalg.inv(g_vec)
+    cartesian = np.dot(angstrom,g_inv)
+    return cartesian

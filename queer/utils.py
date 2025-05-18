@@ -144,12 +144,6 @@ def path_create(n_points,corners):
           corner_points[-1]=n_points
     return(corner_points,path)
 
-def mesh_cartesian(num_points=[6,6,6], factor=1):
-    x = np.linspace(0, 1, num_points[0])
-    y = np.linspace(0, 1, num_points[1])
-    z = np.linspace(0, 1, num_points[2])
-    three_dim = np.array([[i, j,k] for i in x for j in y for k in z])
-    return (three_dim*factor)
 
 
 def read_gvec(path,dim=3):

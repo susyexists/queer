@@ -11,8 +11,6 @@ import pandas as pd
 from joblib import Parallel, delayed
 import multiprocessing
 # Physical constants
-# g_vec = np.array([[0.86602505, 0.5], [0, 1]])
-# inverse_g = np.linalg.inv(g_vec)
 import psutil
 # plt.style.use('./queer/resources/neon.mplstyle')
 
@@ -24,7 +22,7 @@ from . import utils
 from tqdm import tqdm
 
 class model:
-    def __init__(self, hr, path="./",nscf=False,poscar=False, ef=0,read_ef=False,shift=0,num_core=False):
+    def __init__(self, hr="wannier90_hr.dat", path="./",nscf=False,poscar=False, ef=0,read_ef=False,shift=0,num_core=False):
         if num_core!=False:
             self.num_cores= num_core
         else:
@@ -38,9 +36,9 @@ class model:
         if nscf:
             self.g_vec = utils.read_gvec(path+nscf)
         if poscar:
+            
             lattice_vector = utils.read_poscar(path+poscar)
             self.g_vec = utils.crystal2reciprocal(lattice_vector)
-        self.g_length = 1
         self.data = read_hr(path+hr)
         self.hopping = self.data[0]
         self.nbnd = int(np.sqrt(len(self.data[0])/len(self.data[2])))
@@ -100,7 +98,7 @@ class model:
         res = [self.suscep(point=q,mesh= k_mesh,mesh_energy=en_k,mesh_fermi = fd_k,bands=band_index) for q in tqdm(q_path)]
         return np.array(res).T
 
-    def plot_electron_path(self, band, sym, labels, ylim=None, save=None, temp=None):
+    def plot_electron_path(self, band, sym, labels, ylim=None, save=None, temp=None,title=False):
         # Plot band
         plt.figure(figsize=(6, 6))
         for i in band:
@@ -114,6 +112,8 @@ class model:
             plt.ylim(-0.6, 0.8)
         else:
             plt.ylim(ylim)
+        if title!=False:
+            plt.title(title)
         if temp != None:
             plt.title(f"σ = {temp}", fontsize=15)
         if self.shift != 0:
@@ -122,28 +122,6 @@ class model:
         plt.ylabel("Energy (eV)", fontsize=15)
         if save != None:
             plt.savefig(save)
-
-
-
-
-def GMKG(num_points, g_length=1):
-    mult = 0.75*num_points/1.00786
-    GM = int(np.linalg.norm(
-        np.array([[0, 0.5]])-np.array([[0.0001, 0.0001]]))*mult)
-    MK = int(
-        np.linalg.norm(np.array([[0.33333, 0.333333]])-np.array([[0, 0.5]]))*mult)
-    KG = int(np.linalg.norm(np.array([[0.0001, 0.0001]]) -
-             np.array([[0.33333, 0.333333]]))*mult)
-    path1 = np.array([np.zeros(GM), np.linspace(0.0001, g_length/2, GM)]).T
-    path2 = np.array([np.linspace(0, g_length/3, MK), -1/2.1 *
-                      np.linspace(0, g_length/3, MK)+g_length/2]).T
-    path3 = np.array([np.linspace(g_length/3, 0.0001, KG),
-                      np.linspace(g_length/3, 0.0001, KG)]).T
-    path = np.concatenate([path1, path2, path3])
-    # print("Length of the path is ", len(path))
-    sym = [0, GM, GM+MK, GM+MK+KG]
-    label = ['Γ', 'M', 'K', 'Γ']
-    return path, sym, label
 
 
 def Symmetries(fstring):
