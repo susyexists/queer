@@ -36,7 +36,9 @@ def spectral_arpes_path_sweep(
     For each ``v0`` and each ``omega`` in ``omega_list``, the curved path is built
     with ``Ek = photon_energy - omega`` and bands are evaluated. When
     ``align_zero=True`` the bands are shifted by the largest negative band value
-    at ``omega == 0`` (matching the notebook's prior behavior).
+    on the curved path at ``omega = 0`` — computed once per v0, then applied to
+    every omega. Works for any ``omega_list`` (whether 0 is the first element,
+    a middle element, or absent entirely).
 
     Returns ``{v0: 2D array of shape (len(omega_list), Nk)}``.
     """
@@ -44,15 +46,18 @@ def spectral_arpes_path_sweep(
 
     results = {}
     for v0 in v0_list:
-        rows = []
         max_neg = 0.0
+        if align_zero:
+            ref_path = arpes_path(path_points, g_vec, Ek=photon_energy, V0=v0)
+            ref_bands = model.calculate_energy(ref_path)
+            negatives = ref_bands[ref_bands < 0]
+            if negatives.size:
+                max_neg = negatives.max()
+
+        rows = []
         for omega in omega_list:
             curved = arpes_path(path_points, g_vec, Ek=photon_energy - omega, V0=v0)
             bands = model.calculate_energy(curved)
-            if align_zero and omega == omega_list[0]:
-                negatives = bands[bands < 0]
-                if negatives.size:
-                    max_neg = negatives.max()
             row = [
                 spectral_from_eig(eig - max_neg, omega_list=[omega], eta=eta)[0]
                 for eig in bands.T
