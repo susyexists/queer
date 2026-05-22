@@ -191,6 +191,182 @@ class model:
         axis = self.plot_electron_path(bands, sym, labels, ylim=ylim, save=save, ax=ax)
         return bands, axis
 
+    def plot_brillouin_zone(self, mesh=None, mesh_repeat=0, align_dir=None,
+                            ax=None, figsize=(7, 7), title=None,
+                            max_mesh_pts=2000, mesh_clip_bz=False,
+                            mesh_style='scatter'):
+        """Plot the Brillouin zone with optional k-point mesh overlay.
+
+        Requires a POSCAR (pass ``poscar=`` when constructing the model).
+
+        Parameters
+        ----------
+        mesh : (N, 3) array, optional
+            k-points in Å⁻¹ to scatter on top of the BZ.
+        mesh_repeat : int
+            Number of BZ shells over which to tile the mesh using G-vector
+            offsets.  0 = original mesh only; 1 = adds the 26 nearest G-vector
+            images, etc.
+        align_dir : array-like of length 3, optional
+            Cartesian direction (Å⁻¹) for an arrow drawn from Γ to the BZ
+            boundary.  The arrow length is clipped to the BZ face it first hits.
+        ax : Axes3D, optional
+            Existing axes to draw into; a new figure is created if omitted.
+        figsize, title : passed to plt.figure / ax.set_title.
+
+        Returns
+        -------
+        fig, ax
+        """
+        try:
+            import ase.io
+            from ase.dft.bz import bz_vertices
+            from ase.dft.kpoints import get_special_points
+            from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+        except ImportError:
+            raise ImportError("plot_brillouin_zone requires ase: pip install ase")
+
+        if self.poscar is None:
+            raise ValueError(
+                "plot_brillouin_zone requires a POSCAR. "
+                "Initialize the model with poscar=..."
+            )
+
+        atoms = ase.io.read(self.path / self.poscar)
+
+        # self.g_vec rows are b1, b2, b3 in 2π/Å — exactly what bz_vertices expects
+        faces = bz_vertices(self.g_vec)
+        polys = [f[0] for f in faces]
+
+        # fractional → Cartesian: k_cart = k_frac @ g_vec
+        sp_cart = {
+            name: frac @ self.g_vec
+            for name, frac in get_special_points(atoms.cell).items()
+        }
+
+        if ax is None:
+            fig = plt.figure(figsize=figsize)
+            ax = fig.add_subplot(111, projection='3d')
+        else:
+            fig = ax.figure
+
+        ax.add_collection3d(
+            Poly3DCollection(polys, alpha=0.08, facecolor='steelblue',
+                             edgecolor='steelblue', linewidth=0.8)
+        )
+
+        # G-vector nearest to the mesh centroid (used by mesh_clip_bz)
+        G_near = None
+        shifted_polys = []
+
+        if mesh is not None:
+            m = np.asarray(mesh, dtype=float)
+            n_pts = len(m)
+            n_side = int(round(n_pts ** 0.5))
+            is_structured = (n_side * n_side == n_pts)
+
+            if mesh_clip_bz:
+                # Find the G-vector closest to the mesh centroid so we clip
+                # to the BZ that actually contains the mesh.
+                centroid = m.mean(axis=0)
+                best_d = np.inf
+                for n1 in range(-3, 4):
+                    for n2 in range(-3, 4):
+                        for n3 in range(-3, 4):
+                            G = (n1 * self.g_vec[0]
+                                 + n2 * self.g_vec[1]
+                                 + n3 * self.g_vec[2])
+                            d = np.linalg.norm(centroid - G)
+                            if d < best_d:
+                                best_d = d
+                                G_near = G.copy()
+                # Draw the BZ at G_near as a second reference frame
+                shifted_polys = [p + G_near for p in polys]
+                ax.add_collection3d(
+                    Poly3DCollection(shifted_polys, alpha=0.06,
+                                     facecolor='gold', edgecolor='gold',
+                                     linewidth=0.8)
+                )
+
+            if mesh_style in ('surface', 'wireframe') and is_structured:
+                stride = max(1, n_side // max(1, int(max_mesh_pts ** 0.5)))
+                gs = m.reshape(n_side, n_side, 3)[::stride, ::stride].copy()
+                if mesh_clip_bz and G_near is not None:
+                    flat = gs.reshape(-1, 3)
+                    inside = np.ones(len(flat), dtype=bool)
+                    for verts, normal in faces:
+                        # Point k is in BZ at G_near iff (k - G_near) is in BZ at Γ
+                        inside &= ((flat - G_near) @ normal
+                                   <= verts[0] @ normal + 1e-10)
+                    flat[~inside] = np.nan
+                    gs = flat.reshape(gs.shape)
+                X, Y, Z = gs[..., 0], gs[..., 1], gs[..., 2]
+                if mesh_style == 'wireframe':
+                    ax.plot_wireframe(X, Y, Z, color='orange', alpha=0.6,
+                                      linewidth=0.5, rstride=1, cstride=1)
+                else:
+                    ax.plot_surface(X, Y, Z, color='orange', alpha=0.3,
+                                    linewidth=0, antialiased=True)
+            else:
+                # Scatter fallback (style='scatter' or unstructured input).
+                if mesh_clip_bz and G_near is not None:
+                    inside = np.ones(n_pts, dtype=bool)
+                    for verts, normal in faces:
+                        inside &= ((m - G_near) @ normal
+                                   <= verts[0] @ normal + 1e-10)
+                    m = m[inside]
+                elif mesh_repeat > 0:
+                    bz_radius = np.linalg.norm(np.vstack(polys), axis=1).max()
+                    shells = [m]
+                    for n1 in range(-mesh_repeat, mesh_repeat + 1):
+                        for n2 in range(-mesh_repeat, mesh_repeat + 1):
+                            for n3 in range(-mesh_repeat, mesh_repeat + 1):
+                                if n1 == n2 == n3 == 0:
+                                    continue
+                                offset = (n1 * self.g_vec[0]
+                                          + n2 * self.g_vec[1]
+                                          + n3 * self.g_vec[2])
+                                if np.linalg.norm(offset) <= 2 * bz_radius:
+                                    shells.append(m + offset)
+                    m = np.vstack(shells)
+                if len(m) > max_mesh_pts:
+                    rng = np.random.default_rng(0)
+                    m = m[rng.choice(len(m), max_mesh_pts, replace=False)]
+                ax.scatter(m.T[0], m.T[1], m.T[2],
+                           s=3, alpha=0.4, color='orange', label='ARPES mesh')
+
+        for name, pt in sp_cart.items():
+            ax.scatter(*pt, s=40, color='red', zorder=5)
+            ax.text(pt[0], pt[1], pt[2], f' {name}', fontsize=10, color='red')
+
+        all_verts = polys + shifted_polys
+        lim = np.abs(np.vstack(all_verts)).max() * 1.15
+        ax.set_xlim(-lim, lim)
+        ax.set_ylim(-lim, lim)
+        ax.set_zlim(-lim, lim)
+        ax.set_box_aspect([1, 1, 1])
+        ax.set_xlabel(r'$k_x$ [Å$^{-1}$]')
+        ax.set_ylabel(r'$k_y$ [Å$^{-1}$]')
+        ax.set_zlabel(r'$k_z$ [Å$^{-1}$]')
+        ax.set_title(title or 'Brillouin Zone')
+
+        if align_dir is not None:
+            d = np.asarray(align_dir, dtype=float)
+            d_hat = d / np.linalg.norm(d)
+            # Find how far the ray Γ + t*d_hat travels before hitting a BZ face
+            t_bz = np.inf
+            for verts, normal in faces:
+                denom = d_hat @ normal
+                if abs(denom) > 1e-10:
+                    t = (verts[0] @ normal) / denom
+                    if 0 < t < t_bz:
+                        t_bz = t
+            arrow_tip = d_hat * (t_bz if np.isfinite(t_bz) else lim * 0.8)
+            ax.quiver(0, 0, 0, *arrow_tip,
+                      color='cyan', linewidth=2, arrow_length_ratio=0.15)
+
+        return fig, ax
+
 
 def Symmetries(fstring):
     f = open(fstring, 'r')
