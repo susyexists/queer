@@ -255,10 +255,6 @@ class model:
                              edgecolor='steelblue', linewidth=0.8)
         )
 
-        # G-vector nearest to the mesh centroid (used by mesh_clip_bz)
-        G_near = None
-        shifted_polys = []
-
         if mesh is not None:
             m = np.asarray(mesh, dtype=float)
             n_pts = len(m)
@@ -266,9 +262,11 @@ class model:
             is_structured = (n_side * n_side == n_pts)
 
             if mesh_clip_bz:
-                # Find the G-vector closest to the mesh centroid so we clip
-                # to the BZ that actually contains the mesh.
+                # Find the G-vector nearest to the mesh centroid, then fold
+                # every point back into the first BZ by subtracting that G
+                # (reduced zone scheme).
                 centroid = m.mean(axis=0)
+                G_near = np.zeros(3)
                 best_d = np.inf
                 for n1 in range(-3, 4):
                     for n2 in range(-3, 4):
@@ -280,24 +278,16 @@ class model:
                             if d < best_d:
                                 best_d = d
                                 G_near = G.copy()
-                # Draw the BZ at G_near as a second reference frame
-                shifted_polys = [p + G_near for p in polys]
-                ax.add_collection3d(
-                    Poly3DCollection(shifted_polys, alpha=0.06,
-                                     facecolor='gold', edgecolor='gold',
-                                     linewidth=0.8)
-                )
+                m = m - G_near  # fold into first BZ
 
             if mesh_style in ('surface', 'wireframe') and is_structured:
                 stride = max(1, n_side // max(1, int(max_mesh_pts ** 0.5)))
                 gs = m.reshape(n_side, n_side, 3)[::stride, ::stride].copy()
-                if mesh_clip_bz and G_near is not None:
+                if mesh_clip_bz:
                     flat = gs.reshape(-1, 3)
                     inside = np.ones(len(flat), dtype=bool)
                     for verts, normal in faces:
-                        # Point k is in BZ at G_near iff (k - G_near) is in BZ at Γ
-                        inside &= ((flat - G_near) @ normal
-                                   <= verts[0] @ normal + 1e-10)
+                        inside &= (flat @ normal <= verts[0] @ normal + 1e-10)
                     flat[~inside] = np.nan
                     gs = flat.reshape(gs.shape)
                 X, Y, Z = gs[..., 0], gs[..., 1], gs[..., 2]
@@ -309,11 +299,10 @@ class model:
                                     linewidth=0, antialiased=True)
             else:
                 # Scatter fallback (style='scatter' or unstructured input).
-                if mesh_clip_bz and G_near is not None:
-                    inside = np.ones(n_pts, dtype=bool)
+                if mesh_clip_bz:
+                    inside = np.ones(len(m), dtype=bool)
                     for verts, normal in faces:
-                        inside &= ((m - G_near) @ normal
-                                   <= verts[0] @ normal + 1e-10)
+                        inside &= (m @ normal <= verts[0] @ normal + 1e-10)
                     m = m[inside]
                 elif mesh_repeat > 0:
                     bz_radius = np.linalg.norm(np.vstack(polys), axis=1).max()
@@ -339,8 +328,7 @@ class model:
             ax.scatter(*pt, s=40, color='red', zorder=5)
             ax.text(pt[0], pt[1], pt[2], f' {name}', fontsize=10, color='red')
 
-        all_verts = polys + shifted_polys
-        lim = np.abs(np.vstack(all_verts)).max() * 1.15
+        lim = np.abs(np.vstack(polys)).max() * 1.15
         ax.set_xlim(-lim, lim)
         ax.set_ylim(-lim, lim)
         ax.set_zlim(-lim, lim)
