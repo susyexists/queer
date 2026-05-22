@@ -1,142 +1,61 @@
-# Installation Guide for QUEER
+# Installation And HPC Notes
 
-This document provides detailed instructions for installing QUEER (Quantum Utilities and Electron Engineering Resources) and its dependencies.
-
-## Prerequisites
-
-QUEER requires Python 3.7 or newer. The following packages are required:
-
-- NumPy
-- SciPy
-- Matplotlib
-- Pandas
-- Joblib
-- tqdm
-- psutil
-
-## Basic Installation
-
-### Using pip (recommended)
-
-The simplest way to install QUEER is using pip:
+## Local Editable Install
 
 ```bash
-pip install queer
+python -m pip install -e .
+python -m pip install -r requirements.txt
 ```
 
-### Installing from source
+The editable install is recommended for notebooks and HPC scripts because the
+repository is still under active development. The package lives under
+`src/queer`, so installing editably is the intended way to make notebooks and
+scripts see source-code edits immediately.
 
-To install the latest development version from the source code:
+For this checkout, the local `.venv` has also been installed as an editable
+package and registered as the Jupyter kernel `Python (queer editable)`.
+Select that kernel in notebooks so edits under `queer/` are imported directly.
+
+## Dependencies
+
+Runtime packages are listed in `requirements.txt`: NumPy, SciPy, Matplotlib,
+Pandas, Joblib, psutil, tqdm, Pillow, ImageIO, Jupyter, nbformat, and pytest for
+smoke testing.
+
+## Organized Paths
+
+Local data and results are intentionally ignored by Git:
+
+- Inputs: `data/materials/<material>/`
+- Legacy large inputs: `data/archive/`
+- Generated figures/logs: `results/`
+
+Use environment variables to point runs at shared or scratch storage:
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/queer.git
-
-# Navigate to the directory
-cd queer
-
-# Install in development mode
-pip install -e .
+export QUEER_DATA_DIR=/scratch/$USER/queer/data
+export QUEER_RESULTS_DIR=/scratch/$USER/queer/results
 ```
 
-## Step-by-Step Installation with Conda
+The package resolves these through `queer.paths.data_path()` and
+`queer.paths.results_path()`.
 
-For reproducible environments, we recommend using Conda:
+## Running On Slurm
+
+Use the provided launcher:
 
 ```bash
-# Create a new conda environment
-conda create -n queer python=3.9
-
-# Activate the environment
-conda activate queer
-
-# Install required packages
-conda install numpy scipy matplotlib pandas joblib tqdm psutil
-
-# Install QUEER
-pip install queer
+sbatch scripts/hpc/run_v0_sweep.sbatch
 ```
 
-Alternatively, you can use the provided environment file:
+Optional environment variables:
 
-```bash
-# Create environment from the file
-conda env create -f environment.yml
+- `QUEER_VENV`: virtual environment to activate before running.
+- `QUEER_DATA_DIR`: data root containing `materials/`.
+- `QUEER_RESULTS_DIR`: output root for generated frames and logs.
 
-# Activate the environment
-conda activate queer
-```
+## Verification
 
-## Testing the Installation
-
-To verify that QUEER has been installed correctly, run:
-
-```python
-import queer
-print(queer.__version__)
-```
-
-You should see the version number printed.
-
-## Common Issues
-
-### Missing dependencies
-
-If you encounter errors related to missing dependencies, ensure all required packages are installed:
-
-```bash
-pip install -r requirements.txt
-```
-
-### Import errors
-
-If you encounter import errors when trying to use QUEER, check that your Python environment is properly set up:
-
-```bash
-# Check which Python is being used
-which python
-
-# Check if QUEER is installed
-pip list | grep queer
-```
-
-### Performance issues
-
-For optimal performance, especially for large calculations:
-
-1. Ensure you have a recent version of NumPy with optimized BLAS/LAPACK
-2. On Linux, consider installing `numpy` with:
-   ```bash
-   conda install numpy scipy -c conda-forge
-   ```
-
-## Using with Quantum ESPRESSO and Wannier90
-
-QUEER works with output files from Quantum ESPRESSO (QE) and Wannier90. To use these features:
-
-1. Run a QE calculation and save the `nscf.out` file
-2. Run Wannier90 to generate the `*_hr.dat` file
-3. Point QUEER to these files when initializing the model
-
-## Advanced Configuration
-
-### Multi-threading
-
-QUEER automatically uses parallel processing for computationally intensive tasks. You can control the number of threads:
-
-```python
-from queer import queer
-
-# Limit to 4 cores
-model = queer(hr="file.dat", num_core=4)
-```
-
-### Memory optimization
-
-For very large systems, you may need to optimize memory usage:
-
-```python
-import os
-# Limit OpenBLAS threads (if you're using OpenBLAS)
-os.environ["OMP_NUM_THREADS"] = "4"
-```
+After moving or restoring artifacts, compare against
+`docs/artifact_manifest.tsv`. The manifest records old path, new path, size,
+category, and checksums for notebooks, scripts, docs, and data files.

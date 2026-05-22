@@ -1,138 +1,80 @@
-=======
-# QUEER: Quantum Utilities and Electron Engineering Resources
+# QUEER
 
-A comprehensive tight-binding numerical library for condensed matter physics calculations.
+QUEER is a Python library for Wannier-Hamiltonian workflows in condensed
+matter calculations, including band energies, susceptibility, self-energy, and
+momentum-microscopy energy-surface runs.
 
-## Overview
+## Repository Layout
 
-QUEER (Quantum Utilities and Electron Engineering Resources) is a Python library designed for numerical simulations in condensed matter physics, focusing on tight-binding models. The package allows for efficient calculation of electronic band structures, Fermi surfaces, susceptibility calculations, and electron-phonon coupling effects.
+- `src/queer/`: importable library code.
+- `notebooks/active/`: current working notebooks. The active Ag primitive
+  notebook is `notebooks/active/Ag_primitive_single.ipynb`.
+- `notebooks/archive/`: preserved development notebooks by material/topic.
+- `data/`: local calculation inputs such as `POSCAR`, `OUTCAR`, `ef.txt`, and
+  `wannier90_hr.dat`. These files are ignored by Git.
+- `results/`: generated figures, animations, and logs. These files are ignored
+  by Git.
+- `scripts/runs/`: runnable Python entrypoints.
+- `scripts/hpc/`: Slurm launchers for HPC runs.
+- `docs/artifact_manifest.tsv`: old-path to new-path inventory for moved
+  notebooks, inputs, scripts, and results.
+- `tests/`: smoke tests for imports, paths, mesh conversions, ARPES helpers,
+  and small model calculations.
 
-## Key Features
-
-- **Electronic Band Structure**: Calculate and visualize electronic band structures along high-symmetry paths
-- **Fermi Surface Mapping**: Generate and visualize Fermi surfaces in 2D and 3D
-- **Susceptibility Calculations**: Compute electronic susceptibility for studying electronic instabilities
-- **Electron-Phonon Coupling**: Tools for analyzing electron-phonon interactions and self-energy calculations
-- **Parallel Computing Support**: Efficient parallel implementations for computationally intensive tasks
-
-## Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/susyexists/queer.git
-
-# Navigate to the directory
-cd queer
-
-# Install the package
-pip install -e .
-```
-
-## Dependencies
-
-QUEER requires the following packages:
-- NumPy
-- SciPy
-- Matplotlib
-- Pandas
-- Joblib
-
-You can install all dependencies using the provided `requirements.txt` file:
+## Install
 
 ```bash
-pip install -r requirements.txt
+python -m pip install -e .
+python -m pip install -r requirements.txt
 ```
 
-## Quick Start
+For local notebook work, launch Jupyter from the repository root after the
+editable install so `queer` resolves consistently.
 
-### Band Structure Calculation
+The project uses a `src/` layout, so the local development environment should
+be installed editably with:
 
-```python
-from queer import *
-
-# Input files
-file_path = "./input/"
-nscf = "nscf.out"
-wout = "NbSe2.wout"
-hr = "NbSe2_hr.dat"
-
-# Define path along high-symmetry points
-k_points = 1000
-path, sym, label = GMKG(k_points)
-
-# Create model
-model = queer(file_path, nscf, wout, hr)
-
-# Calculate dispersion
-band = model.parallel_solver(path)
-
-# Plot bands
-model.plot_electron_path(band, sym, label, ylim=[-2, 2], save="./output/band_path.png")
+```bash
+.venv/bin/python -m pip install -e .
+.venv/bin/python -m ipykernel install --user --name queer-dev --display-name "Python (queer editable)"
 ```
 
-### Susceptibility Calculation
+Select `Python (queer editable)` as the notebook kernel.
 
-```python
-# Import library
-from queer import *
+## Data And Results
 
-# Define input files
-file_path = "./data/"
-nscf = "nscf.out"
-wout = "NbSe2.wout"
-hr = "NbSe2_hr.dat"
+By default, QUEER looks for data under `./data` and writes results under
+`./results`. On HPC systems or scratch filesystems, override those roots:
 
-# Parameters
-T = 0.001
-metallic_band_index = 6
-
-# Create mesh grid
-q_points = 1000
-k_mesh = 300
-path, sym, label = GMKG(q_points)
-mesh = mesh_2d(k_mesh)
-
-# Create model and calculate susceptibility
-model = queer(file_path, nscf, wout, hr)
-mesh_energy = model.parallel_solver(mesh)[metallic_band_index]
-mesh_fermi = model.fermi(mesh_energy)
-sus_mesh = [model.suscep(q, mesh, mesh_energy, mesh_fermi) for q in path]
-
-# Plot susceptibility
-plot_susceptibility(sus_mesh, sym, label, save=True)
+```bash
+export QUEER_DATA_DIR=/path/to/data
+export QUEER_RESULTS_DIR=/path/to/results
 ```
 
-## Documentation
+The helper functions `queer.paths.data_path(...)` and
+`queer.paths.results_path(...)` should be used by notebooks and scripts instead
+of root-relative strings.
 
-For detailed documentation of all available functions and classes, please see the [docs](./docs) directory.
+## Momentum-Microscopy Runs
 
-## Examples
+Run a single V0 sweep locally:
 
-The `scripts` directory contains example scripts demonstrating different functionalities:
-
-- `plot_path.py`: Calculates and plots band structure along high-symmetry paths
-- `plot_mesh.py`: Generates 2D k-space meshes and band calculations
-- `susceptibility.py`: Computes electronic susceptibility for studying instabilities
-- `selfen.py`: Calculates electron-phonon self-energy contributions
-
-## License
-
-This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
-
-## Citation
-
-If you use QUEER in your research, please cite:
-
-```
-@software{queer,
-  author = {Susy Exists},
-  title = {QUEER: Quantum Utilities and Electron Engineering Resources},
-  url = {https://github.com/susyexists/queer},
-  year = {2025},
-}
+```bash
+python scripts/runs/v0_sweep/run_v0.py --V0 12 --material ag_primitive --ef 8.310342
 ```
 
-## Contributing
+Submit the multi-V0 Slurm workflow:
 
-Contributions are welcome! Please feel free to submit a Pull Request.
->>>>>>> a7c92fa (initial migration)
+```bash
+sbatch scripts/hpc/run_v0_sweep.sbatch
+```
+
+The Slurm script honors `QUEER_DATA_DIR`, `QUEER_RESULTS_DIR`, and
+`QUEER_VENV`.
+
+## Quick Smoke Check
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python -m compileall -q queer examples scripts
+python -m pytest
+```

@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.constants import electron_mass, Planck
 from .mesh import mesh_cartesian, mesh_crystal,reciprocal2angstrom,angstrom2reciprocal
+from .functions import get_rotation_matrix
 
 def arpes_equation(Ek, V0, k_xy):
     kx, ky = k_xy
@@ -29,39 +30,45 @@ def arpes_equation(Ek, V0, k_xy):
     C = 0.2625  # Correct value for E in eV, k in Å⁻¹
     
     # Calculate kz using ARPES equation
-    kz = np.sqrt(C * (Ek + V0) - kx**2 - ky**2)
-    
+    arg = C * (Ek + V0) - kx**2 - ky**2
+
+    # Option A: clip (keeps array size fixed)
+    arg = np.maximum(arg, 0.0)
+    kz = np.sqrt(arg)
     return kz
 
 
-def arpes_mesh(photon_energy,fermi_energy,binding_energy,V0,N,factor):
+def arpes_mesh(photon_energy,fermi_energy,binding_energy,V0,N,factor,align=None):
     Ek = photon_energy - binding_energy - fermi_energy
-    kx,ky,kz = mesh_cartesian(N=[N,N,1],factor=factor).T-factor/2
-    kz = arpes_equation(Ek, V0, [kx,ky])
-    
-    # Combine kx, ky, kz into a single array
-    k_points = np.vstack((kx, ky, kz)).T
-    
-    # Remove points with NaN values
-    k_points = k_points[~np.isnan(k_points).any(axis=1)]
-    
-    # Extract components for return
-    kx, ky, kz = k_points.T
-    return kx, ky, kz
+    k_cartesian = mesh_cartesian(N=[N,N,1],factor=factor,center=True)
+    kx,ky,kz = k_cartesian.T
+    kz_curve = arpes_equation(Ek, V0, [kx,ky])
+    k_cartesian_curve = np.array([kx,ky,kz_curve])
+    if align:
+        align_k_cartesian_curve = aligned_arpes_mesh(align,k_cartesian_curve).T
+        return align_k_cartesian_curve
+
+    return k_cartesian_curve.T
+
+
+def aligned_arpes_mesh(align,k_points):
+    initial, final = align
+    rot_mat = get_rotation_matrix(initial,final)
+    return rot_mat@k_points
 
 def arpes_mesh_plot(photon_energy,fermi_energy,binding_energy,V0,N,factor):
-    kx,ky,kz = arpes_mesh(photon_energy,fermi_energy,binding_energy,V0,N,factor)
+    kx,ky,kz = arpes_mesh(photon_energy,fermi_energy,binding_energy,V0,N,factor).T
     plt.scatter(kx, ky, c=kz, cmap='jet',s=1)
     plt.colorbar()
     plt.show()
 
 def arpes_mesh_plot_3d(photon_energy,fermi_energy,binding_energy,V0,N,factor):
-    kx,ky,kz = arpes_mesh(photon_energy,fermi_energy,binding_energy,V0,N,factor)
+    kx,ky,kz = arpes_mesh(photon_energy,fermi_energy,binding_energy,V0,N,factor).T
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
     ax.scatter(kx, ky, kz, c=kz, cmap='jet',s=1)
 
-def binding_k(photon_energy,fermi_energy ,binding_range,binding_step, V0, N, factor):
+def binding_k(photon_energy,fermi_energy ,binding_range,binding_step, V0, N, factor,align=None):
     """
     Create a dictionary to store the k-mesh for each binding energy.
     
@@ -89,7 +96,7 @@ def binding_k(photon_energy,fermi_energy ,binding_range,binding_step, V0, N, fac
     # Loop through each binding energy in the binding_array
     for be in binding_array:
         # Calculate the ARPES mesh for the current binding energy
-        kx, ky, kz = arpes_mesh(photon_energy,fermi_energy, be, V0, N, factor)
+        kx, ky, kz = arpes_mesh(photon_energy,fermi_energy, be, V0, N, factor,align).T
         
         # Store the results in the dictionary
         kmesh_dict[be] = (kx, ky, kz)
@@ -97,7 +104,11 @@ def binding_k(photon_energy,fermi_energy ,binding_range,binding_step, V0, N, fac
     return kmesh_dict
 
 
-def arpes_path(path,g_vec,Ek=21,V0=10):
+def arpes_path(path,g_vec,photon_energy=None,binding_energy=0,fermi_energy=0,V0=10,Ek=None):
+    if Ek is None:
+        if photon_energy is None:
+            photon_energy = 21
+        Ek = photon_energy - binding_energy - fermi_energy
     flat_angstrom = reciprocal2angstrom(path,g_vec=g_vec)
     z_curve = arpes_equation(Ek=Ek,V0=V0,k_xy=flat_angstrom.T[:2])
     # make a copy so flat_angstrom is untouched

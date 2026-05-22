@@ -1,0 +1,496 @@
+old_path	new_path	category	size_bytes	sha256	note
+Ag/POSCAR	data/materials/ag/POSCAR	data	456	c56d08412ef3b677add7b94d75b194d6bd20fae9fad9830495f9f5e51617ba4d	
+Ag/ef.txt	data/materials/ag/ef.txt	data	6	97a5c8221942575e82f29016da7000356fd85c891a96c4126a54c8b46041ec04	
+Ag/wannier90_hr.dat	data/materials/ag/wannier90_hr.dat	data	193107836	91437dbbfa64e324f3a030ae4d69d3f75941dba12c90affe6ef6ee2279c7a93e	
+Ag_primitive/OUTCAR	data/materials/ag_primitive/OUTCAR	data	2628046	b9dbd0251eb6b39df30cdfad2ff22d91adace18d5e10e5ce93188fa8f95dad37	
+Ag_primitive/POSCAR	data/materials/ag_primitive/POSCAR	data	223	0f0740b03aff6b1cfafe8af852b898de4cb7d01db18acb9ab1011ecf8016c047	
+Ag_primitive/wannier90_hr.dat	data/materials/ag_primitive/wannier90_hr.dat	data	31713377	7a375548d5850caa8612054a2602b5843b115c0872d1464bce46a38daed49bd2	
+NiTe2/POSCAR	data/materials/nite2/POSCAR	data	438	91d77a1151eabc6ce9a7c745885ef12fb23d3e7de8be9d43728db19700571e92	
+NiTe2/ef.txt	data/materials/nite2/ef.txt	data	6	1ece993a3d54db862c954b8406d67ec17d758626a8a82d87ee25cc29b3bc2c2b	
+NiTe2/wannier90_hr.dat	data/materials/nite2/wannier90_hr.dat	data	39139654	5d6a3cbe50adaf50a4c5eaff530077d60c749337251ea03e401f9ed3790266b7	
+afm1_hr.dat	data/archive/afm1/afm1_hr.dat	data	3850754449	3a336817a6edb04d55da8f1fe3fb3ac6def8b07e09610f05c8ce3aaf47b6bef1	
+nscf.out	data/archive/legacy/nscf.out	data	15752	83d300c5a132e8cd588cf46c9793b55708776a8122c1a0fab94e629c2f3fa0e7	
+queer/POSCAR	data/archive/legacy/queer_POSCAR	data	464	f4c79aa899bc0bfe96772d751ba899b014a6fce0145f4eb83d7070b216c83b6d	
+vineet/POSCAR	data/materials/vineet/POSCAR	data	464	f4c79aa899bc0bfe96772d751ba899b014a6fce0145f4eb83d7070b216c83b6d	
+vineet/wannier90_hr.dat	data/materials/vineet/wannier90_hr.dat	data	219546753	1c69163c220e105d9f013272015e3eeff399b70ecd7110d34ef61a8201ff861b	
+resources/neon.mplstyle	docs/resources/neon.mplstyle	doc_resource	134	f4e09f0cba5bfb4be5f88022b46cff36d3011936ab8517849cc1bbcde891d2a9	
+.ipynb_checkpoints/Ag_primitive-checkpoint.ipynb	notebooks/archive/checkpoints/Ag_primitive-checkpoint.ipynb	notebook	4415061	0c22c5675d7588443b355a6c3c2bcda8ad9724451e4a4bce99c9a364b42e2b08	
+.ipynb_checkpoints/Ag_primitive_plot-checkpoint.ipynb	notebooks/archive/checkpoints/Ag_primitive_plot-checkpoint.ipynb	notebook	126006	48857777b1908d3ec11134715124244b2c6f6ea75aac0623c075db2c1b82c0e7	
+.ipynb_checkpoints/MnTe_arpes-checkpoint.ipynb	notebooks/archive/checkpoints/MnTe_arpes-checkpoint.ipynb	notebook	20903	e0b04e866fd916d5d2ca24ad8085b403bf72add933e7eee4c5b90de8c19a22d2	
+Ag/Ag.ipynb	notebooks/archive/ag/Ag.ipynb	notebook	1074365	db38a83554315db745df7bfbcff89842d74ce4ae62e50ae4c665d884a5b26548	
+Ag_primitiv_deep.ipynb	notebooks/archive/ag_primitive/Ag_primitiv_deep.ipynb	notebook	2540486	75a407dd171aeb1aabc1f9e681471168217b9a6ec68b6de7165500640ba40d2e	
+Ag_primitive.ipynb	notebooks/archive/ag_primitive/Ag_primitive.ipynb	notebook	1705981	e47df5c31ba8fca230c9d56c602473d2a1decf79bfd5f20067d325e9d3401314	
+Ag_primitive_dev.ipynb	notebooks/archive/ag_primitive/Ag_primitive_dev.ipynb	notebook	1406714	c121d95bb6c9efcebf0fb29a431a09d4583f3df3182768e095c62cc77a8fdfbb	
+Ag_primitive_plot.ipynb	notebooks/archive/ag_primitive/Ag_primitive_plot.ipynb	notebook	240792	7c4b2d18b768c779efa5923e79d194f47efb669bcedb481fe3874902578961d9	
+Ag_primitive_single.ipynb	notebooks/active/Ag_primitive_single.ipynb	notebook	11378280	8af932f8a160873296f5eb7346fc7ad6520624b6144b3527c90f859696d3bb3b	active notebook
+MnTe.ipynb	notebooks/archive/mnte/MnTe.ipynb	notebook	2029905	f88dcaf2a971aeaaf7ad35899f5c0509b5c9b9a44a054a517c0765e4a8fee592	
+MnTe_arpes.ipynb	notebooks/archive/mnte/MnTe_arpes.ipynb	notebook	20918	aee05657cffe457240305c6d3205d3a10ffd00830c14efcc4adbdb0832e0ded9	
+MnTe_arpes_path.ipynb	notebooks/archive/mnte/MnTe_arpes_path.ipynb	notebook	1297755	cca1935deacc0a126d28f6874978bbf10eeb53accc84d2c37fca7955e4734d69	
+MnTe_poscar.ipynb	notebooks/archive/mnte/MnTe_poscar.ipynb	notebook	2969329	bd95d2e559037e87c5a9132826500101659f2ea4e276f46e01c910c570ed03dc	
+MnTe_spectral.ipynb	notebooks/archive/mnte/MnTe_spectral.ipynb	notebook	4583797	1ffe2731d1c2de18e07ee4a5b92c4a2e9c40b46acb23d41af7dbd1d02fdc7394	
+NiTe2.ipynb	notebooks/archive/nite2/NiTe2.ipynb	notebook	1147554	97372da15418111f1f5512eed1b9b609e46a4b914b10f25c206b66404bd330d9	
+NiTe2_new.ipynb	notebooks/archive/nite2/NiTe2_new.ipynb	notebook	2530171	ba6d8b0d4385e735608cf63ebcd5702f5a747607dccf8be22ea398c673d19681	
+arpes.ipynb	notebooks/archive/general/arpes.ipynb	notebook	181374	726871230489330dc2616a5aacf80811912765ad0790b361a2eea9f44595d932	
+arpes_test.ipynb	notebooks/archive/general/arpes_test.ipynb	notebook	547352	7b350ac4fd5b0a10418e9288c8ea6da7a4cb4627ad9f4f54d7c1ae8a703ea884	
+mesh.ipynb	notebooks/archive/general/mesh.ipynb	notebook	3009	ea05a3354d49cb1a7c3c3f5c413b25e3735823eef945d08cf18f9b2d43011b3e	
+poscar.ipynb	notebooks/archive/general/poscar.ipynb	notebook	1822	289f520ff8d231fbda2ac9782bb491a93932e53d9e531470dc14bba694ee2a49	
+spin.ipynb	notebooks/archive/general/spin.ipynb	notebook	0	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	
+test.ipynb	notebooks/archive/general/test.ipynb	notebook	67351	bc8c6e9503d0131d23fcc4967cd28bf45a89bd7a082d4cb441ab7735c0b7db11	
+Ag/v010_ek21.png	results/ag/v010_ek21.png	result	190024		
+Ag/v010_ek42.png	results/ag/v010_ek42.png	result	211269		
+Ag/v015_ek21.png	results/ag/v015_ek21.png	result	212900		
+Ag/v015_ek42.png	results/ag/v015_ek42.png	result	182676		
+Ag/v05_ek21.png	results/ag/v05_ek21.png	result	194597		
+Ag/v05_ek42.png	results/ag/v05_ek42.png	result	176040		
+Ag_primitive/V0_10.png	results/ag_primitive/overview/V0_10.png	result	20727		
+Ag_primitive/V0_10_rotated.png	results/ag_primitive/overview/V0_10_rotated.png	result	20733		
+Ag_primitive/V0_15.png	results/ag_primitive/overview/V0_15.png	result	18550		
+Ag_primitive/V0_15_rotated.png	results/ag_primitive/overview/V0_15_rotated.png	result	19082		
+Ag_primitive/V0_20.png	results/ag_primitive/overview/V0_20.png	result	20807		
+Ag_primitive/V0_20_rotated.png	results/ag_primitive/overview/V0_20_rotated.png	result	20589		
+Ag_primitive/V0_25.png	results/ag_primitive/overview/V0_25.png	result	20827		
+Ag_primitive/V0_25_rotated.png	results/ag_primitive/overview/V0_25_rotated.png	result	20558		
+Ag_primitive/fermi_stack.png	results/ag_primitive/overview/fermi_stack.png	result	21855		
+Ag_primitive/figs/V0_10_shift_-0.1/6.2.png	results/ag_primitive/figs/V0_10_shift_-0.1/6.2.png	result	896954		
+Ag_primitive/figs/V0_10_shift_-0.2/6.2.png	results/ag_primitive/figs/V0_10_shift_-0.2/6.2.png	result	929725		
+Ag_primitive/figs/V0_10_shift_0.1/6.2.png	results/ag_primitive/figs/V0_10_shift_0.1/6.2.png	result	694174		
+Ag_primitive/figs/V0_10_shift_0.15/4.7.png	results/ag_primitive/figs/V0_10_shift_0.15/4.7.png	result	1154379		
+Ag_primitive/figs/V0_10_shift_0.15/5.2.png	results/ag_primitive/figs/V0_10_shift_0.15/5.2.png	result	1039322		
+Ag_primitive/figs/V0_10_shift_0.15/5.7.png	results/ag_primitive/figs/V0_10_shift_0.15/5.7.png	result	1008170		
+Ag_primitive/figs/V0_10_shift_0.15/6.2.png	results/ag_primitive/figs/V0_10_shift_0.15/6.2.png	result	542264		
+Ag_primitive/figs/V0_10_shift_0.2/4.7.png	results/ag_primitive/figs/V0_10_shift_0.2/4.7.png	result	1148264		
+Ag_primitive/figs/V0_10_shift_0.2/5.2.png	results/ag_primitive/figs/V0_10_shift_0.2/5.2.png	result	956140		
+Ag_primitive/figs/V0_10_shift_0.2/5.7.png	results/ag_primitive/figs/V0_10_shift_0.2/5.7.png	result	983680		
+Ag_primitive/figs/V0_10_shift_0.2/6.2.png	results/ag_primitive/figs/V0_10_shift_0.2/6.2.png	result	482825		
+Ag_primitive/figs/V0_10_shift_0.25/4.7.png	results/ag_primitive/figs/V0_10_shift_0.25/4.7.png	result	1143657		
+Ag_primitive/figs/V0_10_shift_0.25/5.2.png	results/ag_primitive/figs/V0_10_shift_0.25/5.2.png	result	907365		
+Ag_primitive/figs/V0_10_shift_0.25/5.7.png	results/ag_primitive/figs/V0_10_shift_0.25/5.7.png	result	951507		
+Ag_primitive/figs/V0_10_shift_0.25/6.2.png	results/ag_primitive/figs/V0_10_shift_0.25/6.2.png	result	429227		
+Ag_primitive/figs/V0_10_shift_0/6.2.png	results/ag_primitive/figs/V0_10_shift_0/6.2.png	result	812236		
+Ag_primitive/figs/V0_10_shift_0_bands/3.2.png	results/ag_primitive/figs/V0_10_shift_0_bands/3.2.png	result	138174		
+Ag_primitive/figs/V0_10_shift_0_bands/3.7.png	results/ag_primitive/figs/V0_10_shift_0_bands/3.7.png	result	148955		
+Ag_primitive/figs/V0_10_shift_0_bands/4.2.png	results/ag_primitive/figs/V0_10_shift_0_bands/4.2.png	result	128171		
+Ag_primitive/figs/V0_10_shift_0_bands/4.7.png	results/ag_primitive/figs/V0_10_shift_0_bands/4.7.png	result	134892		
+Ag_primitive/figs/V0_10_shift_0_bands/5.2.png	results/ag_primitive/figs/V0_10_shift_0_bands/5.2.png	result	121569		
+Ag_primitive/figs/V0_10_shift_0_bands/5.7.png	results/ag_primitive/figs/V0_10_shift_0_bands/5.7.png	result	137260		
+Ag_primitive/figs/V0_10_shift_0_bands/6.2.png	results/ag_primitive/figs/V0_10_shift_0_bands/6.2.png	result	124420		
+Ag_primitive/figs/V0_11_shift_-0.1/6.2.png	results/ag_primitive/figs/V0_11_shift_-0.1/6.2.png	result	846479		
+Ag_primitive/figs/V0_11_shift_-0.2/6.2.png	results/ag_primitive/figs/V0_11_shift_-0.2/6.2.png	result	876935		
+Ag_primitive/figs/V0_11_shift_0.1/6.2.png	results/ag_primitive/figs/V0_11_shift_0.1/6.2.png	result	645882		
+Ag_primitive/figs/V0_11_shift_0.15/4.7.png	results/ag_primitive/figs/V0_11_shift_0.15/4.7.png	result	1173237		
+Ag_primitive/figs/V0_11_shift_0.15/5.2.png	results/ag_primitive/figs/V0_11_shift_0.15/5.2.png	result	1075798		
+Ag_primitive/figs/V0_11_shift_0.15/5.7.png	results/ag_primitive/figs/V0_11_shift_0.15/5.7.png	result	978338		
+Ag_primitive/figs/V0_11_shift_0.15/6.2.png	results/ag_primitive/figs/V0_11_shift_0.15/6.2.png	result	525423		
+Ag_primitive/figs/V0_11_shift_0.2/4.7.png	results/ag_primitive/figs/V0_11_shift_0.2/4.7.png	result	1169659		
+Ag_primitive/figs/V0_11_shift_0.2/5.2.png	results/ag_primitive/figs/V0_11_shift_0.2/5.2.png	result	980136		
+Ag_primitive/figs/V0_11_shift_0.2/5.7.png	results/ag_primitive/figs/V0_11_shift_0.2/5.7.png	result	955605		
+Ag_primitive/figs/V0_11_shift_0.2/6.2.png	results/ag_primitive/figs/V0_11_shift_0.2/6.2.png	result	471272		
+Ag_primitive/figs/V0_11_shift_0.25/4.7.png	results/ag_primitive/figs/V0_11_shift_0.25/4.7.png	result	1171096		
+Ag_primitive/figs/V0_11_shift_0.25/5.2.png	results/ag_primitive/figs/V0_11_shift_0.25/5.2.png	result	910914		
+Ag_primitive/figs/V0_11_shift_0.25/5.7.png	results/ag_primitive/figs/V0_11_shift_0.25/5.7.png	result	929224		
+Ag_primitive/figs/V0_11_shift_0.25/6.2.png	results/ag_primitive/figs/V0_11_shift_0.25/6.2.png	result	422616		
+Ag_primitive/figs/V0_11_shift_0/6.2.png	results/ag_primitive/figs/V0_11_shift_0/6.2.png	result	760331		
+Ag_primitive/figs/V0_12_shift_-0.1/6.2.png	results/ag_primitive/figs/V0_12_shift_-0.1/6.2.png	result	809857		
+Ag_primitive/figs/V0_12_shift_-0.2/6.2.png	results/ag_primitive/figs/V0_12_shift_-0.2/6.2.png	result	851953		
+Ag_primitive/figs/V0_12_shift_0.1/6.2.png	results/ag_primitive/figs/V0_12_shift_0.1/6.2.png	result	591355		
+Ag_primitive/figs/V0_12_shift_0.15/4.7.png	results/ag_primitive/figs/V0_12_shift_0.15/4.7.png	result	1182811		
+Ag_primitive/figs/V0_12_shift_0.15/5.2.png	results/ag_primitive/figs/V0_12_shift_0.15/5.2.png	result	1099492		
+Ag_primitive/figs/V0_12_shift_0.15/5.7.png	results/ag_primitive/figs/V0_12_shift_0.15/5.7.png	result	979836		
+Ag_primitive/figs/V0_12_shift_0.15/6.2.png	results/ag_primitive/figs/V0_12_shift_0.15/6.2.png	result	503588		
+Ag_primitive/figs/V0_12_shift_0.2/4.7.png	results/ag_primitive/figs/V0_12_shift_0.2/4.7.png	result	1180748		
+Ag_primitive/figs/V0_12_shift_0.2/5.2.png	results/ag_primitive/figs/V0_12_shift_0.2/5.2.png	result	984643		
+Ag_primitive/figs/V0_12_shift_0.2/5.7.png	results/ag_primitive/figs/V0_12_shift_0.2/5.7.png	result	958655		
+Ag_primitive/figs/V0_12_shift_0.2/6.2.png	results/ag_primitive/figs/V0_12_shift_0.2/6.2.png	result	452029		
+Ag_primitive/figs/V0_12_shift_0.25/4.7.png	results/ag_primitive/figs/V0_12_shift_0.25/4.7.png	result	1180661		
+Ag_primitive/figs/V0_12_shift_0.25/5.2.png	results/ag_primitive/figs/V0_12_shift_0.25/5.2.png	result	892072		
+Ag_primitive/figs/V0_12_shift_0.25/5.7.png	results/ag_primitive/figs/V0_12_shift_0.25/5.7.png	result	927846		
+Ag_primitive/figs/V0_12_shift_0.25/6.2.png	results/ag_primitive/figs/V0_12_shift_0.25/6.2.png	result	410751		
+Ag_primitive/figs/V0_12_shift_0.25_bands_transparent/EB_4.7_shift_0.25_window_0.05.png	results/ag_primitive/figs/V0_12_shift_0.25_bands_transparent/EB_4.7_shift_0.25_window_0.05.png	result	24005		
+Ag_primitive/figs/V0_12_shift_0.25_bands_transparent/EB_4.7_shift_0.25_window_0.1.png	results/ag_primitive/figs/V0_12_shift_0.25_bands_transparent/EB_4.7_shift_0.25_window_0.1.png	result	29488		
+Ag_primitive/figs/V0_12_shift_0.25_bands_transparent/EB_5.2_shift_0.25_window_0.05.png	results/ag_primitive/figs/V0_12_shift_0.25_bands_transparent/EB_5.2_shift_0.25_window_0.05.png	result	22512		
+Ag_primitive/figs/V0_12_shift_0.25_bands_transparent/EB_5.2_shift_0.25_window_0.1.png	results/ag_primitive/figs/V0_12_shift_0.25_bands_transparent/EB_5.2_shift_0.25_window_0.1.png	result	26514		
+Ag_primitive/figs/V0_12_shift_0.25_bands_transparent/EB_5.7_shift_0.25_window_0.05.png	results/ag_primitive/figs/V0_12_shift_0.25_bands_transparent/EB_5.7_shift_0.25_window_0.05.png	result	19577		
+Ag_primitive/figs/V0_12_shift_0.25_bands_transparent/EB_5.7_shift_0.25_window_0.1.png	results/ag_primitive/figs/V0_12_shift_0.25_bands_transparent/EB_5.7_shift_0.25_window_0.1.png	result	22699		
+Ag_primitive/figs/V0_12_shift_0.25_bands_transparent/EB_6.2_shift_0.25_window_0.05.png	results/ag_primitive/figs/V0_12_shift_0.25_bands_transparent/EB_6.2_shift_0.25_window_0.05.png	result	11831		
+Ag_primitive/figs/V0_12_shift_0.25_bands_transparent/EB_6.2_shift_0.25_window_0.1.png	results/ag_primitive/figs/V0_12_shift_0.25_bands_transparent/EB_6.2_shift_0.25_window_0.1.png	result	13100		
+Ag_primitive/figs/V0_12_shift_0.25_transparent/EB_4.7.png	results/ag_primitive/figs/V0_12_shift_0.25_transparent/EB_4.7.png	result	380221		
+Ag_primitive/figs/V0_12_shift_0.25_transparent/EB_5.2.png	results/ag_primitive/figs/V0_12_shift_0.25_transparent/EB_5.2.png	result	258779		
+Ag_primitive/figs/V0_12_shift_0.25_transparent/EB_5.7.png	results/ag_primitive/figs/V0_12_shift_0.25_transparent/EB_5.7.png	result	259281		
+Ag_primitive/figs/V0_12_shift_0.25_transparent/EB_6.2.png	results/ag_primitive/figs/V0_12_shift_0.25_transparent/EB_6.2.png	result	117412		
+Ag_primitive/figs/V0_12_shift_0/6.2.png	results/ag_primitive/figs/V0_12_shift_0/6.2.png	result	713269		
+Ag_primitive/figs/V0_13_shift_-0.1/6.2.png	results/ag_primitive/figs/V0_13_shift_-0.1/6.2.png	result	780930		
+Ag_primitive/figs/V0_13_shift_-0.2/6.2.png	results/ag_primitive/figs/V0_13_shift_-0.2/6.2.png	result	842720		
+Ag_primitive/figs/V0_13_shift_0.1/6.2.png	results/ag_primitive/figs/V0_13_shift_0.1/6.2.png	result	547277		
+Ag_primitive/figs/V0_13_shift_0.2/6.2.png	results/ag_primitive/figs/V0_13_shift_0.2/6.2.png	result	454964		
+Ag_primitive/figs/V0_13_shift_0/6.2.png	results/ag_primitive/figs/V0_13_shift_0/6.2.png	result	670050		
+Ag_primitive/figs/V0_14_shift_-0.1/6.2.png	results/ag_primitive/figs/V0_14_shift_-0.1/6.2.png	result	764006		
+Ag_primitive/figs/V0_14_shift_-0.2/6.2.png	results/ag_primitive/figs/V0_14_shift_-0.2/6.2.png	result	869868		
+Ag_primitive/figs/V0_14_shift_0.1/6.2.png	results/ag_primitive/figs/V0_14_shift_0.1/6.2.png	result	513567		
+Ag_primitive/figs/V0_14_shift_0.2/6.2.png	results/ag_primitive/figs/V0_14_shift_0.2/6.2.png	result	419143		
+Ag_primitive/figs/V0_14_shift_0/6.2.png	results/ag_primitive/figs/V0_14_shift_0/6.2.png	result	630762		
+Ag_primitive/figs/V0_15_shift_-0.1/6.2.png	results/ag_primitive/figs/V0_15_shift_-0.1/6.2.png	result	765487		
+Ag_primitive/figs/V0_15_shift_-0.2/6.2.png	results/ag_primitive/figs/V0_15_shift_-0.2/6.2.png	result	932456		
+Ag_primitive/figs/V0_15_shift_0.1/6.2.png	results/ag_primitive/figs/V0_15_shift_0.1/6.2.png	result	480357		
+Ag_primitive/figs/V0_15_shift_0.2/6.2.png	results/ag_primitive/figs/V0_15_shift_0.2/6.2.png	result	372436		
+Ag_primitive/figs/V0_15_shift_0/3.2.png	results/ag_primitive/figs/V0_15_shift_0/3.2.png	result	1098563		
+Ag_primitive/figs/V0_15_shift_0/3.7.png	results/ag_primitive/figs/V0_15_shift_0/3.7.png	result	999598		
+Ag_primitive/figs/V0_15_shift_0/4.2.png	results/ag_primitive/figs/V0_15_shift_0/4.2.png	result	1065981		
+Ag_primitive/figs/V0_15_shift_0/4.7.png	results/ag_primitive/figs/V0_15_shift_0/4.7.png	result	1180123		
+Ag_primitive/figs/V0_15_shift_0/5.2.png	results/ag_primitive/figs/V0_15_shift_0/5.2.png	result	1145438		
+Ag_primitive/figs/V0_15_shift_0/5.7.png	results/ag_primitive/figs/V0_15_shift_0/5.7.png	result	882400		
+Ag_primitive/figs/V0_15_shift_0/6.2.png	results/ag_primitive/figs/V0_15_shift_0/6.2.png	result	606468		
+Ag_primitive/figs/V0_15_shift_0_bands/3.2.png	results/ag_primitive/figs/V0_15_shift_0_bands/3.2.png	result	136350		
+Ag_primitive/figs/V0_15_shift_0_bands/3.7.png	results/ag_primitive/figs/V0_15_shift_0_bands/3.7.png	result	127283		
+Ag_primitive/figs/V0_15_shift_0_bands/4.2.png	results/ag_primitive/figs/V0_15_shift_0_bands/4.2.png	result	123852		
+Ag_primitive/figs/V0_15_shift_0_bands/4.7.png	results/ag_primitive/figs/V0_15_shift_0_bands/4.7.png	result	129464		
+Ag_primitive/figs/V0_15_shift_0_bands/5.2.png	results/ag_primitive/figs/V0_15_shift_0_bands/5.2.png	result	128963		
+Ag_primitive/figs/V0_15_shift_0_bands/5.7.png	results/ag_primitive/figs/V0_15_shift_0_bands/5.7.png	result	119882		
+Ag_primitive/figs/V0_15_shift_0_bands/6.2.png	results/ag_primitive/figs/V0_15_shift_0_bands/6.2.png	result	98169		
+Ag_primitive/figs/V0_16_shift_-0.1/6.2.png	results/ag_primitive/figs/V0_16_shift_-0.1/6.2.png	result	798167		
+Ag_primitive/figs/V0_16_shift_-0.2/6.2.png	results/ag_primitive/figs/V0_16_shift_-0.2/6.2.png	result	986148		
+Ag_primitive/figs/V0_16_shift_0.1/6.2.png	results/ag_primitive/figs/V0_16_shift_0.1/6.2.png	result	438434		
+Ag_primitive/figs/V0_16_shift_0.2/6.2.png	results/ag_primitive/figs/V0_16_shift_0.2/6.2.png	result	315788		
+Ag_primitive/figs/V0_16_shift_0/6.2.png	results/ag_primitive/figs/V0_16_shift_0/6.2.png	result	588587		
+Ag_primitive/figs/V0_17_shift_-0.1/6.2.png	results/ag_primitive/figs/V0_17_shift_-0.1/6.2.png	result	834697		
+Ag_primitive/figs/V0_17_shift_-0.2/6.2.png	results/ag_primitive/figs/V0_17_shift_-0.2/6.2.png	result	1012207		
+Ag_primitive/figs/V0_17_shift_0.1/6.2.png	results/ag_primitive/figs/V0_17_shift_0.1/6.2.png	result	389245		
+Ag_primitive/figs/V0_17_shift_0.2/6.2.png	results/ag_primitive/figs/V0_17_shift_0.2/6.2.png	result	283825		
+Ag_primitive/figs/V0_17_shift_0/6.2.png	results/ag_primitive/figs/V0_17_shift_0/6.2.png	result	586040		
+Ag_primitive/figs/V0_18_shift_-0.1/6.2.png	results/ag_primitive/figs/V0_18_shift_-0.1/6.2.png	result	855242		
+Ag_primitive/figs/V0_18_shift_-0.2/6.2.png	results/ag_primitive/figs/V0_18_shift_-0.2/6.2.png	result	1025895		
+Ag_primitive/figs/V0_18_shift_0.1/6.2.png	results/ag_primitive/figs/V0_18_shift_0.1/6.2.png	result	365710		
+Ag_primitive/figs/V0_18_shift_0.2/6.2.png	results/ag_primitive/figs/V0_18_shift_0.2/6.2.png	result	289589		
+Ag_primitive/figs/V0_18_shift_0/6.2.png	results/ag_primitive/figs/V0_18_shift_0/6.2.png	result	597759		
+Ag_primitive/figs/V0_19_shift_-0.1/6.2.png	results/ag_primitive/figs/V0_19_shift_-0.1/6.2.png	result	859890		
+Ag_primitive/figs/V0_19_shift_-0.2/6.2.png	results/ag_primitive/figs/V0_19_shift_-0.2/6.2.png	result	1036360		
+Ag_primitive/figs/V0_19_shift_0.1/6.2.png	results/ag_primitive/figs/V0_19_shift_0.1/6.2.png	result	410915		
+Ag_primitive/figs/V0_19_shift_0.2/6.2.png	results/ag_primitive/figs/V0_19_shift_0.2/6.2.png	result	305411		
+Ag_primitive/figs/V0_19_shift_0/6.2.png	results/ag_primitive/figs/V0_19_shift_0/6.2.png	result	603523		
+Ag_primitive/figs/V0_20_shift_-0.1/6.2.png	results/ag_primitive/figs/V0_20_shift_-0.1/6.2.png	result	848676		
+Ag_primitive/figs/V0_20_shift_-0.2/6.2.png	results/ag_primitive/figs/V0_20_shift_-0.2/6.2.png	result	1040729		
+Ag_primitive/figs/V0_20_shift_0.1/6.2.png	results/ag_primitive/figs/V0_20_shift_0.1/6.2.png	result	471930		
+Ag_primitive/figs/V0_20_shift_0.2/6.2.png	results/ag_primitive/figs/V0_20_shift_0.2/6.2.png	result	341539		
+Ag_primitive/figs/V0_20_shift_0/6.2.png	results/ag_primitive/figs/V0_20_shift_0/6.2.png	result	633165		
+Ag_primitive/figs/V0_5_shift_0_bands/3.2.png	results/ag_primitive/figs/V0_5_shift_0_bands/3.2.png	result	145034		
+Ag_primitive/figs/V0_5_shift_0_bands/3.7.png	results/ag_primitive/figs/V0_5_shift_0_bands/3.7.png	result	158164		
+Ag_primitive/figs/V0_5_shift_0_bands/4.2.png	results/ag_primitive/figs/V0_5_shift_0_bands/4.2.png	result	154046		
+Ag_primitive/figs/V0_5_shift_0_bands/4.7.png	results/ag_primitive/figs/V0_5_shift_0_bands/4.7.png	result	131401		
+Ag_primitive/figs/V0_5_shift_0_bands/5.2.png	results/ag_primitive/figs/V0_5_shift_0_bands/5.2.png	result	131579		
+Ag_primitive/figs/V0_5_shift_0_bands/5.7.png	results/ag_primitive/figs/V0_5_shift_0_bands/5.7.png	result	121790		
+Ag_primitive/figs/V0_5_shift_0_bands/6.2.png	results/ag_primitive/figs/V0_5_shift_0_bands/6.2.png	result	124763		
+Ag_primitive/figs/hv_21.22/V0_10/shift_0/bands/EB_3.20.png	results/ag_primitive/figs/hv_21.22/V0_10/shift_0/bands/EB_3.20.png	result	115782		
+Ag_primitive/figs/hv_21.22/V0_10/shift_0/bands/EB_3.70.png	results/ag_primitive/figs/hv_21.22/V0_10/shift_0/bands/EB_3.70.png	result	126380		
+Ag_primitive/figs/hv_21.22/V0_10/shift_0/bands/EB_4.20.png	results/ag_primitive/figs/hv_21.22/V0_10/shift_0/bands/EB_4.20.png	result	107364		
+Ag_primitive/figs/hv_21.22/V0_10/shift_0/bands/EB_4.70.png	results/ag_primitive/figs/hv_21.22/V0_10/shift_0/bands/EB_4.70.png	result	113931		
+Ag_primitive/figs/hv_21.22/V0_10/shift_0/bands/EB_5.20.png	results/ag_primitive/figs/hv_21.22/V0_10/shift_0/bands/EB_5.20.png	result	100602		
+Ag_primitive/figs/hv_21.22/V0_10/shift_0/bands/EB_5.70.png	results/ag_primitive/figs/hv_21.22/V0_10/shift_0/bands/EB_5.70.png	result	115316		
+Ag_primitive/figs/hv_21.22/V0_10/shift_0/bands/EB_6.20.png	results/ag_primitive/figs/hv_21.22/V0_10/shift_0/bands/EB_6.20.png	result	103626		
+Ag_primitive/figs/hv_21.22/V0_13/shift_0/bands/EB_3.20.png	results/ag_primitive/figs/hv_21.22/V0_13/shift_0/bands/EB_3.20.png	result	111906		
+Ag_primitive/figs/hv_21.22/V0_13/shift_0/bands/EB_3.70.png	results/ag_primitive/figs/hv_21.22/V0_13/shift_0/bands/EB_3.70.png	result	109676		
+Ag_primitive/figs/hv_21.22/V0_13/shift_0/bands/EB_4.20.png	results/ag_primitive/figs/hv_21.22/V0_13/shift_0/bands/EB_4.20.png	result	103076		
+Ag_primitive/figs/hv_21.22/V0_13/shift_0/bands/EB_4.70.png	results/ag_primitive/figs/hv_21.22/V0_13/shift_0/bands/EB_4.70.png	result	107606		
+Ag_primitive/figs/hv_21.22/V0_13/shift_0/bands/EB_5.20.png	results/ag_primitive/figs/hv_21.22/V0_13/shift_0/bands/EB_5.20.png	result	107421		
+Ag_primitive/figs/hv_21.22/V0_13/shift_0/bands/EB_5.70.png	results/ag_primitive/figs/hv_21.22/V0_13/shift_0/bands/EB_5.70.png	result	102457		
+Ag_primitive/figs/hv_21.22/V0_13/shift_0/bands/EB_6.20.png	results/ag_primitive/figs/hv_21.22/V0_13/shift_0/bands/EB_6.20.png	result	91769		
+Ag_primitive/figs/hv_21.22/V0_14/shift_0/bands/EB_3.20.png	results/ag_primitive/figs/hv_21.22/V0_14/shift_0/bands/EB_3.20.png	result	113017		
+Ag_primitive/figs/hv_21.22/V0_14/shift_0/bands/EB_3.70.png	results/ag_primitive/figs/hv_21.22/V0_14/shift_0/bands/EB_3.70.png	result	106148		
+Ag_primitive/figs/hv_21.22/V0_14/shift_0/bands/EB_4.20.png	results/ag_primitive/figs/hv_21.22/V0_14/shift_0/bands/EB_4.20.png	result	101203		
+Ag_primitive/figs/hv_21.22/V0_14/shift_0/bands/EB_4.70.png	results/ag_primitive/figs/hv_21.22/V0_14/shift_0/bands/EB_4.70.png	result	109125		
+Ag_primitive/figs/hv_21.22/V0_14/shift_0/bands/EB_5.20.png	results/ag_primitive/figs/hv_21.22/V0_14/shift_0/bands/EB_5.20.png	result	109266		
+Ag_primitive/figs/hv_21.22/V0_14/shift_0/bands/EB_5.70.png	results/ag_primitive/figs/hv_21.22/V0_14/shift_0/bands/EB_5.70.png	result	99536		
+Ag_primitive/figs/hv_21.22/V0_14/shift_0/bands/EB_6.20.png	results/ag_primitive/figs/hv_21.22/V0_14/shift_0/bands/EB_6.20.png	result	87113		
+Ag_primitive/figs/hv_21.22/V0_15/shift_-0.5/bands/EB_3.20.png	results/ag_primitive/figs/hv_21.22/V0_15/shift_-0.5/bands/EB_3.20.png	result	70046		
+Ag_primitive/figs/hv_21.22/V0_15/shift_-0.5/bands/EB_3.70.png	results/ag_primitive/figs/hv_21.22/V0_15/shift_-0.5/bands/EB_3.70.png	result	114173		
+Ag_primitive/figs/hv_21.22/V0_15/shift_-0.5/bands/EB_4.20.png	results/ag_primitive/figs/hv_21.22/V0_15/shift_-0.5/bands/EB_4.20.png	result	104755		
+Ag_primitive/figs/hv_21.22/V0_15/shift_-0.5/bands/EB_4.70.png	results/ag_primitive/figs/hv_21.22/V0_15/shift_-0.5/bands/EB_4.70.png	result	102626		
+Ag_primitive/figs/hv_21.22/V0_15/shift_-0.5/bands/EB_5.20.png	results/ag_primitive/figs/hv_21.22/V0_15/shift_-0.5/bands/EB_5.20.png	result	107159		
+Ag_primitive/figs/hv_21.22/V0_15/shift_-0.5/bands/EB_5.70.png	results/ag_primitive/figs/hv_21.22/V0_15/shift_-0.5/bands/EB_5.70.png	result	108480		
+Ag_primitive/figs/hv_21.22/V0_15/shift_-0.5/bands/EB_6.20.png	results/ag_primitive/figs/hv_21.22/V0_15/shift_-0.5/bands/EB_6.20.png	result	99610		
+Ag_primitive/figs/hv_21.22/V0_15/shift_0.5/bands/EB_3.20.png	results/ag_primitive/figs/hv_21.22/V0_15/shift_0.5/bands/EB_3.20.png	result	103265		
+Ag_primitive/figs/hv_21.22/V0_15/shift_0.5/bands/EB_3.70.png	results/ag_primitive/figs/hv_21.22/V0_15/shift_0.5/bands/EB_3.70.png	result	102445		
+Ag_primitive/figs/hv_21.22/V0_15/shift_0.5/bands/EB_4.20.png	results/ag_primitive/figs/hv_21.22/V0_15/shift_0.5/bands/EB_4.20.png	result	108827		
+Ag_primitive/figs/hv_21.22/V0_15/shift_0.5/bands/EB_4.70.png	results/ag_primitive/figs/hv_21.22/V0_15/shift_0.5/bands/EB_4.70.png	result	107434		
+Ag_primitive/figs/hv_21.22/V0_15/shift_0.5/bands/EB_5.20.png	results/ag_primitive/figs/hv_21.22/V0_15/shift_0.5/bands/EB_5.20.png	result	99110		
+Ag_primitive/figs/hv_21.22/V0_15/shift_0.5/bands/EB_5.70.png	results/ag_primitive/figs/hv_21.22/V0_15/shift_0.5/bands/EB_5.70.png	result	77487		
+Ag_primitive/figs/hv_21.22/V0_15/shift_0.5/bands/EB_6.20.png	results/ag_primitive/figs/hv_21.22/V0_15/shift_0.5/bands/EB_6.20.png	result	65375		
+Ag_primitive/figs/hv_21.22/V0_15/shift_0/bands/EB_3.20.png	results/ag_primitive/figs/hv_21.22/V0_15/shift_0/bands/EB_3.20.png	result	114638		
+Ag_primitive/figs/hv_21.22/V0_15/shift_0/bands/EB_3.70.png	results/ag_primitive/figs/hv_21.22/V0_15/shift_0/bands/EB_3.70.png	result	106030		
+Ag_primitive/figs/hv_21.22/V0_15/shift_0/bands/EB_4.20.png	results/ag_primitive/figs/hv_21.22/V0_15/shift_0/bands/EB_4.20.png	result	102519		
+Ag_primitive/figs/hv_21.22/V0_15/shift_0/bands/EB_4.70.png	results/ag_primitive/figs/hv_21.22/V0_15/shift_0/bands/EB_4.70.png	result	108415		
+Ag_primitive/figs/hv_21.22/V0_15/shift_0/bands/EB_5.20.png	results/ag_primitive/figs/hv_21.22/V0_15/shift_0/bands/EB_5.20.png	result	106963		
+Ag_primitive/figs/hv_21.22/V0_15/shift_0/bands/EB_5.70.png	results/ag_primitive/figs/hv_21.22/V0_15/shift_0/bands/EB_5.70.png	result	99643		
+Ag_primitive/figs/hv_21.22/V0_15/shift_0/bands/EB_6.20.png	results/ag_primitive/figs/hv_21.22/V0_15/shift_0/bands/EB_6.20.png	result	80431		
+Ag_primitive/figs/hv_21.22/V0_16/shift_0/bands/EB_3.20.png	results/ag_primitive/figs/hv_21.22/V0_16/shift_0/bands/EB_3.20.png	result	113638		
+Ag_primitive/figs/hv_21.22/V0_16/shift_0/bands/EB_3.70.png	results/ag_primitive/figs/hv_21.22/V0_16/shift_0/bands/EB_3.70.png	result	103625		
+Ag_primitive/figs/hv_21.22/V0_16/shift_0/bands/EB_4.20.png	results/ag_primitive/figs/hv_21.22/V0_16/shift_0/bands/EB_4.20.png	result	103516		
+Ag_primitive/figs/hv_21.22/V0_16/shift_0/bands/EB_4.70.png	results/ag_primitive/figs/hv_21.22/V0_16/shift_0/bands/EB_4.70.png	result	112114		
+Ag_primitive/figs/hv_21.22/V0_16/shift_0/bands/EB_5.20.png	results/ag_primitive/figs/hv_21.22/V0_16/shift_0/bands/EB_5.20.png	result	109531		
+Ag_primitive/figs/hv_21.22/V0_16/shift_0/bands/EB_5.70.png	results/ag_primitive/figs/hv_21.22/V0_16/shift_0/bands/EB_5.70.png	result	102930		
+Ag_primitive/figs/hv_21.22/V0_16/shift_0/bands/EB_6.20.png	results/ag_primitive/figs/hv_21.22/V0_16/shift_0/bands/EB_6.20.png	result	73125		
+Ag_primitive/figs/hv_21.22/V0_17/shift_0/bands/EB_3.20.png	results/ag_primitive/figs/hv_21.22/V0_17/shift_0/bands/EB_3.20.png	result	112313		
+Ag_primitive/figs/hv_21.22/V0_17/shift_0/bands/EB_3.70.png	results/ag_primitive/figs/hv_21.22/V0_17/shift_0/bands/EB_3.70.png	result	101962		
+Ag_primitive/figs/hv_21.22/V0_17/shift_0/bands/EB_4.20.png	results/ag_primitive/figs/hv_21.22/V0_17/shift_0/bands/EB_4.20.png	result	104540		
+Ag_primitive/figs/hv_21.22/V0_17/shift_0/bands/EB_4.70.png	results/ag_primitive/figs/hv_21.22/V0_17/shift_0/bands/EB_4.70.png	result	111956		
+Ag_primitive/figs/hv_21.22/V0_17/shift_0/bands/EB_5.20.png	results/ag_primitive/figs/hv_21.22/V0_17/shift_0/bands/EB_5.20.png	result	111178		
+Ag_primitive/figs/hv_21.22/V0_17/shift_0/bands/EB_5.70.png	results/ag_primitive/figs/hv_21.22/V0_17/shift_0/bands/EB_5.70.png	result	106570		
+Ag_primitive/figs/hv_21.22/V0_17/shift_0/bands/EB_6.20.png	results/ag_primitive/figs/hv_21.22/V0_17/shift_0/bands/EB_6.20.png	result	69730		
+Ag_primitive/figs/hv_21.22/V0_5/shift_0/bands/EB_3.20.png	results/ag_primitive/figs/hv_21.22/V0_5/shift_0/bands/EB_3.20.png	result	120905		
+Ag_primitive/figs/hv_21.22/V0_5/shift_0/bands/EB_3.70.png	results/ag_primitive/figs/hv_21.22/V0_5/shift_0/bands/EB_3.70.png	result	133530		
+Ag_primitive/figs/hv_21.22/V0_5/shift_0/bands/EB_4.20.png	results/ag_primitive/figs/hv_21.22/V0_5/shift_0/bands/EB_4.20.png	result	129332		
+Ag_primitive/figs/hv_21.22/V0_5/shift_0/bands/EB_4.70.png	results/ag_primitive/figs/hv_21.22/V0_5/shift_0/bands/EB_4.70.png	result	108792		
+Ag_primitive/figs/hv_21.22/V0_5/shift_0/bands/EB_5.20.png	results/ag_primitive/figs/hv_21.22/V0_5/shift_0/bands/EB_5.20.png	result	109134		
+Ag_primitive/figs/hv_21.22/V0_5/shift_0/bands/EB_5.70.png	results/ag_primitive/figs/hv_21.22/V0_5/shift_0/bands/EB_5.70.png	result	100837		
+Ag_primitive/figs/hv_21.22/V0_5/shift_0/bands/EB_6.20.png	results/ag_primitive/figs/hv_21.22/V0_5/shift_0/bands/EB_6.20.png	result	102388		
+Ag_primitive/figs/hv_40.80/V0_10/shift_0/bands/EB_3.20.png	results/ag_primitive/figs/hv_40.80/V0_10/shift_0/bands/EB_3.20.png	result	112316		
+Ag_primitive/figs/hv_40.80/V0_10/shift_0/bands/EB_3.70.png	results/ag_primitive/figs/hv_40.80/V0_10/shift_0/bands/EB_3.70.png	result	131771		
+Ag_primitive/figs/hv_40.80/V0_10/shift_0/bands/EB_4.20.png	results/ag_primitive/figs/hv_40.80/V0_10/shift_0/bands/EB_4.20.png	result	117840		
+Ag_primitive/figs/hv_40.80/V0_10/shift_0/bands/EB_4.70.png	results/ag_primitive/figs/hv_40.80/V0_10/shift_0/bands/EB_4.70.png	result	107993		
+Ag_primitive/figs/hv_40.80/V0_10/shift_0/bands/EB_5.20.png	results/ag_primitive/figs/hv_40.80/V0_10/shift_0/bands/EB_5.20.png	result	95214		
+Ag_primitive/figs/hv_40.80/V0_10/shift_0/bands/EB_5.70.png	results/ag_primitive/figs/hv_40.80/V0_10/shift_0/bands/EB_5.70.png	result	123574		
+Ag_primitive/figs/hv_40.80/V0_10/shift_0/bands/EB_6.20.png	results/ag_primitive/figs/hv_40.80/V0_10/shift_0/bands/EB_6.20.png	result	95943		
+Ag_primitive/figs/hv_40.80/V0_15/shift_0/bands/EB_3.20.png	results/ag_primitive/figs/hv_40.80/V0_15/shift_0/bands/EB_3.20.png	result	111811		
+Ag_primitive/figs/hv_40.80/V0_15/shift_0/bands/EB_3.70.png	results/ag_primitive/figs/hv_40.80/V0_15/shift_0/bands/EB_3.70.png	result	118068		
+Ag_primitive/figs/hv_40.80/V0_15/shift_0/bands/EB_4.20.png	results/ag_primitive/figs/hv_40.80/V0_15/shift_0/bands/EB_4.20.png	result	112612		
+Ag_primitive/figs/hv_40.80/V0_15/shift_0/bands/EB_4.70.png	results/ag_primitive/figs/hv_40.80/V0_15/shift_0/bands/EB_4.70.png	result	106075		
+Ag_primitive/figs/hv_40.80/V0_15/shift_0/bands/EB_5.20.png	results/ag_primitive/figs/hv_40.80/V0_15/shift_0/bands/EB_5.20.png	result	91100		
+Ag_primitive/figs/hv_40.80/V0_15/shift_0/bands/EB_5.70.png	results/ag_primitive/figs/hv_40.80/V0_15/shift_0/bands/EB_5.70.png	result	117285		
+Ag_primitive/figs/hv_40.80/V0_15/shift_0/bands/EB_6.20.png	results/ag_primitive/figs/hv_40.80/V0_15/shift_0/bands/EB_6.20.png	result	96602		
+Ag_primitive/figs/hv_40.80/V0_5/shift_0/bands/EB_3.20.png	results/ag_primitive/figs/hv_40.80/V0_5/shift_0/bands/EB_3.20.png	result	111499		
+Ag_primitive/figs/hv_40.80/V0_5/shift_0/bands/EB_3.70.png	results/ag_primitive/figs/hv_40.80/V0_5/shift_0/bands/EB_3.70.png	result	134353		
+Ag_primitive/figs/hv_40.80/V0_5/shift_0/bands/EB_4.20.png	results/ag_primitive/figs/hv_40.80/V0_5/shift_0/bands/EB_4.20.png	result	113263		
+Ag_primitive/figs/hv_40.80/V0_5/shift_0/bands/EB_4.70.png	results/ag_primitive/figs/hv_40.80/V0_5/shift_0/bands/EB_4.70.png	result	108267		
+Ag_primitive/figs/hv_40.80/V0_5/shift_0/bands/EB_5.20.png	results/ag_primitive/figs/hv_40.80/V0_5/shift_0/bands/EB_5.20.png	result	94614		
+Ag_primitive/figs/hv_40.80/V0_5/shift_0/bands/EB_5.70.png	results/ag_primitive/figs/hv_40.80/V0_5/shift_0/bands/EB_5.70.png	result	117366		
+Ag_primitive/figs/hv_40.80/V0_5/shift_0/bands/EB_6.20.png	results/ag_primitive/figs/hv_40.80/V0_5/shift_0/bands/EB_6.20.png	result	93269		
+NiTe2/_path_V0_10.png	results/nite2/_path_V0_10.png	result	246382		
+NiTe2/_path_V0_15.png	results/nite2/_path_V0_15.png	result	244316		
+NiTe2/_path_V0_20.png	results/nite2/_path_V0_20.png	result	240165		
+NiTe2/kz_0.png	results/nite2/kz_0.png	result	147194		
+NiTe2/kz_stack.png	results/nite2/kz_stack.png	result	228220		
+NiTe2/path.png	results/nite2/path.png	result	311268		
+NiTe2/path_V0_10.png	results/nite2/path_V0_10.png	result	129383		
+NiTe2/path_V0_11.png	results/nite2/path_V0_11.png	result	129254		
+NiTe2/path_V0_12.png	results/nite2/path_V0_12.png	result	129807		
+NiTe2/path_V0_13.png	results/nite2/path_V0_13.png	result	129690		
+NiTe2/path_V0_14.png	results/nite2/path_V0_14.png	result	128378		
+NiTe2/path_V0_15.png	results/nite2/path_V0_15.png	result	127715		
+NiTe2/path_V0_16.png	results/nite2/path_V0_16.png	result	127287		
+NiTe2/path_V0_17.png	results/nite2/path_V0_17.png	result	126030		
+NiTe2/path_V0_18.png	results/nite2/path_V0_18.png	result	126465		
+NiTe2/path_V0_19.png	results/nite2/path_V0_19.png	result	125948		
+NiTe2/path_V0_20.png	results/nite2/path_V0_20.png	result	126884		
+NiTe2/path_kz_stack.png	results/nite2/path_kz_stack.png	result	819385		
+NiTe2/v0_10.png	results/nite2/v0_10.png	result	124216		
+NiTe2/v0_11.png	results/nite2/v0_11.png	result	122670		
+NiTe2/v0_12.png	results/nite2/v0_12.png	result	122274		
+NiTe2/v0_15.png	results/nite2/v0_15.png	result	121996		
+NiTe2/v0_20.png	results/nite2/v0_20.png	result	116314		
+NiTe_15_fermi.png	results/legacy/NiTe_15_fermi.png	result	184852		
+NiTe_15_spectrum.png	results/legacy/NiTe_15_spectrum.png	result	68519		
+V0_10.out	results/v0_sweep/logs/V0_10.out	result	938		
+V0_5.out	results/v0_sweep/logs/V0_5.out	result	1159		
+figs/V0_10.0/0.0.png	results/v0_sweep/figs/V0_10.0/0.0.png	result	186619		
+figs/V0_10.0/0.1.png	results/v0_sweep/figs/V0_10.0/0.1.png	result	259893		
+figs/V0_10.0/0.2.png	results/v0_sweep/figs/V0_10.0/0.2.png	result	349188		
+figs/V0_10.0/0.3.png	results/v0_sweep/figs/V0_10.0/0.3.png	result	433065		
+figs/V0_10.0/0.4.png	results/v0_sweep/figs/V0_10.0/0.4.png	result	521843		
+figs/V0_10.0/0.5.png	results/v0_sweep/figs/V0_10.0/0.5.png	result	624063		
+figs/V0_10.0/0.6.png	results/v0_sweep/figs/V0_10.0/0.6.png	result	763071		
+figs/V0_10.0/0.7.png	results/v0_sweep/figs/V0_10.0/0.7.png	result	988264		
+figs/V0_10.0/0.8.png	results/v0_sweep/figs/V0_10.0/0.8.png	result	1222666		
+figs/V0_10.0/0.9.png	results/v0_sweep/figs/V0_10.0/0.9.png	result	1343918		
+figs/V0_10.0/1.0.png	results/v0_sweep/figs/V0_10.0/1.0.png	result	1433900		
+figs/V0_10.0/1.1.png	results/v0_sweep/figs/V0_10.0/1.1.png	result	1463696		
+figs/V0_10.0/1.2.png	results/v0_sweep/figs/V0_10.0/1.2.png	result	1500603		
+figs/V0_10.0/1.3.png	results/v0_sweep/figs/V0_10.0/1.3.png	result	1541377		
+figs/V0_10.0/1.4.png	results/v0_sweep/figs/V0_10.0/1.4.png	result	1583096		
+figs/V0_10.0/1.5.png	results/v0_sweep/figs/V0_10.0/1.5.png	result	1601133		
+figs/V0_10.0/1.6.png	results/v0_sweep/figs/V0_10.0/1.6.png	result	1619671		
+figs/V0_10.0/1.7.png	results/v0_sweep/figs/V0_10.0/1.7.png	result	1632960		
+figs/V0_10.0/1.8.png	results/v0_sweep/figs/V0_10.0/1.8.png	result	1605872		
+figs/V0_10.0/1.9.png	results/v0_sweep/figs/V0_10.0/1.9.png	result	1555269		
+figs/V0_10.0/2.0.png	results/v0_sweep/figs/V0_10.0/2.0.png	result	1540563		
+figs/V0_10.0/2.1.png	results/v0_sweep/figs/V0_10.0/2.1.png	result	1508639		
+figs/V0_10.0/2.2.png	results/v0_sweep/figs/V0_10.0/2.2.png	result	1460661		
+figs/V0_10.0/2.3.png	results/v0_sweep/figs/V0_10.0/2.3.png	result	1419259		
+figs/V0_10.0/2.4.png	results/v0_sweep/figs/V0_10.0/2.4.png	result	1389924		
+figs/V0_10.0/2.5.png	results/v0_sweep/figs/V0_10.0/2.5.png	result	1412735		
+figs/V0_10.0/2.6.png	results/v0_sweep/figs/V0_10.0/2.6.png	result	1406377		
+figs/V0_10.0/2.7.png	results/v0_sweep/figs/V0_10.0/2.7.png	result	1406791		
+figs/V0_10.0/2.8.png	results/v0_sweep/figs/V0_10.0/2.8.png	result	1408219		
+figs/V0_10.0/2.9.png	results/v0_sweep/figs/V0_10.0/2.9.png	result	1396567		
+figs/V0_10.0/3.0.png	results/v0_sweep/figs/V0_10.0/3.0.png	result	1371032		
+figs/V0_10.0/animation.gif	results/v0_sweep/figs/V0_10.0/animation.gif	result	11150513		
+figs/V0_10.0/animation.mp4	results/v0_sweep/figs/V0_10.0/animation.mp4	result	5312453		
+figs/V0_12.0/0.0.png	results/v0_sweep/figs/V0_12.0/0.0.png	result	138757		
+figs/V0_12.0/0.1.png	results/v0_sweep/figs/V0_12.0/0.1.png	result	193686		
+figs/V0_12.0/0.2.png	results/v0_sweep/figs/V0_12.0/0.2.png	result	276010		
+figs/V0_12.0/0.3.png	results/v0_sweep/figs/V0_12.0/0.3.png	result	374433		
+figs/V0_12.0/0.4.png	results/v0_sweep/figs/V0_12.0/0.4.png	result	495004		
+figs/V0_12.0/0.5.png	results/v0_sweep/figs/V0_12.0/0.5.png	result	635831		
+figs/V0_12.0/0.6.png	results/v0_sweep/figs/V0_12.0/0.6.png	result	774256		
+figs/V0_12.0/0.7.png	results/v0_sweep/figs/V0_12.0/0.7.png	result	940279		
+figs/V0_12.0/0.8.png	results/v0_sweep/figs/V0_12.0/0.8.png	result	1135286		
+figs/V0_12.0/0.9.png	results/v0_sweep/figs/V0_12.0/0.9.png	result	1317673		
+figs/V0_12.0/1.0.png	results/v0_sweep/figs/V0_12.0/1.0.png	result	1396924		
+figs/V0_12.0/1.1.png	results/v0_sweep/figs/V0_12.0/1.1.png	result	1415843		
+figs/V0_12.0/1.2.png	results/v0_sweep/figs/V0_12.0/1.2.png	result	1484878		
+figs/V0_12.0/1.3.png	results/v0_sweep/figs/V0_12.0/1.3.png	result	1516320		
+figs/V0_12.0/1.4.png	results/v0_sweep/figs/V0_12.0/1.4.png	result	1511679		
+figs/V0_12.0/1.5.png	results/v0_sweep/figs/V0_12.0/1.5.png	result	1560643		
+figs/V0_12.0/1.6.png	results/v0_sweep/figs/V0_12.0/1.6.png	result	1601792		
+figs/V0_12.0/1.7.png	results/v0_sweep/figs/V0_12.0/1.7.png	result	1620965		
+figs/V0_12.0/1.8.png	results/v0_sweep/figs/V0_12.0/1.8.png	result	1591465		
+figs/V0_12.0/1.9.png	results/v0_sweep/figs/V0_12.0/1.9.png	result	1570427		
+figs/V0_12.0/2.0.png	results/v0_sweep/figs/V0_12.0/2.0.png	result	1544413		
+figs/V0_12.0/2.1.png	results/v0_sweep/figs/V0_12.0/2.1.png	result	1521331		
+figs/V0_12.0/2.2.png	results/v0_sweep/figs/V0_12.0/2.2.png	result	1499302		
+figs/V0_12.0/2.3.png	results/v0_sweep/figs/V0_12.0/2.3.png	result	1458075		
+figs/V0_12.0/2.4.png	results/v0_sweep/figs/V0_12.0/2.4.png	result	1412004		
+figs/V0_12.0/2.5.png	results/v0_sweep/figs/V0_12.0/2.5.png	result	1383289		
+figs/V0_12.0/2.6.png	results/v0_sweep/figs/V0_12.0/2.6.png	result	1392007		
+figs/V0_12.0/2.7.png	results/v0_sweep/figs/V0_12.0/2.7.png	result	1399812		
+figs/V0_12.0/2.8.png	results/v0_sweep/figs/V0_12.0/2.8.png	result	1405963		
+figs/V0_12.0/2.9.png	results/v0_sweep/figs/V0_12.0/2.9.png	result	1403533		
+figs/V0_12.0/3.0.png	results/v0_sweep/figs/V0_12.0/3.0.png	result	1387717		
+figs/V0_12.0/animation.gif	results/v0_sweep/figs/V0_12.0/animation.gif	result	10907777		
+figs/V0_12.0/animation.mp4	results/v0_sweep/figs/V0_12.0/animation.mp4	result	5229142		
+figs/V0_15.0/0.0.png	results/v0_sweep/figs/V0_15.0/0.0.png	result	227020		
+figs/V0_15.0/0.1.png	results/v0_sweep/figs/V0_15.0/0.1.png	result	321157		
+figs/V0_15.0/0.2.png	results/v0_sweep/figs/V0_15.0/0.2.png	result	420064		
+figs/V0_15.0/0.3.png	results/v0_sweep/figs/V0_15.0/0.3.png	result	531566		
+figs/V0_15.0/0.4.png	results/v0_sweep/figs/V0_15.0/0.4.png	result	659607		
+figs/V0_15.0/0.5.png	results/v0_sweep/figs/V0_15.0/0.5.png	result	798659		
+figs/V0_15.0/0.6.png	results/v0_sweep/figs/V0_15.0/0.6.png	result	966481		
+figs/V0_15.0/0.7.png	results/v0_sweep/figs/V0_15.0/0.7.png	result	1166249		
+figs/V0_15.0/0.8.png	results/v0_sweep/figs/V0_15.0/0.8.png	result	1327148		
+figs/V0_15.0/0.9.png	results/v0_sweep/figs/V0_15.0/0.9.png	result	1410443		
+figs/V0_15.0/1.0.png	results/v0_sweep/figs/V0_15.0/1.0.png	result	1442106		
+figs/V0_15.0/1.1.png	results/v0_sweep/figs/V0_15.0/1.1.png	result	1485172		
+figs/V0_15.0/1.2.png	results/v0_sweep/figs/V0_15.0/1.2.png	result	1540553		
+figs/V0_15.0/1.3.png	results/v0_sweep/figs/V0_15.0/1.3.png	result	1586137		
+figs/V0_15.0/1.4.png	results/v0_sweep/figs/V0_15.0/1.4.png	result	1612543		
+figs/V0_15.0/1.5.png	results/v0_sweep/figs/V0_15.0/1.5.png	result	1600356		
+figs/V0_15.0/1.6.png	results/v0_sweep/figs/V0_15.0/1.6.png	result	1602389		
+figs/V0_15.0/1.7.png	results/v0_sweep/figs/V0_15.0/1.7.png	result	1588308		
+figs/V0_15.0/1.8.png	results/v0_sweep/figs/V0_15.0/1.8.png	result	1576709		
+figs/V0_15.0/1.9.png	results/v0_sweep/figs/V0_15.0/1.9.png	result	1520927		
+figs/V0_15.0/2.0.png	results/v0_sweep/figs/V0_15.0/2.0.png	result	1466492		
+figs/V0_15.0/2.1.png	results/v0_sweep/figs/V0_15.0/2.1.png	result	1436386		
+figs/V0_15.0/2.2.png	results/v0_sweep/figs/V0_15.0/2.2.png	result	1400397		
+figs/V0_15.0/2.3.png	results/v0_sweep/figs/V0_15.0/2.3.png	result	1360874		
+figs/V0_15.0/2.4.png	results/v0_sweep/figs/V0_15.0/2.4.png	result	1337557		
+figs/V0_15.0/2.5.png	results/v0_sweep/figs/V0_15.0/2.5.png	result	1351383		
+figs/V0_15.0/2.6.png	results/v0_sweep/figs/V0_15.0/2.6.png	result	1378941		
+figs/V0_15.0/2.7.png	results/v0_sweep/figs/V0_15.0/2.7.png	result	1375246		
+figs/V0_15.0/2.8.png	results/v0_sweep/figs/V0_15.0/2.8.png	result	1357899		
+figs/V0_15.0/2.9.png	results/v0_sweep/figs/V0_15.0/2.9.png	result	1372672		
+figs/V0_15.0/3.0.png	results/v0_sweep/figs/V0_15.0/3.0.png	result	1418317		
+figs/V0_15.0/animation.gif	results/v0_sweep/figs/V0_15.0/animation.gif	result	11284977		
+figs/V0_15.0/animation.mp4	results/v0_sweep/figs/V0_15.0/animation.mp4	result	5316840		
+figs/V0_5.0/0.0.png	results/v0_sweep/figs/V0_5.0/0.0.png	result	294106		
+figs/V0_5.0/0.1.png	results/v0_sweep/figs/V0_5.0/0.1.png	result	382111		
+figs/V0_5.0/0.2.png	results/v0_sweep/figs/V0_5.0/0.2.png	result	472526		
+figs/V0_5.0/0.3.png	results/v0_sweep/figs/V0_5.0/0.3.png	result	575575		
+figs/V0_5.0/0.4.png	results/v0_sweep/figs/V0_5.0/0.4.png	result	703028		
+figs/V0_5.0/0.5.png	results/v0_sweep/figs/V0_5.0/0.5.png	result	869384		
+figs/V0_5.0/0.6.png	results/v0_sweep/figs/V0_5.0/0.6.png	result	1101849		
+figs/V0_5.0/0.7.png	results/v0_sweep/figs/V0_5.0/0.7.png	result	1328075		
+figs/V0_5.0/0.8.png	results/v0_sweep/figs/V0_5.0/0.8.png	result	1477318		
+figs/V0_5.0/0.9.png	results/v0_sweep/figs/V0_5.0/0.9.png	result	1494654		
+figs/V0_5.0/1.0.png	results/v0_sweep/figs/V0_5.0/1.0.png	result	1536842		
+figs/V0_5.0/1.1.png	results/v0_sweep/figs/V0_5.0/1.1.png	result	1542751		
+figs/V0_5.0/1.2.png	results/v0_sweep/figs/V0_5.0/1.2.png	result	1582005		
+figs/V0_5.0/1.3.png	results/v0_sweep/figs/V0_5.0/1.3.png	result	1608958		
+figs/V0_5.0/1.4.png	results/v0_sweep/figs/V0_5.0/1.4.png	result	1622857		
+figs/V0_5.0/1.5.png	results/v0_sweep/figs/V0_5.0/1.5.png	result	1575562		
+figs/V0_5.0/1.6.png	results/v0_sweep/figs/V0_5.0/1.6.png	result	1528283		
+figs/V0_5.0/1.7.png	results/v0_sweep/figs/V0_5.0/1.7.png	result	1472969		
+figs/V0_5.0/1.8.png	results/v0_sweep/figs/V0_5.0/1.8.png	result	1402193		
+figs/V0_5.0/1.9.png	results/v0_sweep/figs/V0_5.0/1.9.png	result	1354145		
+figs/V0_5.0/2.0.png	results/v0_sweep/figs/V0_5.0/2.0.png	result	1318588		
+figs/V0_5.0/2.1.png	results/v0_sweep/figs/V0_5.0/2.1.png	result	1305211		
+figs/V0_5.0/2.2.png	results/v0_sweep/figs/V0_5.0/2.2.png	result	1276909		
+figs/V0_5.0/2.3.png	results/v0_sweep/figs/V0_5.0/2.3.png	result	1267306		
+figs/V0_5.0/2.4.png	results/v0_sweep/figs/V0_5.0/2.4.png	result	1274035		
+figs/V0_5.0/2.5.png	results/v0_sweep/figs/V0_5.0/2.5.png	result	1303235		
+figs/V0_5.0/2.6.png	results/v0_sweep/figs/V0_5.0/2.6.png	result	1295301		
+figs/V0_5.0/2.7.png	results/v0_sweep/figs/V0_5.0/2.7.png	result	1276935		
+figs/V0_5.0/2.8.png	results/v0_sweep/figs/V0_5.0/2.8.png	result	1236565		
+figs/V0_5.0/2.9.png	results/v0_sweep/figs/V0_5.0/2.9.png	result	1227966		
+figs/V0_5.0/3.0.png	results/v0_sweep/figs/V0_5.0/3.0.png	result	1274970		
+figs/V0_5.0/animation.gif	results/v0_sweep/figs/V0_5.0/animation.gif	result	11191668		
+figs/V0_5.0/animation.mp4	results/v0_sweep/figs/V0_5.0/animation.mp4	result	5530144		
+figs/V0_8.0/0.0.png	results/v0_sweep/figs/V0_8.0/0.0.png	result	298671		
+figs/V0_8.0/0.1.png	results/v0_sweep/figs/V0_8.0/0.1.png	result	375573		
+figs/V0_8.0/0.2.png	results/v0_sweep/figs/V0_8.0/0.2.png	result	451733		
+figs/V0_8.0/0.3.png	results/v0_sweep/figs/V0_8.0/0.3.png	result	538237		
+figs/V0_8.0/0.4.png	results/v0_sweep/figs/V0_8.0/0.4.png	result	650322		
+figs/V0_8.0/0.5.png	results/v0_sweep/figs/V0_8.0/0.5.png	result	799368		
+figs/V0_8.0/0.6.png	results/v0_sweep/figs/V0_8.0/0.6.png	result	995695		
+figs/V0_8.0/0.7.png	results/v0_sweep/figs/V0_8.0/0.7.png	result	1225898		
+figs/V0_8.0/0.8.png	results/v0_sweep/figs/V0_8.0/0.8.png	result	1410228		
+figs/V0_8.0/0.9.png	results/v0_sweep/figs/V0_8.0/0.9.png	result	1518728		
+figs/V0_8.0/1.0.png	results/v0_sweep/figs/V0_8.0/1.0.png	result	1535985		
+figs/V0_8.0/1.1.png	results/v0_sweep/figs/V0_8.0/1.1.png	result	1504161		
+figs/V0_8.0/1.2.png	results/v0_sweep/figs/V0_8.0/1.2.png	result	1541768		
+figs/V0_8.0/1.3.png	results/v0_sweep/figs/V0_8.0/1.3.png	result	1599517		
+figs/V0_8.0/1.4.png	results/v0_sweep/figs/V0_8.0/1.4.png	result	1647519		
+figs/V0_8.0/1.5.png	results/v0_sweep/figs/V0_8.0/1.5.png	result	1651043		
+figs/V0_8.0/1.6.png	results/v0_sweep/figs/V0_8.0/1.6.png	result	1635125		
+figs/V0_8.0/1.7.png	results/v0_sweep/figs/V0_8.0/1.7.png	result	1591379		
+figs/V0_8.0/1.8.png	results/v0_sweep/figs/V0_8.0/1.8.png	result	1487829		
+figs/V0_8.0/1.9.png	results/v0_sweep/figs/V0_8.0/1.9.png	result	1396930		
+figs/V0_8.0/2.0.png	results/v0_sweep/figs/V0_8.0/2.0.png	result	1392239		
+figs/V0_8.0/2.1.png	results/v0_sweep/figs/V0_8.0/2.1.png	result	1387857		
+figs/V0_8.0/2.2.png	results/v0_sweep/figs/V0_8.0/2.2.png	result	1373453		
+figs/V0_8.0/2.3.png	results/v0_sweep/figs/V0_8.0/2.3.png	result	1351452		
+figs/V0_8.0/2.4.png	results/v0_sweep/figs/V0_8.0/2.4.png	result	1359482		
+figs/V0_8.0/2.5.png	results/v0_sweep/figs/V0_8.0/2.5.png	result	1361055		
+figs/V0_8.0/2.6.png	results/v0_sweep/figs/V0_8.0/2.6.png	result	1382403		
+figs/V0_8.0/2.7.png	results/v0_sweep/figs/V0_8.0/2.7.png	result	1379799		
+figs/V0_8.0/2.8.png	results/v0_sweep/figs/V0_8.0/2.8.png	result	1346667		
+figs/V0_8.0/2.9.png	results/v0_sweep/figs/V0_8.0/2.9.png	result	1322730		
+figs/V0_8.0/3.0.png	results/v0_sweep/figs/V0_8.0/3.0.png	result	1326213		
+figs/V0_8.0/animation.gif	results/v0_sweep/figs/V0_8.0/animation.gif	result	11492177		
+figs/V0_8.0/animation.mp4	results/v0_sweep/figs/V0_8.0/animation.mp4	result	5575265		
+figs/arpes_path/k_100/V0_10.png	results/v0_sweep/figs/arpes_path/k_100/V0_10.png	result	136025		
+figs/arpes_path/k_100/V0_11.png	results/v0_sweep/figs/arpes_path/k_100/V0_11.png	result	130296		
+figs/arpes_path/k_100/V0_12.png	results/v0_sweep/figs/arpes_path/k_100/V0_12.png	result	140593		
+figs/arpes_path/k_100/V0_13.png	results/v0_sweep/figs/arpes_path/k_100/V0_13.png	result	140680		
+figs/arpes_path/k_100/V0_14.png	results/v0_sweep/figs/arpes_path/k_100/V0_14.png	result	139437		
+figs/arpes_path/k_100/V0_15.png	results/v0_sweep/figs/arpes_path/k_100/V0_15.png	result	138106		
+figs/arpes_path/k_100/V0_5.png	results/v0_sweep/figs/arpes_path/k_100/V0_5.png	result	136691		
+figs/arpes_path/k_100/V0_6.png	results/v0_sweep/figs/arpes_path/k_100/V0_6.png	result	137874		
+figs/arpes_path/k_100/V0_7.png	results/v0_sweep/figs/arpes_path/k_100/V0_7.png	result	134243		
+figs/arpes_path/k_100/V0_8.png	results/v0_sweep/figs/arpes_path/k_100/V0_8.png	result	134260		
+figs/arpes_path/k_100/V0_9.png	results/v0_sweep/figs/arpes_path/k_100/V0_9.png	result	133099		
+figs/arpes_path/k_400/V0_10.png	results/v0_sweep/figs/arpes_path/k_400/V0_10.png	result	284145		
+figs/arpes_path/k_400/V0_11.png	results/v0_sweep/figs/arpes_path/k_400/V0_11.png	result	265251		
+figs/arpes_path/k_400/V0_12.png	results/v0_sweep/figs/arpes_path/k_400/V0_12.png	result	295399		
+figs/arpes_path/k_400/V0_13.png	results/v0_sweep/figs/arpes_path/k_400/V0_13.png	result	291666		
+figs/arpes_path/k_400/V0_14.png	results/v0_sweep/figs/arpes_path/k_400/V0_14.png	result	284874		
+figs/arpes_path/k_400/V0_15.png	results/v0_sweep/figs/arpes_path/k_400/V0_15.png	result	125062		
+figs/arpes_path/k_400/V0_5.png	results/v0_sweep/figs/arpes_path/k_400/V0_5.png	result	281749		
+figs/arpes_path/k_400/V0_6.png	results/v0_sweep/figs/arpes_path/k_400/V0_6.png	result	285066		
+figs/arpes_path/k_400/V0_7.png	results/v0_sweep/figs/arpes_path/k_400/V0_7.png	result	275865		
+figs/arpes_path/k_400/V0_8.png	results/v0_sweep/figs/arpes_path/k_400/V0_8.png	result	275127		
+figs/arpes_path/k_400/V0_9.png	results/v0_sweep/figs/arpes_path/k_400/V0_9.png	result	273299		
+kxy_slices.png	results/legacy/kxy_slices.png	result	827357		
+kz_fermi.png	results/legacy/kz_fermi.png	result	54425		
+output.png	results/legacy/output.png	result	220144		
+V0_5.py	scripts/runs/v0_sweep/run_v0_fixed_5.py	script	4354	d273db64d64c91c1c374b1f218fe18ebfea63d77bdfc8e7ce2c9ad64f821a85a	
+queer/figures/deconv.py	scripts/figures/deconv.py	script	3746	00fa4fcf74525417d346e038b3c82998f5a135cd088fb44d630700623cb41ffe	
+queer/figures/multi.py	scripts/figures/multi.py	script	6170	b3e1a2568166db7f1fad273601a3db45c0467a8d7089bddfed9d1a14e6df0275	
+queer/figures/phonon_spectra.py	scripts/figures/phonon_spectra.py	script	4971	4440398f8d9519ec4046d885a5436509f72f8da9fe565209625216b6e81c2a37	
+queer/figures/suscep.py	scripts/figures/suscep.py	script	2733	f526c32b994de297f38c4c56f4c7d0cb4383c5646d4ae88b655ecbaba1b7b38c	
+queer/scripts/.ipynb_checkpoints/plot_mesh-checkpoint.py	scripts/archive/checkpoints/plot_mesh-checkpoint.py	script	387	ad744fb8c40e3af7421f5e756c2b7e33aa44aa312b7d1444a46962f7f8451fa2	
+queer/scripts/.ipynb_checkpoints/plot_path-checkpoint.py	scripts/archive/checkpoints/plot_path-checkpoint.py	script	490	f8dec135b345e2b53084cf14ad8d532dd16b28f654a97e36186270c2969661cd	
+queer/scripts/plot_mesh.py	scripts/archive/legacy/plot_mesh.py	script	387	ad744fb8c40e3af7421f5e756c2b7e33aa44aa312b7d1444a46962f7f8451fa2	
+queer/scripts/plot_path.py	scripts/archive/legacy/plot_path.py	script	490	f8dec135b345e2b53084cf14ad8d532dd16b28f654a97e36186270c2969661cd	
+queer/scripts/selfen.py	scripts/archive/legacy/selfen.py	script	1961	f529255b00e0bad7825d9c1ef391e7728a1d52af3d359e4d1d8d9bb8037a95df	
+queer/scripts/selfen.sh	scripts/archive/legacy/selfen.sh	script	168	2a892f424878e0d98522ea76c51adc06269f24bcdf94adf42cc846b47152f9aa	
+queer/scripts/susceptibility.py	scripts/archive/legacy/susceptibility.py	script	876	9e63623f92bbd11ff66a47b28fe105ab49f13bf128f63d307d19f11c44af35b0	
+run_V0.py	scripts/runs/v0_sweep/run_v0.py	script	4705	50abfbfaf54adea46e3bdba4fbe23e0c792ff0b27fd5f4e9f17a4bc2dcac20b8	
+run_multi_V0.sh	scripts/hpc/run_v0_sweep.sbatch	script	616	8e0c275033cc9bd4f8ca74976d673626a8ee75e713342a4750f115e22aee544d	
+v0_10.py	scripts/runs/v0_sweep/run_v0_fixed_10.py	script	4338	d84a74259127cd7f2e198c06d2f5b96a8771937267694cc8bdb5bbc7ad22e967	

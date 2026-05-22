@@ -3,7 +3,8 @@ from setuptools import setup, find_packages
 setup(
     name="queer",
     version="1.0.0",
-    packages=find_packages(),
+    package_dir={"": "src"},
+    packages=find_packages(where="src"),
     install_requires=[
         "numpy",
         "scipy",
@@ -11,8 +12,14 @@ setup(
         "pandas",
         "joblib",
         "psutil",
-        "tqdm"
+        "tqdm",
+        "pillow",
+        "imageio",
+        "nbformat",
+        "seekpath",
     ],
+    include_package_data=True,
+    package_data={"queer": ["resources/*.mplstyle"]},
     author="QUEER Development Team",
     author_email="susy@materials.wiki",
     description="Quantum Utilities and Electron Engineering Resources",

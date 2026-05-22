@@ -3,6 +3,7 @@ from scipy.constants import physical_constants
 # Matrix inversion
 from numpy.linalg import inv
 import numpy as np
+from pathlib import Path
 # Plotting
 import matplotlib.pyplot as plt
 # Data analysis
@@ -19,6 +20,8 @@ from .functions import fd
 
 from .epw import epw
 from . import utils
+from .kpath import named_k_path
+from .mesh import mesh_crystal
 from tqdm import tqdm
 
 class model:
@@ -28,24 +31,38 @@ class model:
         else:
             self.num_cores = multiprocessing.cpu_count()
         self.shift = shift
-        self.path = path
+        self.path = Path(path).expanduser()
+        self.hr = Path(hr)
+        self.nscf = Path(nscf) if nscf else None
+        self.poscar = Path(poscar) if poscar else None
         if read_ef:
-            self.fermi_energy = read_efermi(path+nscf)+self.shift
+            self.fermi_energy = read_efermi(self.path / self.nscf)+self.shift
         else:
             self.fermi_energy=ef
         if nscf:
-            self.g_vec = utils.read_gvec(path+nscf)
+            self.g_vec = utils.read_gvec(self.path / self.nscf)
         if poscar:
-            
-            lattice_vector = utils.read_poscar(path+poscar)
+            lattice_vector = utils.read_poscar(self.path / self.poscar)
             self.g_vec = utils.crystal2reciprocal(lattice_vector)
-        self.data = read_hr(path+hr)
+        self.data = read_hr(self.path / self.hr)
         self.hopping = self.data[0]
         self.nbnd = int(np.sqrt(len(self.data[0])/len(self.data[2])))
         self.points = len(self.data[2])
         self.sym = self.data[2]
         self.h = self.hopping.reshape(self.points, self.nbnd*self.nbnd)
         self.x = self.data[1].reshape(3, self.points, self.nbnd*self.nbnd)
+
+    def kpath(self, point_names, n_points=200, poscar=None, **seekpath_kwargs):
+        """Build a high-symmetry k-path from point names using this model's POSCAR."""
+        if poscar is None:
+            if self.poscar is None:
+                raise ValueError("model.kpath requires a POSCAR. Initialize the model with poscar=... or pass poscar=...")
+            poscar_path = self.path / self.poscar
+        else:
+            poscar_path = Path(poscar)
+            if not poscar_path.is_absolute():
+                poscar_path = self.path / poscar_path
+        return named_k_path(point_names, n_points, poscar_path, **seekpath_kwargs)
 
     def fourier(self, k):
         kx = np.tensordot(k, self.x, axes=(0, 0))
@@ -64,11 +81,29 @@ class model:
 
     def solver(self, k):
         kx = np.tensordot(k, self.x, axes=(0, 0))
-        transform = np.dot(self.sym, np.exp(-1j*kx*2*np.pi)
-                           * self.h).reshape(self.nbnd, self.nbnd)
-        val, vec = np.linalg.eigh(transform)
-        return(val)
-
+        transform = np.dot(self.sym, np.exp(-1j * kx * 2*np.pi) * self.h).reshape(self.nbnd, self.nbnd)
+    
+        # 1) Hard checks
+        if not np.isfinite(transform).all():
+            raise FloatingPointError(f"Non-finite in transform at k={k}")
+    
+        # 2) Enforce Hermitian (Wannier HR *should* give Hermitian H(k), but numerics can break it)
+        transform = 0.5 * (transform + transform.conj().T)
+    
+        try:
+            val = np.linalg.eigh(transform)[0]
+            return val
+        except np.linalg.LinAlgError:
+            # fallback 1: slightly regularize diagonal (tiny)
+            eps = 1e-12
+            transform2 = transform + eps * np.eye(transform.shape[0], dtype=transform.dtype)
+            try:
+                return np.linalg.eigh(transform2)[0]
+            except np.linalg.LinAlgError:
+                # fallback 2: use eig (less stable/guaranteed real, but won't crash the whole run)
+                w = np.linalg.eigvals(transform)
+                return np.sort(w.real)
+    
     def calculate_energy(self, path, band_index=False):
         path = path
         results = Parallel(n_jobs=self.num_cores)(
@@ -240,4 +275,3 @@ def find_cross(band,parameter):
                     xs.append([begin,end,point])
     xs_sort = xs[xs[:, 2].argsort()]    
     return np.array(xs_sort)
-
