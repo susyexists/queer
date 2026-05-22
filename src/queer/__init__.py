@@ -6,5 +6,6 @@ from .epw import epw
 from . import functions
 from . import paths
 from . import kpath
+from .kpath import KPath
 # from . import epc  # Commented out missing module
 # from . import reads  # Commented out missing module

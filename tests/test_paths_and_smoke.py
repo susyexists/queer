@@ -1,12 +1,15 @@
 import json
 from pathlib import Path
 
+import matplotlib
 import numpy as np
 import pytest
 
+matplotlib.use("Agg")
+
 import queer
 from queer.arpes import arpes_mesh, arpes_path, binding_k
-from queer.kpath import named_k_path, parse_point_names, seekpath_points
+from queer.kpath import KPath, named_k_path, parse_point_names, seekpath_points
 from queer.mesh import angstrom2reciprocal, crystal2cartesian, reciprocal2angstrom
 from queer.paths import data_path, project_root, results_path
 
@@ -55,12 +58,19 @@ def test_seekpath_named_k_path_for_ag_primitive():
     points = seekpath_points(poscar)
     assert {"GAMMA", "X", "W", "K", "L"}.issubset(points)
 
-    sym, path, labels = named_k_path(["GAMMA", "X", "W", "K", "GAMMA", "L"], 200, poscar)
-    assert labels == ["Γ", "X", "W", "K", "Γ", "L"]
-    assert sym.tolist() == [0, 47, 70, 82, 143, 200]
-    assert path.shape == (201, 3)
-    np.testing.assert_allclose(path[0], points["GAMMA"])
-    np.testing.assert_allclose(path[sym[1]], points["X"])
+    k_path = named_k_path(["GAMMA", "X", "W", "K", "GAMMA", "L"], 200, poscar)
+    assert isinstance(k_path, KPath)
+    assert k_path.labels == ["Γ", "X", "W", "K", "Γ", "L"]
+    assert k_path.sym.tolist() == [0, 47, 70, 82, 143, 200]
+    assert k_path.path.shape == (201, 3)
+    np.testing.assert_allclose(np.asarray(k_path), k_path.path)
+    np.testing.assert_allclose(k_path.path[0], points["GAMMA"])
+    np.testing.assert_allclose(k_path.path[k_path.sym[1]], points["X"])
+
+    sym, path, labels = k_path
+    assert labels == k_path.labels
+    np.testing.assert_allclose(sym, k_path.sym)
+    np.testing.assert_allclose(path, k_path.path)
     assert parse_point_names("GAMMA-X-W-K-GAMMA-L") == ["GAMMA", "X", "W", "K", "GAMMA", "L"]
 
 
@@ -74,10 +84,22 @@ def test_ag_primitive_model_smoke():
     assert energy.shape == (model.nbnd, 1)
     assert np.isfinite(energy).all()
 
-    sym, path, labels = model.kpath("GAMMA-X-W-K-GAMMA-L", 200)
-    assert labels == ["Γ", "X", "W", "K", "Γ", "L"]
-    assert sym.tolist() == [0, 47, 70, 82, 143, 200]
-    assert path.shape == (201, 3)
+    k_path = model.kpath("GAMMA-X-W-K-GAMMA-L", 200)
+    assert k_path.labels == ["Γ", "X", "W", "K", "Γ", "L"]
+    assert k_path.sym.tolist() == [0, 47, 70, 82, 143, 200]
+    assert k_path.path.shape == (201, 3)
+
+    bands, ax = model.plot_band_path("GAMMA-X", n_points=4)
+    assert bands.shape == (model.nbnd, 5)
+    assert tuple(ax.get_ylim()) == (-10.0, 10.0)
+
+    short_path = model.kpath("GAMMA-X", 4)
+    bands, ax = model.plot_band_path(short_path)
+    assert bands.shape == (model.nbnd, 5)
+    assert tuple(ax.get_ylim()) == (-10.0, 10.0)
+
+    curved_path = arpes_path(short_path, model.g_vec, Ek=21.2, V0=15)
+    assert curved_path.shape == short_path.path.shape
 
 
 def test_active_notebook_uses_organized_paths():
@@ -86,8 +108,11 @@ def test_active_notebook_uses_organized_paths():
     source = "\n".join("".join(cell.get("source", [])) for cell in data["cells"])
 
     assert 'data_path("materials", "ag_primitive")' in source
+    assert "band_path = model.kpath(" in source
     assert "model.kpath(" in source
+    assert "model.plot_band_path(" in source
     assert "results_path(" in source
+    assert "sym, path, labels = model.kpath" not in source
     assert "custom_points = [" not in source
     assert "path_create(" not in source
     assert "named_k_path(" not in source

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence, Tuple, Union
 import re
@@ -28,6 +29,40 @@ def _display_label(label: str) -> str:
 
 
 PathLike = Union[str, Path]
+
+
+@dataclass
+class KPath:
+    """Named high-symmetry path with plotting metadata."""
+
+    sym: np.ndarray
+    path: np.ndarray
+    labels: List[str]
+    names: List[str] = field(default_factory=list)
+    point_coords: Dict[str, Sequence[float]] = field(default_factory=dict)
+
+    def __post_init__(self):
+        self.sym = np.asarray(self.sym, dtype=int)
+        self.path = np.asarray(self.path, dtype=float)
+        self.labels = list(self.labels)
+        self.names = list(self.names)
+        self.point_coords = dict(self.point_coords)
+
+    def __iter__(self):
+        """Keep legacy ``sym, path, labels = model.kpath(...)`` unpacking working."""
+        yield self.sym
+        yield self.path
+        yield self.labels
+
+    def __array__(self, dtype=None, copy=None):
+        """Allow numpy-based routines to consume a KPath as its k-point array."""
+        if copy is None:
+            return np.asarray(self.path, dtype=dtype)
+        return np.array(self.path, dtype=dtype, copy=copy)
+
+    def as_tuple(self) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+        """Return ``(sym, path, labels)`` for older call sites."""
+        return self.sym, self.path, self.labels
 
 
 def parse_point_names(point_names: Union[str, Iterable[str]]) -> List[str]:
@@ -91,11 +126,11 @@ def named_k_path(
     n_points: int,
     poscar: PathLike,
     **seekpath_kwargs,
-) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+) -> KPath:
     """Build a k-path from SeekPath point names.
 
-    Returns ``(sym, path, labels)`` in the same shape expected by
-    ``model.plot_electron_path``.
+    Returns a :class:`KPath` containing ``sym``, ``path``, and ``labels``.
+    The object can still be unpacked as ``sym, path, labels`` for legacy code.
     """
     requested = parse_point_names(point_names)
     point_coords = seekpath_points(poscar, **seekpath_kwargs)
@@ -107,4 +142,4 @@ def named_k_path(
     custom_points = [point_coords[label] for label in requested]
     sym, path = path_create(n_points, custom_points)
     labels = [_display_label(label) for label in requested]
-    return sym, path, labels
+    return KPath(sym=sym, path=path, labels=labels, names=requested, point_coords=point_coords)

@@ -20,7 +20,7 @@ from .functions import fd
 
 from .epw import epw
 from . import utils
-from .kpath import named_k_path
+from .kpath import KPath, named_k_path
 from .mesh import mesh_crystal
 from tqdm import tqdm
 
@@ -105,7 +105,7 @@ class model:
                 return np.sort(w.real)
     
     def calculate_energy(self, path, band_index=False):
-        path = path
+        path = np.asarray(path.path if isinstance(path, KPath) else path)
         results = Parallel(n_jobs=self.num_cores)(
             delayed(self.solver)(i) for i in path)
         res = np.array(results).T-self.fermi_energy
@@ -133,30 +133,63 @@ class model:
         res = [self.suscep(point=q,mesh= k_mesh,mesh_energy=en_k,mesh_fermi = fd_k,bands=band_index) for q in tqdm(q_path)]
         return np.array(res).T
 
-    def plot_electron_path(self, band, sym, labels, ylim=None, save=None, temp=None,title=False):
-        # Plot band
-        plt.figure(figsize=(6, 6))
+    def plot_electron_path(self, band, sym, labels, ylim=(-10, 10), save=None, temp=None,title=False, ax=None):
+        if ax is None:
+            _, ax = plt.subplots(figsize=(6, 6))
         for i in band:
-            plt.plot(i, c="blue",)
-        plt.xticks(ticks=sym, labels=labels, fontsize=15)
-        plt.xlim(sym[0], sym[-1])
+            ax.plot(i, c="blue")
+        ax.set_xticks(sym, labels, fontsize=15)
+        ax.set_xlim(sym[0], sym[-1])
         for i in sym[1:-1]:
-            plt.axvline(i, c="black", linestyle="--")
-        plt.axhline(0, linestyle="--", color="red")
-        if ylim == None:
-            plt.ylim(-0.6, 0.8)
-        else:
-            plt.ylim(ylim)
+            ax.axvline(i, c="black", linestyle="--")
+        ax.axhline(0, linestyle="--", color="red")
+        if ylim is not None:
+            ax.set_ylim(ylim)
         if title!=False:
-            plt.title(title)
+            ax.set_title(title)
         if temp != None:
-            plt.title(f"σ = {temp}", fontsize=15)
+            ax.set_title(f"σ = {temp}", fontsize=15)
         if self.shift != 0:
-            plt.title(
+            ax.set_title(
                 r"$\delta \epsilon_{Fermi} = $"f" {self.shift} eV", fontsize=15)
-        plt.ylabel("Energy (eV)", fontsize=15)
+        ax.set_ylabel("Energy (eV)", fontsize=15)
         if save != None:
-            plt.savefig(save)
+            ax.figure.savefig(save)
+        return ax
+
+    def plot_band_path(
+        self,
+        path_or_points,
+        sym=None,
+        labels=None,
+        n_points=200,
+        ylim=(-10, 10),
+        save=None,
+        band_index=False,
+        ax=None,
+        **seekpath_kwargs,
+    ):
+        """Calculate and plot electron bands along a path.
+
+        ``path_or_points`` can be either an explicit k-point array, in which
+        case ``sym`` and ``labels`` must be supplied, a :class:`queer.kpath.KPath`,
+        or a named path string such as ``"GAMMA-X-W-K-GAMMA-L"``.
+        """
+        if isinstance(path_or_points, str):
+            k_path = self.kpath(path_or_points, n_points, **seekpath_kwargs)
+            sym, path, labels = k_path
+        elif isinstance(path_or_points, KPath):
+            path = path_or_points.path
+            sym = path_or_points.sym if sym is None else sym
+            labels = path_or_points.labels if labels is None else labels
+        else:
+            if sym is None or labels is None:
+                raise ValueError("Explicit paths require sym and labels.")
+            path = np.asarray(path_or_points)
+
+        bands = self.calculate_energy(path, band_index=band_index)
+        axis = self.plot_electron_path(bands, sym, labels, ylim=ylim, save=save, ax=ax)
+        return bands, axis
 
 
 def Symmetries(fstring):
