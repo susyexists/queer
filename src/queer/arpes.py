@@ -38,16 +38,21 @@ def arpes_equation(Ek, V0, k_xy):
     return kz
 
 
-def arpes_mesh(photon_energy,fermi_energy,binding_energy,V0,N,factor,align=None):
+def arpes_mesh(photon_energy,fermi_energy,binding_energy,V0,N,factor=None,align=None):
+    C = 0.2625
     Ek = photon_energy - binding_energy - fermi_energy
+    if factor is None:
+        # Cover the full hemisphere: diameter = 2 * max kxy radius
+        factor = 2 * np.sqrt(C * (Ek + V0))
     k_cartesian = mesh_cartesian(N=[N,N,1],factor=factor,center=True)
-    kx,ky,kz = k_cartesian.T
-    kz_curve = arpes_equation(Ek, V0, [kx,ky])
+    kx,ky,_ = k_cartesian.T
+    arg = C * (Ek + V0) - kx**2 - ky**2
+    # Points outside the ARPES hemisphere (arg < 0) have no real kz solution;
+    # mark them NaN so callers can mask or gap them rather than using kz=0.
+    kz_curve = np.where(arg >= 0, np.sqrt(arg), np.nan)
     k_cartesian_curve = np.array([kx,ky,kz_curve])
     if align:
-        align_k_cartesian_curve = aligned_arpes_mesh(align,k_cartesian_curve).T
-        return align_k_cartesian_curve
-
+        return aligned_arpes_mesh(align,k_cartesian_curve).T
     return k_cartesian_curve.T
 
 
@@ -95,10 +100,9 @@ def binding_k(photon_energy,fermi_energy ,binding_range,binding_step, V0, N, fac
     binding_array = np.arange(binding_range[0],binding_range[1],binding_step)
     # Loop through each binding energy in the binding_array
     for be in binding_array:
-        # Calculate the ARPES mesh for the current binding energy
-        kx, ky, kz = arpes_mesh(photon_energy,fermi_energy, be, V0, N, factor,align).T
-        
-        # Store the results in the dictionary
+        mesh = arpes_mesh(photon_energy, fermi_energy, be, V0, N, factor, align)
+        valid = ~np.isnan(mesh).any(axis=1)
+        kx, ky, kz = mesh[valid].T
         kmesh_dict[be] = (kx, ky, kz)
     
     return kmesh_dict
