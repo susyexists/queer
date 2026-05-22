@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -69,6 +70,69 @@ def binding_energy_surfaces(
     return surfaces
 
 
+def sweep_binding_energy_surfaces(
+    model,
+    g_vec,
+    photon_energy: float,
+    fermi_energy: float,
+    binding_range,
+    binding_step: float,
+    v0_list,
+    n_points: int,
+    factor: float,
+    align=None,
+    energy_shifts=(0.0,),
+    sigma: float = 0.1,
+    verbose: bool = True,
+):
+    """Run `binding_energy_surfaces` over a grid of (v0, energy_shift) values.
+
+    Returns ``{(v0, shift): surfaces_dict}``.
+    """
+    results = {}
+    for shift in energy_shifts:
+        for v0 in v0_list:
+            if verbose:
+                print(f"--- V0={v0}, shift={shift} ---")
+            start = time.time()
+            surfaces = binding_energy_surfaces(
+                model,
+                g_vec,
+                photon_energy,
+                fermi_energy,
+                binding_range,
+                binding_step,
+                v0,
+                n_points,
+                factor,
+                align=align,
+                energy_shift=shift,
+                sigma=sigma,
+            )
+            if verbose:
+                print(f"Surfaces computed in {format_time(time.time() - start)}")
+            results[(v0, shift)] = surfaces
+    return results
+
+
+def fermi_surface_points(mesh, model, g_vec, delta: float = 0.05):
+    """Return the (kx, ky) points where any band sits within ``delta`` of E_F.
+
+    ``mesh`` is the ARPES k-mesh in Å⁻¹ (shape ``(N, 3)``). Bands are computed
+    via ``model.calculate_energy`` after dropping NaN rows; the returned mask
+    is aligned to the valid rows only.
+    """
+    mesh = np.asarray(mesh)
+    valid = ~np.isnan(mesh).any(axis=1)
+    valid_mesh = mesh[valid]
+    inv_mesh = angstrom2reciprocal(valid_mesh, g_vec)
+    band = model.calculate_energy(inv_mesh)
+    mask = np.any(np.abs(band) <= delta, axis=0)
+    kx = valid_mesh[:, 0][mask]
+    ky = valid_mesh[:, 1][mask]
+    return mask, kx, ky
+
+
 def save_surface_plots(
     surfaces,
     output_dir,
@@ -76,11 +140,23 @@ def save_surface_plots(
     energy_shift: float = 0.0,
     rotate_from=None,
     rotate_to=None,
+    style: str = "intensity",
     cmap: str = "inferno",
+    point_size: float = 1.0,
+    alpha: float = 1.0,
+    tol: float = 0.1,
     transparent: bool = False,
     close: bool = True,
 ):
-    """Save one scatter plot for each binding-energy surface."""
+    """Save one scatter plot per binding-energy surface.
+
+    Styles:
+        - ``"intensity"``  : scatter colored by ``df.I`` on a black canvas.
+        - ``"scatter_white"`` : white dots (``alpha=0.25`` default) on a black
+          canvas; rows are filtered to ``|e + binding_energy| < tol``.
+        - ``"scatter_black_transparent"`` : black dots on a fully transparent
+          figure + axes patch; rows are filtered the same way.
+    """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -90,18 +166,49 @@ def save_surface_plots(
 
     frame_paths = []
     for binding_energy, df in surfaces.items():
+        if style in ("scatter_white", "scatter_black_transparent"):
+            df = df[np.abs(df.e + binding_energy) < tol]
+            if len(df) == 0:
+                continue
+
         coords = np.array([df.kx.values, df.ky.values, df.kz.values])
         if rotation is not None:
             coords = rotation.T @ coords
 
         fig, ax = plt.subplots(figsize=(5, 5))
-        ax.scatter(coords[0], coords[1], c=df.I, cmap=cmap, s=1, edgecolors="none")
+        if style == "intensity":
+            ax.scatter(
+                coords[0], coords[1],
+                c=df.I, cmap=cmap, s=point_size,
+                alpha=alpha, edgecolors="none",
+            )
+            ax.set_facecolor("black")
+        elif style == "scatter_white":
+            scatter_alpha = alpha if alpha != 1.0 else 0.25
+            ax.scatter(
+                coords[0], coords[1],
+                color="white", s=point_size if point_size != 1.0 else 2,
+                alpha=scatter_alpha, edgecolors="none", rasterized=True,
+            )
+            ax.set_facecolor("black")
+        elif style == "scatter_black_transparent":
+            scatter_alpha = alpha if alpha != 1.0 else 0.25
+            ax.scatter(
+                coords[0], coords[1],
+                color="black", s=point_size if point_size != 1.0 else 2,
+                alpha=scatter_alpha, edgecolors="none", rasterized=True,
+            )
+            fig.patch.set_alpha(0.0)
+            ax.patch.set_alpha(0.0)
+            transparent = True
+        else:
+            raise ValueError(f"Unknown style: {style!r}")
+
         ax.set_xlabel(r"$k_{x}$ [$\AA^{-1}$]")
         ax.set_ylabel(r"$k_{y}$ [$\AA^{-1}$]")
         ax.set_title(
             rf"$E_B$={np.around(binding_energy, 2)} eV  $V_0$={v0:g}, shift={energy_shift:g}"
         )
-        ax.set_facecolor("black")
         fig.tight_layout()
 
         frame_path = output_dir / f"{np.around(binding_energy, 2)}.png"
