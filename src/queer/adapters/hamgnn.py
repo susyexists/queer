@@ -59,8 +59,9 @@ def write_legacy_graphs(path, graphs):
     """Explicit opt-in writer for the external pickled graph_data.npz format."""
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
+    payload = np.asarray({key: to_pyg(value) for key, value in graphs.items()}, dtype=object)
     with target.open("wb") as stream:
-        np.savez(stream, graph={key: to_pyg(value) for key, value in graphs.items()})
+        np.savez(stream, graph=payload)
     return target
 
 
