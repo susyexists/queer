@@ -6,7 +6,7 @@ from ..functions import fd
 from ._common import model_energies, points_array, positive
 
 
-def green_function(H, omega, eta):
+def green_function(H, omega, eta, overlap=None, *, fermi_energy=0.0):
     """Retarded Green function; scalar or arbitrary frequency arrays broadcast."""
     eta = positive(eta, "eta")
     H = np.asarray(H, dtype=complex)
@@ -15,13 +15,25 @@ def green_function(H, omega, eta):
     omega = np.asarray(omega, dtype=float)
     if not np.isfinite(omega).all():
         raise ValueError("omega must be finite")
-    identity = np.eye(H.shape[0])
-    return np.linalg.inv((omega[..., None, None] + 1j * eta) * identity - H)
+    metric = np.eye(H.shape[0]) if overlap is None else np.asarray(overlap, dtype=complex)
+    if metric.shape != H.shape or not np.isfinite(metric).all():
+        raise ValueError("overlap must be finite and have the same shape as H")
+    if not np.allclose(metric, metric.conj().T, rtol=1e-10, atol=1e-10):
+        raise ValueError("overlap must be Hermitian")
+    try:
+        np.linalg.cholesky(metric)
+    except np.linalg.LinAlgError as error:
+        raise ValueError("overlap must be positive definite") from error
+    if not np.isfinite(fermi_energy):
+        raise ValueError("fermi_energy must be finite")
+    return np.linalg.inv((omega[..., None, None] + fermi_energy + 1j * eta) * metric - H)
 
 
-def spectral_from_green(H, omega_list, eta):
-    green = green_function(H, omega_list, eta)
-    return -np.trace(green.imag, axis1=-2, axis2=-1) / np.pi
+def spectral_from_green(H, omega_list, eta, overlap=None, *, fermi_energy=0.0):
+    green = green_function(H, omega_list, eta, overlap, fermi_energy=fermi_energy)
+    if overlap is not None:
+        green = np.asarray(overlap) @ green
+    return -np.trace(green, axis1=-2, axis2=-1).imag / np.pi
 
 
 def spectral_from_eig(evals, omega_list, eta):

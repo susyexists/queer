@@ -102,20 +102,26 @@ def interpolate_path(n_points: int, corners, reciprocal=None) -> tuple[np.ndarra
 
 
 def seekpath_points(poscar: str | Path, **kwargs) -> dict:
-    try:
-        import seekpath
-    except ImportError as error:
-        raise ImportError("Named k-paths require queer[symmetry] (seekpath)") from error
-    return seekpath.get_path_orig_cell(read_poscar(poscar), **kwargs)["point_coords"]
+    """Compatibility name for native HPKOT points in the input cell basis."""
+    from .symmetry import compute_band_path
+
+    return compute_band_path(read_poscar(poscar), **kwargs)["point_coords"]
 
 
 def named_k_path(point_names, n_points: int, poscar: str | Path, **kwargs) -> KPath:
+    return named_k_path_from_structure(point_names, n_points, read_poscar(poscar), **kwargs)
+
+
+def named_k_path_from_structure(point_names, n_points: int, structure, **kwargs) -> KPath:
+    """Named path for native Structure, Generator dict or a symmetry-cell tuple."""
+    from .symmetry import _cell_tuple, compute_band_path
+
     names = parse_point_names(point_names)
-    coordinates = seekpath_points(poscar, **kwargs)
+    coordinates = compute_band_path(structure, **kwargs)["point_coords"]
     missing = [name for name in names if name not in coordinates]
     if missing:
         raise KeyError(f"Unknown SeekPath points {missing}; available: {', '.join(sorted(coordinates))}")
-    lattice, _, _ = read_poscar(poscar)
+    lattice, _, _ = _cell_tuple(structure)
     reciprocal = reciprocal_lattice(lattice)
     sym, points = interpolate_path(n_points, [coordinates[name] for name in names], reciprocal)
     cartesian = fractional_to_cartesian(points, reciprocal)

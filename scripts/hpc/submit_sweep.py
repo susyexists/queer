@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Submit an isolated momentum parameter array from a prepared environment."""
+"""Submit resolved workflow cases from a prepared environment."""
 
 from __future__ import annotations
 
@@ -20,14 +20,14 @@ from queer.config import config_from_mapping
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, required=True)
+    parser.add_argument("--config", type=Path, action="append", required=True)
     parser.add_argument("--profile", type=Path, required=True)
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
-    config_path = args.config.expanduser().resolve()
+    config_path = args.config[0].expanduser().resolve()
     config_text = config_path.read_text()
-    config = config_from_mapping(tomllib.loads(config_text), base_dir=config_path.parent, workflow="momentum")
+    config = config_from_mapping(tomllib.loads(config_text), base_dir=config_path.parent)
     profile = tomllib.loads(args.profile.read_text())
     unknown = set(profile) - {"cpus_per_task", "memory", "time", "concurrency", "partition", "account"}
     if unknown:
@@ -38,9 +38,27 @@ def main(argv=None):
         isinstance(value, bool) or not isinstance(value, int) or value < 1 for value in (cpus, concurrency)
     ):
         raise ValueError("CPU allocation and concurrency must be positive integers")
-    values = config.parameters.get("v0_values", [config.parameters.get("v0")])
-    if not values or any(value is None or not math.isfinite(float(value)) for value in values):
-        raise ValueError("Provide finite v0 or v0_values in the workflow configuration")
+    legacy = config.workflow == "momentum" and len(args.config) == 1
+    cases = []
+    if legacy:
+        values = config.parameters.get("v0_values", [config.parameters.get("v0")])
+        if not values or any(value is None or not math.isfinite(float(value)) for value in values):
+            raise ValueError("Provide finite v0 or v0_values in the workflow configuration")
+    else:
+        for source in args.config:
+            source = source.expanduser().resolve()
+            text = source.read_text()
+            resolved = config_from_mapping(tomllib.loads(text), base_dir=source.parent)
+            cases.append(
+                {
+                    "workflow": resolved.workflow,
+                    "material_dir": str(resolved.material_dir),
+                    "results_dir": str(resolved.results_dir),
+                    "source": str(source),
+                    "text": text,
+                }
+            )
+        values = list(range(len(cases)))
     if not args.python.absolute().is_file():
         raise ValueError("Prepared Python interpreter does not exist")
     root = config.results_dir / ("submission-preview" if args.dry_run else f"submission-{uuid.uuid4().hex}")
@@ -70,6 +88,12 @@ def main(argv=None):
     dispatch = root / "dispatch.json"
     snapshot = root / "config.toml"
     snapshot.write_text(config_text)
+    if not legacy:
+        for index, case in enumerate(cases):
+            target = root / f"config-{index:04d}.toml"
+            target.write_text(case.pop("text"))
+            case["config"] = str(target)
+            case["config_sha256"] = hashlib.sha256(target.read_bytes()).hexdigest()
     dispatch.write_text(
         json.dumps(
             {
@@ -79,6 +103,7 @@ def main(argv=None):
                 "results_dir": str(config.results_dir),
                 "values": values,
                 "run_root": str(root),
+                **({"cases": cases} if not legacy else {}),
             },
             indent=2,
         )

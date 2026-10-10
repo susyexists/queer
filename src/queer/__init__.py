@@ -8,10 +8,33 @@ from types import ModuleType as _ModuleType
 try:
     __version__ = version("queer")
 except PackageNotFoundError:
-    __version__ = "1.1.0"
+    __version__ = "1.2.0"
 
 _EXPORTS = {
+    "CapabilityError": (".capabilities", "CapabilityError"),
     "WannierModel": (".models.wannier", "WannierModel"),
+    "OpenMXModel": (".models.openmx", "OpenMXModel"),
+    "GraphHamiltonianModel": (".models.graph", "GraphHamiltonianModel"),
+    "HamiltonianGraph": (".io.hamiltonian", "HamiltonianGraph"),
+    "BandData": (".io.bands", "BandData"),
+    "Structure": (".structures", "Structure"),
+    "Frame": (".structures", "Frame"),
+    "Evaluation": (".structures", "Evaluation"),
+    "ForceProvider": (".structures", "ForceProvider"),
+    "RunStore": (".io.artifacts", "RunStore"),
+    "read_structure": (".io.atomistic", "read_structure"),
+    "write_structure": (".io.atomistic", "write_structure"),
+    "read_frames": (".io.atomistic", "read_frames"),
+    "read_bands": (".io.bands", "read_bands"),
+    "run_nvt": (".atomistic.dynamics", "run_nvt"),
+    "relax_fire": (".atomistic.dynamics", "relax_fire"),
+    "phonon_bands": (".atomistic.phonons", "phonon_bands"),
+    "plan_displacements": (".atomistic.phonons", "plan_displacements"),
+    "assemble_force_constants": (".atomistic.phonons", "assemble_force_constants"),
+    "select_min_energy_frame": (".atomistic.selection", "select_min_energy_frame"),
+    "run_workflow": (".workflows.runner", "run_workflow"),
+    "export_run": (".compat.generator", "export_run"),
+    "ObservableResult": (".observables.result", "ObservableResult"),
     "EPWModel": (".models.epw", "EPWModel"),
     "ExecutionOptions": (".execution", "ExecutionOptions"),
     "KPath": (".kpath", "KPath"),

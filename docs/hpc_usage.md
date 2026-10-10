@@ -3,7 +3,7 @@
 Prepare the pinned environment on storage visible to compute nodes:
 
 ```bash
-uv sync --locked --all-extras --python 3.13
+uv sync --locked --extra plot --extra symmetry --extra notebook --python 3.13
 .venv/bin/python scripts/hpc/submit_sweep.py --config calculation.toml \
   --profile configs/hpc/default.toml --dry-run
 ```
@@ -24,13 +24,31 @@ submission. Input files, the prepared interpreter, runner, and submission direct
 must be visible from every node. Keep inputs and the prepared environment unchanged
 while the array is queued/running so all tasks use the same scientific data.
 
-Each task executes one V0 case through the installed CLI, writes its own run
+Each task executes one resolved workflow case through the installed CLI, writes its own run
 manifest and numerical checkpoints, and exits nonzero on failure. Logs use `%A_%a`.
 Native thread pools default to one; process workers are capped by scheduler allocation
 and affinity. Choose `execution.memory_mb` and `batch_size` to bound concurrent working
 arrays; this budget excludes model storage and returned result arrays. Scheduler
 memory must also cover those allocations and process-worker copies. Use node-local
 `JOBLIB_TEMP_FOLDER` when appropriate for the site's shared-memory policy.
+
+The adapter supports all registered native OpenMX observables and their complete
+configuration, as well as the existing momentum/V0 sweep. Repeat `--config` to
+submit distinct configurations in one array:
+
+```bash
+.venv/bin/python scripts/hpc/submit_sweep.py \
+  --config configs/examples/openmx_bands.toml \
+  --config configs/examples/openmx_dos.toml \
+  --profile configs/hpc/default.toml --dry-run
+```
+
+Each generic case gets an immutable `config-NNNN.toml` snapshot, resolved roots,
+SHA256 and a separate `task-NNNN` run. Fixed integration tiles and refinement
+levels survive execution batch changes. Pockels and CRTA transport checkpoint
+additive quantities before global reconstruction. Whole-mesh EMPC and loop/search
+tasks checkpoint complete cases. Rendering can be done later on a login node
+using stored artifacts, without the original SCFOUT or PAO files.
 
 For scratch storage:
 
@@ -66,6 +84,17 @@ locks exclude concurrent writers and release when a process exits or is killed;
 shared storage must support advisory file locking. SIGTERM records interruption;
 SIGKILL can leave status `running`, but completed atomic checkpoints remain resumable.
 Completed runs can be resumed idempotently. Rendering consumes completed artifacts.
+
+For generic arrays, recovery can also call the adapter with the original index:
+
+```bash
+SLURM_RESTART_COUNT=1 .venv/bin/python scripts/hpc/array_task.py \
+  /path/to/submission/dispatch.json 1
+```
+
+Use the same prepared interpreter and scheduler worker allocation when reproducing
+resource behavior. A failed convergence gate requires scientific investigation;
+modifying the mesh or tolerance starts a new scientific run.
 
 ## Cluster acceptance
 

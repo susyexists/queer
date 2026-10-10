@@ -10,8 +10,10 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .execution import ExecutionOptions
+from .workflows.registry import NAMES as OBSERVABLE_WORKFLOWS
+from .workflows.services import SERVICE_INPUTS, SERVICE_NAMES, validate_service
 
-WORKFLOWS = ("bands", "susceptibility", "spectral", "momentum", "epw")
+WORKFLOWS = ("bands", "susceptibility", "spectral", "momentum", "epw", *OBSERVABLE_WORKFLOWS, *SERVICE_NAMES)
 _PARAMETERS = {
     "bands": {"ef", "interpolation", "kpath", "n_points", "kpoints", "bands"},
     "susceptibility": {
@@ -155,7 +157,21 @@ def config_from_mapping(
             execution[key] = value
         else:
             raise ValueError(f"Unknown configuration override: {key}")
-    unknown_inputs = set(inputs) - {"material", "material_dir", "hr", "poscar", "wsvec"}
+    unknown_inputs = set(inputs) - (
+        {
+            "material",
+            "material_dir",
+            "hr",
+            "poscar",
+            "wsvec",
+            "model",
+            "scfout",
+            "openmx_input",
+            "pao_dir",
+            "pao_files",
+        }
+        | (SERVICE_INPUTS if name in SERVICE_NAMES else {"export_metadata"})
+    )
     if unknown_inputs or set(output) - {"results_dir"}:
         raise ValueError(
             f"Unknown input/output options: {sorted(unknown_inputs | (set(output) - {'results_dir'}))}"
@@ -179,15 +195,39 @@ def config_from_mapping(
         raise ValueError("inputs.material_dir must be a directory path")
     directory = Path(inputs["material_dir"]).expanduser()
     inputs["material_dir"] = (directory if directory.is_absolute() else base / directory).resolve()
-    for key in ("hr", "poscar", "wsvec"):
+    if name in SERVICE_NAMES:
+        validate_service(name, inputs, params)
+        return _resolved_config(name, inputs, params, execution, output, base)
+    model_kind = inputs.get("model", "wannier")
+    if model_kind not in {"wannier", "openmx"}:
+        raise ValueError("inputs.model must be wannier or openmx")
+    if name == "epw" and model_kind == "openmx":
+        raise ValueError("EPW workflows require EPW inputs, not OpenMX")
+    for key in ("hr", "poscar", "wsvec", "scfout", "openmx_input", "pao_dir"):
         if key in inputs and (not isinstance(inputs[key], str) or not inputs[key]):
             raise ValueError(f"inputs.{key} must be a nonempty filename")
-    unknown_params = set(params) - _PARAMETERS[name]
-    if unknown_params:
-        raise ValueError(f"Unknown {name} parameters: {', '.join(sorted(unknown_params))}")
-    missing = _REQUIRED[name] - set(params)
-    if missing:
-        raise ValueError(f"Missing {name} parameters: {', '.join(sorted(missing))}")
+    if "pao_files" in inputs and (
+        not isinstance(inputs["pao_files"], dict)
+        or not inputs["pao_files"]
+        or any(
+            not isinstance(key, str) or not isinstance(value, str) or not value
+            for key, value in inputs["pao_files"].items()
+        )
+    ):
+        raise ValueError("inputs.pao_files must map PAO keys to nonempty filenames")
+    if name in OBSERVABLE_WORKFLOWS:
+        from .workflows.registry import validate_parameters
+
+        validate_parameters(name, params)
+    else:
+        allowed = _PARAMETERS[name] | ({"scissors", "n_occ", "spin"} if name == "bands" else set())
+        unknown_params = set(params) - allowed
+        if unknown_params:
+            raise ValueError(f"Unknown {name} parameters: {', '.join(sorted(unknown_params))}")
+        required = _REQUIRED[name] - ({"ef", "interpolation"} if model_kind == "openmx" else set())
+        missing = required - set(params)
+        if missing:
+            raise ValueError(f"Missing {name} parameters: {', '.join(sorted(missing))}")
     for key in ("ef", "photon_energy", "fermi_energy", "binding_min", "binding_max", "v0", "energy_shift"):
         if key in params:
             _finite(params[key], key)
@@ -196,6 +236,15 @@ def config_from_mapping(
             _finite(params[key], key, positive=True)
     if "temperature" in params:
         _finite(params["temperature"], "temperature", nonnegative=True)
+    if "temperature_kelvin" in params:
+        values = params["temperature_kelvin"]
+        if name == "boltz_transport" and isinstance(values, list):
+            if not values:
+                raise ValueError("parameters.temperature_kelvin must be a nonempty scan")
+            for value in values:
+                _finite(value, "temperature_kelvin", positive=True)
+        else:
+            _finite(values, "temperature_kelvin", positive=name == "boltz_transport", nonnegative=True)
     for key in ("n_points", "nk", "nq", "nph"):
         if key in params and (
             isinstance(params[key], bool) or not isinstance(params[key], int) or params[key] < 1
@@ -225,17 +274,25 @@ def config_from_mapping(
         "ndegen_applied",
     }:
         raise ValueError("parameters.interpolation must be standard, ws_distance or ndegen_applied")
+    if model_kind == "openmx" and "interpolation" in params:
+        raise ValueError("OpenMX matrices do not use Wannier interpolation")
     if name == "bands":
+        if "spin" in params and (model_kind != "openmx" or params["spin"] not in {"up", "down"}):
+            raise ValueError("parameters.spin must be up/down for a collinear OpenMX model")
         if ("kpoints" in params) == ("kpath" in params):
             raise ValueError("bands requires exactly one of parameters.kpoints or parameters.kpath")
         if "kpath" in params and (
-            not isinstance(params["kpath"], str) or not params["kpath"] or "poscar" not in inputs
+            not isinstance(params["kpath"], str)
+            or not params["kpath"]
+            or ("poscar" not in inputs and model_kind != "openmx")
         ):
             raise ValueError("Named bands kpath requires a nonempty route and inputs.poscar")
         if "kpath" in params and "n_points" not in params:
             raise ValueError("Named bands kpath requires parameters.n_points")
     if name == "spectral" and set(params) & {"photon_energy", "v0_values", "align_zero"}:
-        if not {"photon_energy", "v0_values"}.issubset(params) or "poscar" not in inputs:
+        if not {"photon_energy", "v0_values"}.issubset(params) or (
+            "poscar" not in inputs and model_kind != "openmx"
+        ):
             raise ValueError("Curved ARPES spectral runs require photon_energy, v0_values and inputs.poscar")
         if "align_zero" in params and not isinstance(params["align_zero"], bool):
             raise ValueError("parameters.align_zero must be a boolean")
@@ -244,12 +301,16 @@ def config_from_mapping(
             raise ValueError("momentum requires exactly one of parameters.v0 or parameters.v0_values")
         if params["binding_max"] <= params["binding_min"]:
             raise ValueError("binding_max must be greater than binding_min for a half-open interval")
-        if "poscar" not in inputs:
+        if "poscar" not in inputs and model_kind != "openmx":
             raise ValueError("momentum requires inputs.poscar")
         if "align" in params:
             _points(params["align"], "align")
             if len(params["align"]) != 2 or any(not any(row) for row in params["align"]):
                 raise ValueError("parameters.align must contain two nonzero vectors")
+    return _resolved_config(name, inputs, params, execution, output, base)
+
+
+def _resolved_config(name, inputs, params, execution, output, base):
     try:
         resources = ExecutionOptions(**execution)
     except TypeError as exc:

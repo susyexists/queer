@@ -1,0 +1,12 @@
+workflow = "structure"
+
+[inputs]
+material_dir = "../../tests/fixtures/atomistic"
+structure = "POSCAR"
+
+[parameters]
+bonds = true
+transforms = [{type = "strain", params = {mode = "uniaxial", axis = "x", percent = 2.0}}]
+
+[execution]
+native_threads = 1

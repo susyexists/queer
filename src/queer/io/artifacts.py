@@ -21,7 +21,7 @@ import numpy as np
 
 from ..execution import ExecutionOptions
 
-ALGORITHM_VERSION = "1.1.0-wannier-v2"
+ALGORITHM_VERSION = "1.2.0-native-services-v2"
 
 
 def scheduler_context() -> dict[str, str]:
@@ -91,7 +91,7 @@ def atomic_npz(path: Path, arrays: Mapping[str, Any]) -> None:
 
 def environment_versions() -> dict[str, Any]:
     versions: dict[str, Any] = {"python": platform.python_version(), "platform": platform.platform()}
-    for package in ("queer", "numpy", "scipy", "joblib", "seekpath"):
+    for package in ("queer", "numpy", "scipy", "joblib", "spglib", "torch", "mace-torch", "torch-geometric"):
         try:
             versions[package] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:
@@ -244,6 +244,8 @@ class RunStore:
         if error:
             self.manifest["error"] = {"type": type(error).__name__, "message": str(error)}
             self.manifest["attempts"][-1]["error"] = self.manifest["error"]
+        elif status == "completed":
+            self.manifest.pop("error", None)
         self.save()
 
     def release(self) -> None:

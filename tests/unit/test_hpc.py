@@ -74,6 +74,63 @@ def test_submission_dry_run_creates_no_directories(tmp_path, capsys):
     assert "--output=" in capsys.readouterr().out
 
 
+def test_generic_native_workflow_array_and_requeue(tmp_path, monkeypatch):
+    submit, task = module("submit_sweep"), module("array_task")
+    _, profile = configuration(tmp_path)
+    configs = []
+    for name in ("dos", "pdos"):
+        source = tmp_path / f"{name}.toml"
+        source.write_text(f'''workflow="{name}"
+[inputs]
+model="openmx"
+material_dir="inputs/{name}"
+scfout="sample.scfout"
+[parameters]
+grid=[2,2,2]
+omega=[0.0,1.0]
+[output]
+results_dir="results/{name}"
+''')
+        configs.append(source)
+    dispatched = []
+
+    def fake_submit(command, *, env, check):
+        path = Path(env["QUEER_SWEEP_FILE"])
+        dispatch = json.loads(path.read_text())
+        assert dispatch["values"] == [0, 1]
+        assert [case["workflow"] for case in dispatch["cases"]] == ["dos", "pdos"]
+        for source, case in zip(configs, dispatch["cases"], strict=True):
+            assert Path(case["config"]).read_text() == source.read_text()
+            assert case["material_dir"] == str(tmp_path / "inputs" / case["workflow"])
+            assert case["results_dir"] == str(tmp_path / "results" / case["workflow"])
+        dispatched.append((path, dispatch))
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(submit.subprocess, "run", fake_submit)
+    assert (
+        submit.main(["--config", str(configs[0]), "--config", str(configs[1]), "--profile", str(profile)])
+        == 0
+    )
+    path, dispatch = dispatched[0]
+    configs[1].write_text("changed original source")
+    run = Path(dispatch["run_root"]) / "task-0001"
+    run.mkdir()
+    (run / "manifest.json").write_text("{}")
+    monkeypatch.setenv("SLURM_RESTART_COUNT", "1")
+
+    def fake_task(command, *, check):
+        assert command[3] == "pdos"
+        assert "--resume" in command and "--v0" not in command
+        assert command[command.index("--material-dir") + 1] == str(tmp_path / "inputs/pdos")
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(task.subprocess, "run", fake_task)
+    assert task.main([str(path), "1"]) == 0
+    Path(dispatch["cases"][1]["config"]).write_text("changed submitted snapshot")
+    with pytest.raises(ValueError, match="snapshot was changed"):
+        task.main([str(path), "1"])
+
+
 def test_array_task_propagates_exit_and_caps_native_threads(tmp_path, monkeypatch):
     adapter = module("array_task")
     dispatch = tmp_path / "dispatch.json"

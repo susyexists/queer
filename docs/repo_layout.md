@@ -1,9 +1,10 @@
 # Repository responsibilities
 
-- `src/queer/models`: Wannier/EPW representations and model evaluation.
+- `src/queer/models`: native OpenMX, Wannier and EPW representations and model evaluation.
 - `geometry`: lattice/coordinate transformations, rotations, meshes, named paths.
 - `io`: validated readers and atomic arrays/manifests.
-- `observables`: scientific response, spectral, ARPES, and momentum calculations.
+- `observables`: shared nonorthogonal operators, electronic/surface/unfolding,
+  geometric/integrated/optical kernels, spectral, ARPES and momentum calculations.
 - `workflows`: calculation cases and recoverable orchestration; `plotting`: optional visualization.
 - `config.py`, `execution.py`, `cli.py`: configuration, bounded resources, installed commands.
 - Legacy top-level modules and `scripts/runs` forward supported 1.x interfaces.

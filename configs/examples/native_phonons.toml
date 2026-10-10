@@ -1,0 +1,21 @@
+workflow = "phonons"
+
+[inputs]
+material_dir = "../../tests/fixtures/atomistic"
+structure = "POSCAR"
+
+[parameters]
+supercell = [1, 1, 1]
+delta_A = 0.01
+qpoints = [[0.0, 0.0, 0.0], [0.1, 0.0, 0.0], [0.2, 0.0, 0.0]]
+# An onsite harmonic fixture has no translational invariance. Production
+# periodic calculations normally retain the default corrections.
+frederiksen = false
+acoustic = false
+
+[parameters.provider]
+kind = "harmonic"
+spring_constant_eV_A2 = 2.0
+
+[execution]
+native_threads = 1

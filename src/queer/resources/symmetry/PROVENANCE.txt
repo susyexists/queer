@@ -1,0 +1,5 @@
+HPKOT reciprocal-point/path/formula tables from SeekPath 2.2.2, MIT licensed.
+Coordinates and paths supplied by Yoyo Hinuma.
+Y. Hinuma et al., Computational Materials Science 128 (2017), 140-184, DOI 10.1016/j.commatsci.2016.10.015.
+Only tabulated scientific data are reused; native classification, arithmetic, basis transformations, and atom mapping are independently implemented in QUEER.
+No example POSCARs or source routines are included.

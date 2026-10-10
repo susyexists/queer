@@ -1,20 +1,26 @@
 # QUEER
 
-QUEER is a Python library for Wannier Hamiltonians, bands, static susceptibility,
+QUEER is a Python library for native OpenMX and Wannier Hamiltonians, electronic
+structure, geometry, topology, transport, optical and nonlinear responses,
 spectral/ARPES calculations, momentum microscopy, and EPW self-energy workflows.
-It supports local, notebook, and Slurm execution with durable numerical results.
+It also provides native crystal preprocessing, finite-displacement phonons,
+force-callback dynamics and relaxation, trajectory selection, dataset preparation
+and Hamiltonian graph postprocessing. It supports local, notebook, and Slurm
+execution with durable numerical results.
 
 ## Install
 
 Python 3.11+ is required. For development and HPC environment preparation:
 
 ```bash
-uv sync --locked --all-extras --group dev --python 3.13
+uv sync --locked --extra plot --extra symmetry --extra notebook --group dev --python 3.13
 ```
 
 For ordinary package installation, use `python -m pip install .` for numerical
 work or `python -m pip install '.[plot,symmetry]'` for figures and named k-paths.
-Optional extras are `plot`, `symmetry`, `animation`, `notebook`, and `all`.
+Optional extras are `plot`, `symmetry`, `animation`, `notebook`, `mace`, `hamgnn`, and `all`.
+Core calculations use no ASE, PyATB, SeekPath or Dans_Diffraction. Symmetry uses
+optional spglib; trained model adapters use optional producer environments.
 `requirements.txt` is a compatibility installer; `pyproject.toml` is authoritative.
 
 ## Reproducible workflows
@@ -29,6 +35,8 @@ uv run --locked queer spectral --config configs/examples/spectral.toml
 uv run --locked queer spectral --config configs/examples/spectral_arpes.toml
 uv run --locked queer momentum --config configs/examples/momentum.toml
 uv run --locked queer epw --config configs/examples/epw.toml
+uv run --locked queer bands --config configs/examples/openmx_bands.toml --render
+uv run --locked queer dos --config configs/examples/openmx_dos.toml --render
 ```
 
 Each command prints its run directory. A run contains resolved configuration,
@@ -38,6 +46,7 @@ incremental NPZ arrays. Figures can be regenerated without calculation:
 ```bash
 queer render /path/to/completed/run
 queer momentum --config calculation.toml --run-dir /path/to/interrupted/run --resume
+queer export /path/to/completed/run --profile generator
 ```
 
 Configurations resolve relative input/output paths against the TOML directory.
@@ -59,6 +68,39 @@ K-points are `(Nk, 3)` fractional reciprocal coordinates; bands are `(Nb, Nk)` i
 Cartesian momenta use inverse angstroms. The existing `queer.model(...)` and legacy
 module functions remain available during the 1.x migration. Scientific corrections
 change historical values; see [migration notes](docs/migration.md).
+
+Native OpenMX v3 binaries support both byte orders and nonmagnetic, collinear,
+and SOC calculations. Sparse real-space operators feed a validated generalized
+eigensolver, preserving overlap and position derivatives:
+
+```python
+from queer import OpenMXModel
+from queer.observables import fat_band, optical_conductivity
+
+model = OpenMXModel.from_scfout("calculation.scfout")
+bands = model.energies([[0, 0, 0]])  # eV relative to the file chemical potential
+projected = fat_band(model, [[0, 0, 0]])  # signed Mulliken weights
+optical = optical_conductivity(model, [0.5, 1.0], grid=(8, 8, 8))
+print(optical.dims["conductivity"], optical.units["conductivity"])
+```
+
+Both collinear channels remain in channel-major order; `energies(..., spin="down")`
+selects a channel. New response chemical potentials are absolute eV and
+temperatures use `temperature_kelvin`. New observables return `ObservableResult`
+arrays with named dimensions, units and JSON metadata. See
+[native workflows and capabilities](docs/openmx_workflows.md) for the inventory,
+PAO/ionic/scattering inputs, convergence controls and scientific limits.
+
+The implementation uses independently written NumPy/SciPy methods and retains
+Queer's MIT license. PyATB coverage was audited at commit
+`60fc6b2acafac36b9c8334208326937fef3366c5`; scientific corrections are documented.
+
+The new [generator scientific services](docs/generator_services.md) expose
+`Structure`, `Frame`, `Evaluation`, `ForceProvider`, imported `BandData`, native
+graph archives and pure generator compatibility adapters. Run the synthetic
+examples with `queer nvt --config configs/examples/native_nvt.toml` or
+`queer phonons --config configs/examples/native_phonons.toml`. Generator
+integration remains a separate change.
 
 ## Notebooks and Slurm
 

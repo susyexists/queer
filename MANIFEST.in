@@ -1,0 +1,13 @@
+include uv.lock
+recursive-include docs *.md
+recursive-include configs *.toml
+recursive-include examples *.py
+recursive-include scripts/runs *.py
+recursive-include scripts/hpc *.py *.sbatch
+recursive-include benchmarks *.py *.md
+recursive-include tests *.py
+recursive-include tests/fixtures *
+recursive-include notebooks/active *.ipynb
+include data/references/openmx/README.md
+include data/references/openmx/manifest.tsv
+global-exclude *.py[cod]

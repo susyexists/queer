@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "queer"
-version = "1.1.0"
-description = "Reproducible Wannier Hamiltonian and electron-phonon workflows"
+version = "1.2.0"
+description = "Native electronic responses, crystal, atomistic and Hamiltonian workflows"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -28,8 +28,10 @@ Repository = "https://github.com/susyexists/queer"
 queer = "queer.cli:main"
 
 [project.optional-dependencies]
-plot = ["matplotlib>=3.8", "pandas>=2.1", "ase>=3.23"]
-symmetry = ["seekpath>=2.1"]
+plot = ["matplotlib>=3.8", "pandas>=2.1"]
+symmetry = ["spglib>=2.5"]
+mace = ["torch>=2.2", "mace-torch>=0.3"]
+hamgnn = ["torch>=2.2", "torch-geometric>=2.5"]
 animation = ["imageio[ffmpeg]>=2.31", "pillow>=10"]
 notebook = ["jupyterlab>=4", "ipykernel>=6", "nbclient>=0.9", "nbformat>=5.9"]
 all = ["queer[plot,symmetry,animation,notebook]"]
@@ -41,7 +43,7 @@ dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.9", "mypy>=1.15", "build>=1.2", "t
 where = ["src"]
 
 [tool.setuptools.package-data]
-queer = ["resources/*.mplstyle", "py.typed"]
+queer = ["resources/*.mplstyle", "resources/symmetry/*", "py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -59,4 +61,44 @@ select = ["E4", "E7", "E9", "F", "I"]
 python_version = "3.11"
 ignore_missing_imports = true
 check_untyped_defs = true
-files = ["src/queer/config.py", "src/queer/execution.py", "src/queer/io/artifacts.py"]
+files = [
+  "src/queer/capabilities.py",
+  "src/queer/config.py",
+  "src/queer/execution.py",
+  "src/queer/io/artifacts.py",
+  "src/queer/io/openmx.py",
+  "src/queer/io/pao.py",
+  "src/queer/models/openmx.py",
+  "src/queer/observables/_tb.py",
+  "src/queer/observables/electronic.py",
+  "src/queer/observables/geometry.py",
+  "src/queer/observables/integrated.py",
+  "src/queer/observables/nonlinear.py",
+  "src/queer/observables/optical.py",
+  "src/queer/observables/result.py",
+  "src/queer/observables/surface.py",
+  "src/queer/observables/transport.py",
+  "src/queer/observables/unfolding.py",
+  "src/queer/workflows/registry.py",
+  "src/queer/workflows/runner.py",
+  "src/queer/structures.py",
+  "src/queer/elements.py",
+  "src/queer/geometry/structures.py",
+  "src/queer/geometry/symmetry.py",
+  "src/queer/io/atomistic.py",
+  "src/queer/io/bands.py",
+  "src/queer/io/calculations.py",
+  "src/queer/io/hamiltonian.py",
+  "src/queer/io/records.py",
+  "src/queer/models/graph.py",
+  "src/queer/observables/integration.py",
+  "src/queer/atomistic/dynamics.py",
+  "src/queer/atomistic/phonons.py",
+  "src/queer/atomistic/selection.py",
+  "src/queer/atomistic/datasets.py",
+  "src/queer/atomistic/metrics.py",
+  "src/queer/adapters/mace.py",
+  "src/queer/adapters/hamgnn.py",
+  "src/queer/compat/generator.py",
+  "src/queer/workflows/services.py",
+]

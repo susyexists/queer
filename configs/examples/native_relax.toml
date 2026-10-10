@@ -1,0 +1,17 @@
+workflow = "relax"
+
+[inputs]
+material_dir = "../../tests/fixtures/atomistic"
+structure = "POSCAR"
+
+[parameters]
+fmax_eV_A = 0.001
+max_steps = 200
+
+[parameters.provider]
+kind = "harmonic"
+spring_constant_eV_A2 = 2.0
+reference_positions = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]
+
+[execution]
+native_threads = 1

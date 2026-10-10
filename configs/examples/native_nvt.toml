@@ -1,0 +1,21 @@
+workflow = "nvt"
+
+[inputs]
+material_dir = "../../tests/fixtures/atomistic"
+structure = "POSCAR"
+
+[parameters]
+temperature_K = 300.0
+timestep_fs = 0.5
+n_steps = 100
+friction_fs_inv = 0.01
+seed = 42
+log_interval = 10
+traj_interval = 25
+
+[parameters.provider]
+kind = "harmonic"
+spring_constant_eV_A2 = 2.0
+
+[execution]
+native_threads = 1

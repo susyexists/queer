@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=queer-momentum
+#SBATCH --job-name=queer-workflow
 set -euo pipefail
 : "${QUEER_SWEEP_FILE:?Submit with scripts/hpc/submit_sweep.py}"
 : "${QUEER_PYTHON:?Pinned environment interpreter is required}"

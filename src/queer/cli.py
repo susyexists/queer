@@ -32,6 +32,10 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument("--v0", type=float, help="Run this V0 instead of the configured sweep")
     render = commands.add_parser("render", help="Render an existing completed run without computation")
     render.add_argument("run_dir", type=Path)
+    export = commands.add_parser("export", help="Export a completed run for a consuming application")
+    export.add_argument("run_dir", type=Path)
+    export.add_argument("--profile", choices=["generator"], default="generator")
+    export.add_argument("--output-dir", type=Path)
     return parser
 
 
@@ -51,6 +55,10 @@ def main(argv=None) -> int:
     try:
         if args.command == "render":
             output = render_run(args.run_dir)
+        elif args.command == "export":
+            from .compat.generator import export_run
+
+            output = export_run(args.run_dir, output_dir=args.output_dir, profile=args.profile)
         else:
             overrides = {
                 key: getattr(args, key, None)

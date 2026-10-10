@@ -1,0 +1,10 @@
+Synthetic two-site harmonic service fixture
+1.0
+5.0 0.0 0.0
+0.0 5.0 0.0
+0.0 0.0 5.0
+H
+2
+Cartesian
+0.2 0.0 0.0
+1.2 0.0 0.0

@@ -102,26 +102,22 @@ def plot_brillouin_zone(
     fig, ax
     """
     import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
-    try:
-        import ase.io
-        from ase.dft.bz import bz_vertices
-        from ase.dft.kpoints import get_special_points
-        from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-    except ImportError:
-        raise ImportError("plot_brillouin_zone requires ase: pip install ase")
+    from ..geometry.paths import seekpath_points
+    from ..geometry.symmetry import brillouin_zone_faces
 
     if model.poscar is None:
         raise ValueError("plot_brillouin_zone requires a POSCAR. Initialize the model with poscar=...")
 
-    atoms = ase.io.read(model.path / model.poscar)
-
-    # model.g_vec rows are b1, b2, b3 in 2π/Å — exactly what bz_vertices expects
-    faces = bz_vertices(model.g_vec)
+    faces = brillouin_zone_faces(model.g_vec)
     polys = [f[0] for f in faces]
 
     # fractional → Cartesian: k_cart = k_frac @ g_vec
-    sp_cart = {name: frac @ model.g_vec for name, frac in get_special_points(atoms.cell).items()}
+    sp_cart = {
+        name: np.asarray(frac) @ model.g_vec
+        for name, frac in seekpath_points(model.path / model.poscar).items()
+    }
 
     if ax is None:
         fig = plt.figure(figsize=figsize)

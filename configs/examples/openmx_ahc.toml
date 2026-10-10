@@ -1,0 +1,18 @@
+# Fetch pinned references with scripts/runs/openmx_benchmark.py --fetch first.
+workflow = "ahc"
+
+[inputs]
+model = "openmx"
+material_dir = "../../data/references/openmx"
+scfout = "GaAs_soc.scfout"
+
+[parameters]
+grid = [4, 4, 4]
+temperature_kelvin = 0.0
+engine = "direct"
+dimension = 3
+
+[execution]
+workers = 1
+native_threads = 1
+batch_size = 4
