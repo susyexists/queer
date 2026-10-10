@@ -73,6 +73,106 @@ def test_legacy_parameter_translations_preserve_energy_units_and_component_selec
         translate_pyatb("AHC", {"engine": "invalid"})
 
 
+def test_historical_pyatb_engine_and_unrestricted_pair_defaults():
+    ahc = translate_pyatb("AHC", {"engine": "pyatb", "method": 0})
+    assert ahc["parameters"]["engine"] == "direct"
+    assert ahc["export_metadata"]["legacy_engine"] == "pyatb"
+    assert "family alias" in ahc["export_metadata"]["engine_translation"]
+    parameters = {
+        "grid": [4, 4, 4],
+        "omega": [0, 8],
+        "domega": 0.01,
+        "occ_band": 28,
+        "n_occ": -1,
+        "m_unocc": -1,
+        "scissors": 1.15,
+    }
+    shift = translate_pyatb("SHIFT_CURRENT", parameters)
+    assert "band_pairs" not in shift["parameters"]
+    assert shift["export_metadata"]["band_pair_selection"] == "all occupied-unoccupied pairs"
+    assert "unshifted Hamiltonian" in shift["export_metadata"]["scientific_corrections"][0]
+    with pytest.raises(ValueError, match="Band pair"):
+        translate_pyatb("SHIFT_CURRENT", {**parameters, "m_unocc": 29})
+
+
+@pytest.mark.parametrize("xy_only", [False, True])
+def test_pyatb_hall_export_matches_recorded_pseudovector_order(tmp_path, xy_only):
+    from queer.io.artifacts import RunStore
+
+    tensor = np.array([[[0.0, 3.0, -2.0], [-3.0, 0.0, 1.0], [2.0, -1.0, 0.0]]])
+    conventions = {"hall_components": ["xy"]} if xy_only else {}
+    store = RunStore(
+        tmp_path / "run",
+        {
+            "workflow": "ahc",
+            "inputs": {"export_metadata": conventions},
+            "parameters": {},
+            "execution": {},
+        },
+        [],
+    )
+    try:
+        store.commit("result", {"ahc": tensor, "chemical_potentials": [-5.0]})
+        store.finish()
+    finally:
+        store.release()
+    output = export_run(store.root) / "Out/AHC/ahc.dat"
+    np.testing.assert_array_equal(
+        np.loadtxt(output), [-5.0, 0.0, 0.0, 3.0] if xy_only else [-5.0, 1.0, 2.0, 3.0]
+    )
+    assert "sigma_yz sigma_zx sigma_xy" in output.read_text().splitlines()[0]
+
+
+def test_pyatb_shift_export_matches_recorded_eighteen_component_columns(tmp_path):
+    from queer.io.artifacts import RunStore
+
+    tensor = np.arange(27.0, dtype=float).reshape(1, 3, 3, 3)
+    store = RunStore(
+        tmp_path / "run",
+        {
+            "workflow": "shift_current",
+            "inputs": {},
+            "parameters": {},
+            "execution": {},
+        },
+        [],
+    )
+    try:
+        store.commit("result", {"shift_current": tensor, "omega": [2.0]})
+        store.finish()
+    finally:
+        store.release()
+    output = export_run(store.root) / "Out/Shift_Current/shift_current.dat"
+    np.testing.assert_array_equal(
+        np.loadtxt(output),
+        [
+            2.0,
+            0.0,
+            1.0,
+            2.0,
+            4.0,
+            5.0,
+            8.0,
+            9.0,
+            10.0,
+            11.0,
+            13.0,
+            14.0,
+            17.0,
+            18.0,
+            19.0,
+            20.0,
+            22.0,
+            23.0,
+            26.0,
+        ],
+    )
+    assert (
+        "xxx xxy xxz xyy xyz xzz yxx yxy yxz yyy yyz yzz zxx zxy zxz zyy zyz zzz"
+        in output.read_text().splitlines()[0]
+    )
+
+
 def test_imported_band_payload_has_declared_reference_and_segment_partition():
     data = BandData(
         np.array([[[-1, 2], [0, 3]]]),

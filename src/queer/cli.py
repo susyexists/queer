@@ -17,6 +17,7 @@ def build_parser() -> argparse.ArgumentParser:
     for name in WORKFLOWS:
         command = commands.add_parser(name, help=f"Compute a {name} run from TOML configuration")
         command.add_argument("--config", type=Path, required=True)
+        command.add_argument("--config-base-dir", type=Path, help=argparse.SUPPRESS)
         command.add_argument("--material-dir", type=Path)
         command.add_argument("--results-dir", type=Path)
         command.add_argument("--workers", type=int)
@@ -34,7 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     render.add_argument("run_dir", type=Path)
     export = commands.add_parser("export", help="Export a completed run for a consuming application")
     export.add_argument("run_dir", type=Path)
-    export.add_argument("--profile", choices=["generator"], default="generator")
+    export.add_argument("--profile", choices=["generator", "finite_field"], default="generator")
     export.add_argument("--output-dir", type=Path)
     return parser
 
@@ -56,7 +57,10 @@ def main(argv=None) -> int:
         if args.command == "render":
             output = render_run(args.run_dir)
         elif args.command == "export":
-            from .compat.generator import export_run
+            if args.profile == "finite_field":
+                from .compat.finite_field import export_run
+            else:
+                from .compat.generator import export_run
 
             output = export_run(args.run_dir, output_dir=args.output_dir, profile=args.profile)
         else:
@@ -72,7 +76,12 @@ def main(argv=None) -> int:
                     "v0",
                 )
             }
-            config = load_config(args.config, workflow=args.command, overrides=overrides)
+            config = load_config(
+                args.config,
+                workflow=args.command,
+                overrides=overrides,
+                base_dir=args.config_base_dir,
+            )
             output = run_workflow(config, run_dir=args.run_dir, resume=args.resume)
             if args.render:
                 render_run(output)

@@ -68,8 +68,9 @@ def translate_pyatb(step_type, parameters=None, *, input_parameters=None, fermi_
     )
     if unknown:
         raise ValueError(f"Unsupported {step} keywords: {sorted(unknown)}")
-    if step == "AHC" and values.get("engine", "kubo") not in {"kubo", "fhs"}:
-        raise ValueError("AHC engine must be kubo or fhs")
+    legacy_engine = str(values.get("engine", "kubo")).strip().lower()
+    if step == "AHC" and legacy_engine not in {"kubo", "pyatb", "fhs"}:
+        raise ValueError("AHC engine must be kubo, pyatb, or fhs")
     energy = values.get("fermi_energy", "Auto")
     if str(energy).lower() == "auto":
         mu = fermi_energy
@@ -103,10 +104,14 @@ def translate_pyatb(step_type, parameters=None, *, input_parameters=None, fermi_
         "legacy_parameter_version": 1,
         "sparse_format": values.get("sparse_format", 0),
     }
+    if step == "AHC":
+        metadata["legacy_engine"] = legacy_engine
+        if legacy_engine == "pyatb":
+            metadata["engine_translation"] = "pyatb family alias; method selects direct or kubo"
     method = int(values.get("method", 1 if step == "SHIFT_CURRENT" else 0))
     if method not in (0, 1):
         raise ValueError("method must be 0 or 1")
-    if step == "AHC" and values.get("engine", "kubo") == "fhs":
+    if step == "AHC" and legacy_engine == "fhs":
         window = np.asarray(values.get("fhs_energy_window", [-0.5, 0.5]), float)
         count = int(values.get("fhs_energy_points", 101))
         if window.shape != (2,) or not np.isfinite(window).all() or window[1] < window[0] or count < 1:
@@ -122,7 +127,7 @@ def translate_pyatb(step_type, parameters=None, *, input_parameters=None, fermi_
             ).tolist(),
         )
         metadata["hall_components"] = (
-            ["xy"] if int(values.get("fhs_dimension", 0)) == 0 else ["xy", "yz", "zx"]
+            ["xy"] if int(values.get("fhs_dimension", 0)) == 0 else ["yz", "zx", "xy"]
         )
     elif step in {"AHC", "CHERN_NUMBER"}:
         native["engine"] = "direct" if method == 0 else "kubo"
@@ -203,16 +208,24 @@ def translate_pyatb(step_type, parameters=None, *, input_parameters=None, fermi_
         if ("n_occ" in values) != ("m_unocc" in values):
             raise ValueError("n_occ and m_unocc must identify a complete band pair")
         if "n_occ" in values:
-            pair = [int(values["n_occ"]) - 1, int(values["m_unocc"]) - 1]
-            if pair[0] < 0 or pair[1] <= pair[0]:
-                raise ValueError("Band pair requires 1 <= n_occ < m_unocc")
-            native["band_pairs"] = [pair]
+            legacy_pair = [int(values["n_occ"]), int(values["m_unocc"])]
+            if legacy_pair == [-1, -1]:
+                metadata["band_pair_selection"] = "all occupied-unoccupied pairs"
+            else:
+                pair = [index - 1 for index in legacy_pair]
+                if pair[0] < 0 or pair[1] <= pair[0]:
+                    raise ValueError("Band pair requires 1 <= n_occ < m_unocc, or both -1")
+                native["band_pairs"] = [pair]
         metadata["legacy_method"] = method
         metadata["method_translation"] = (
             "audited legacy methods use sum-over-states; native analytic derivative"
         )
         if smearing == 2:
             metadata["scientific_corrections"] = ["adaptive widths depend on the requested reciprocal mesh"]
+        if native["scissors"] != 0:
+            metadata.setdefault("scientific_corrections", []).append(
+                "scissors shifts transition energies; geometry uses the unshifted Hamiltonian"
+            )
     else:
         raise ValueError("Unsupported AHC engine")
     return {
@@ -458,14 +471,18 @@ def export_run(run_dir, *, output_dir=None, profile="generator"):
         convention = manifest["config"]["inputs"].get("export_metadata", {})
         if name == "ahc":
             tensor = arrays[name] * convention.get("hall_export_sign", 1)
-            vector = np.column_stack((tensor[:, 0, 1], tensor[:, 1, 2], tensor[:, 2, 0]))
+            vector = np.column_stack((tensor[:, 1, 2], tensor[:, 2, 0], tensor[:, 0, 1]))
             if convention.get("hall_components") == ["xy"]:
-                vector[:, 1:] = 0
+                vector[:, :2] = 0
             values = np.column_stack((arrays["chemical_potentials"], vector))
-            filename, header = "Out/AHC/ahc.dat", "absolute_mu_eV sigma_xy sigma_yz sigma_zx (S/cm)"
+            filename, header = "Out/AHC/ahc.dat", "absolute_mu_eV sigma_yz sigma_zx sigma_xy (S/cm)"
         elif name == "shift_current":
-            values = np.column_stack((arrays["omega"], arrays[name].reshape(len(arrays["omega"]), -1)))
-            filename, header = "Out/Shift_Current/shift_current.dat", "omega_eV Cartesian_abc_tensor"
+            components = [(a, b, c) for a in range(3) for b in range(3) for c in range(b, 3)]
+            tensor = arrays[name]
+            values = np.column_stack((arrays["omega"], *(tensor[:, a, b, c] for a, b, c in components)))
+            labels = ["".join("xyz"[axis] for axis in component) for component in components]
+            filename = "Out/Shift_Current/shift_current.dat"
+            header = "omega(eV) " + " ".join(labels) + " (uA/V^2)"
         else:
             values = np.atleast_2d(arrays[name])
             filename, header = "Out/Chern_Number/chern_number.dat", "Chern_number (dimensionless)"

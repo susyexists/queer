@@ -41,6 +41,11 @@ def test_source_distribution_contains_reproducible_native_validation(distributio
         "configs/examples/openmx_dos.toml",
         "examples/openmx.py",
         "scripts/runs/openmx_benchmark.py",
+        "scripts/validation/generator_replay.py",
+        "scripts/validation/generator_response_replay.py",
+        "scripts/validation/generator_shift_replay.py",
+        "scripts/validation/generator_omx_replay.py",
+        "scripts/validation/generator_metric_replay.py",
         "scripts/hpc/submit_sweep.py",
         "tests/fixtures/openmx/chain/chain.scfout",
         "tests/numerical/test_openmx.py",
@@ -55,6 +60,11 @@ def test_source_distribution_contains_reproducible_native_validation(distributio
         "configs/examples/native_nvt.toml",
         "examples/native_services.py",
         "tests/fixtures/atomistic/POSCAR",
+        "docs/finite_field.md",
+        "examples/finite_field.py",
+        "configs/examples/finite_field_paper_fig4d.toml",
+        "scripts/hpc/aggregate_sweep.py",
+        "src/queer/finite_field/SOURCE_MANIFEST.json",
     } <= members
     assert "data/references/openmx/FeCl2.scfout" not in members
     assert "data/references/openmx/GaAs_soc.scfout" not in members
@@ -83,11 +93,12 @@ from importlib.resources import files
 from pathlib import Path
 import queer
 from queer import WannierModel, EPWModel, OpenMXModel, ObservableResult
-assert queer.__version__ == "1.2.1"
+assert queer.__version__ == "1.3.0"
 assert Path(queer.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
 assert files("queer").joinpath("resources/neon.mplstyle").is_file()
 assert files("queer").joinpath("resources/symmetry/hpkot.json").is_file()
 assert files("queer").joinpath("resources/symmetry/LICENSE.txt").is_file()
+assert files("queer").joinpath("finite_field/SOURCE_MANIFEST.json").is_file()
 assert not any(name in sys.modules for name in ("matplotlib", "pandas", "seekpath", "nbformat"))
 """
     subprocess.run([str(interpreter), "-c", probe], cwd=tmp_path, env=env, check=True, capture_output=True)
@@ -205,4 +216,42 @@ assert not any(name in sys.modules for name in ("ase","pyatb","seekpath","Dans_D
 """
     subprocess.run(
         [str(interpreter), "-c", services_probe], cwd=tmp_path, env=env, check=True, capture_output=True
+    )
+    finite_field_probe = """
+import importlib.util
+import sys
+import numpy as np
+from queer import FieldPlane, FiniteFieldOptions
+from queer.finite_field import FourBandModel, FourBandParams, crossing_scan
+from queer.finite_field.figures import compute_figure
+assert importlib.util.find_spec('hhh') is None
+assert importlib.util.find_spec('mpmath') is None
+assert importlib.util.find_spec('numba') is None
+scan=crossing_scan(FourBandModel(FourBandParams().at(.9)), [0.], options='physical_eq8')
+assert scan.metadata['options']['conventions']['charge_sign'] == -1
+assert scan['critical_field'][0] > 0
+result=compute_figure('fig4b', fields=[1000.,2000.])
+np.testing.assert_allclose(result['probability'], np.exp(-result.metadata['critical_field']/result['fields']))
+assert not any(name in sys.modules for name in ('hhh','mpmath','numba','matplotlib'))
+"""
+    subprocess.run(
+        [str(interpreter), "-c", finite_field_probe], cwd=tmp_path, env=env, check=True, capture_output=True
+    )
+    example = tmp_path / "finite_field.py"
+    shutil.copyfile(ROOT / "examples/finite_field.py", example)
+    figure_config = tmp_path / "figure.toml"
+    figure_config.write_text("""workflow="paper_figure"
+[inputs]
+model="fourband"
+[parameters]
+figure="fig4b"
+[parameters.recipe]
+fields=[1000.0,2000.0]
+""")
+    subprocess.run(
+        [str(interpreter), str(example), "--config", str(figure_config)],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+        capture_output=True,
     )

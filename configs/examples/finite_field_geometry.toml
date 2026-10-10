@@ -1,0 +1,11 @@
+workflow = "geometry_grid"
+
+[inputs]
+model = "fourband"
+
+[parameters]
+kx = [-0.002, -0.001, 0.0, 0.001, 0.002]
+ky = [-0.002, -0.001, 0.0, 0.001, 0.002]
+
+[parameters.model]
+x = 0.5

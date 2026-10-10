@@ -1,0 +1,26 @@
+# Replace the material directory with a certified fixed-basis two-band model.
+workflow = "lindblad_line"
+
+[inputs]
+model = "wannier"
+material_dir = "../../data/materials/two_band"
+hr = "wannier90_hr.dat"
+poscar = "POSCAR"
+
+[parameters]
+preset = "physical"
+band_pair = [0, 1]
+offset = 0.0
+fields = [10000.0, 20000.0]
+window = [-0.03, 0.03]
+dphi = 0.02
+basis = "superadiabatic"
+
+[parameters.plane]
+origin = [0.0, 0.0, 0.0]
+direction = [1.0, 0.0, 0.0]
+transverse = [0.0, 1.0, 0.0]
+
+[parameters.relaxation]
+T1 = 0.000000000001
+T2 = 0.000000000001

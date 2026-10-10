@@ -10,10 +10,20 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .execution import ExecutionOptions
+from .workflows.finite_field import FINITE_FIELD_INPUTS, FINITE_FIELD_NAMES, validate_finite_field
 from .workflows.registry import NAMES as OBSERVABLE_WORKFLOWS
 from .workflows.services import SERVICE_INPUTS, SERVICE_NAMES, validate_service
 
-WORKFLOWS = ("bands", "susceptibility", "spectral", "momentum", "epw", *OBSERVABLE_WORKFLOWS, *SERVICE_NAMES)
+WORKFLOWS = (
+    "bands",
+    "susceptibility",
+    "spectral",
+    "momentum",
+    "epw",
+    *OBSERVABLE_WORKFLOWS,
+    *SERVICE_NAMES,
+    *FINITE_FIELD_NAMES,
+)
 _PARAMETERS = {
     "bands": {"ef", "interpolation", "kpath", "n_points", "kpoints", "bands"},
     "susceptibility": {
@@ -104,12 +114,18 @@ class WorkflowConfig:
     def as_dict(self) -> dict[str, Any]:
         from dataclasses import asdict
 
+        parameters = dict(self.parameters)
+        if self.workflow in FINITE_FIELD_NAMES:
+            from .finite_field._storage import json_safe
+
+            parameters = json_safe(parameters)
+
         return {
             "workflow": self.workflow,
             "inputs": {
                 key: str(value) if isinstance(value, Path) else value for key, value in self.inputs.items()
             },
-            "parameters": dict(self.parameters),
+            "parameters": parameters,
             "execution": asdict(self.execution),
             "output": {"results_dir": str(self.results_dir)},
         }
@@ -171,6 +187,7 @@ def config_from_mapping(
             "pao_files",
         }
         | (SERVICE_INPUTS if name in SERVICE_NAMES else {"export_metadata"})
+        | (FINITE_FIELD_INPUTS if name in FINITE_FIELD_NAMES else set())
     )
     if unknown_inputs or set(output) - {"results_dir"}:
         raise ValueError(
@@ -189,6 +206,20 @@ def config_from_mapping(
             raise ValueError("inputs.material must be a single material directory name")
         data_root = Path(os.environ.get("QUEER_DATA_DIR", str(Path.cwd() / "data"))).expanduser().resolve()
         inputs["material_dir"] = data_root / "materials" / material
+    if name in FINITE_FIELD_NAMES:
+        for key in ("material_dir", "geometry_grid", "family_manifest", "response_artifact"):
+            if key in inputs:
+                if not isinstance(inputs[key], (str, Path)) or not str(inputs[key]):
+                    raise ValueError(f"inputs.{key} must be a nonempty path")
+                source = Path(inputs[key]).expanduser()
+                inputs[key] = (source if source.is_absolute() else base / source).resolve()
+        if "cache_dir" in params:
+            if not isinstance(params["cache_dir"], str) or not params["cache_dir"]:
+                raise ValueError("parameters.cache_dir must be a nonempty directory path")
+            cache = Path(params["cache_dir"]).expanduser()
+            params["cache_dir"] = str((cache if cache.is_absolute() else base / cache).resolve())
+        validate_finite_field(name, inputs, params)
+        return _resolved_config(name, inputs, params, execution, output, base)
     if not inputs.get("material_dir"):
         raise ValueError("inputs.material_dir or inputs.material is required")
     if not isinstance(inputs["material_dir"], (str, Path)):
@@ -327,10 +358,14 @@ def _resolved_config(name, inputs, params, execution, output, base):
 
 
 def load_config(
-    path: str | Path, *, workflow: str | None = None, overrides: Mapping[str, Any] | None = None
+    path: str | Path,
+    *,
+    workflow: str | None = None,
+    overrides: Mapping[str, Any] | None = None,
+    base_dir: Path | None = None,
 ) -> WorkflowConfig:
     source = Path(path).expanduser().resolve()
     with source.open("rb") as stream:
         return config_from_mapping(
-            tomllib.load(stream), base_dir=source.parent, workflow=workflow, overrides=overrides
+            tomllib.load(stream), base_dir=base_dir or source.parent, workflow=workflow, overrides=overrides
         )

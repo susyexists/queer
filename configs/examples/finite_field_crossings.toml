@@ -1,0 +1,15 @@
+workflow = "crossing_scan"
+
+[inputs]
+model = "fourband"
+
+[parameters]
+preset = "physical"
+offsets = [0.0, 0.0001, 0.0002]
+
+[parameters.model]
+x = 0.9
+
+[parameters.crossings]
+window = 0.03
+scan_points = 513

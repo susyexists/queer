@@ -1,0 +1,15 @@
+workflow = "landau_zener_hall"
+
+[inputs]
+model = "fourband"
+
+[parameters]
+preset = "physical"
+fields = [-50000.0, -20000.0, 0.0, 20000.0, 50000.0]
+
+[parameters.model]
+x = 0.5
+
+[parameters.drive]
+E_min = 1.0
+E_max = 50000.0

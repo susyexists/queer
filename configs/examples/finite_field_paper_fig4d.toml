@@ -1,0 +1,11 @@
+workflow = "paper_figure"
+
+[inputs]
+model = "fourband"
+
+[parameters]
+figure = "fig4d"
+
+[parameters.recipe]
+x = 1.8
+definition = "gap_minima"

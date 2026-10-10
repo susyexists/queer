@@ -1,0 +1,11 @@
+workflow = "harmonic_map"
+
+[inputs]
+model = "fourband"
+
+[parameters]
+preset = "physical"
+amplitudes = [5000.0, 10000.0, 20000.0, 30000.0, 50000.0]
+model_parameter = "x"
+model_values = [0.5, 0.9, 1.1, 1.5]
+n_max = 9

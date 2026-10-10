@@ -1,0 +1,11 @@
+workflow = "critical_hall"
+
+[inputs]
+model = "fourband"
+
+[parameters]
+preset = "physical"
+fields = [1.0, 10.0, 100.0, 1000.0]
+
+[parameters.model]
+x = 1.0

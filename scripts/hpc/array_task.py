@@ -22,6 +22,10 @@ def main(argv=None):
     if index < 0 or index >= len(dispatch["values"]):
         raise ValueError("array index outside parameter cases")
     case = dispatch.get("cases", [])[index] if "cases" in dispatch else dispatch
+    for source in case.get("inputs", []):
+        path = Path(source["path"])
+        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != source["sha256"]:
+            raise ValueError(f"Submitted scientific input was changed or removed: {path}")
     if "config_sha256" in case:
         actual = hashlib.sha256(Path(case["config"]).read_bytes()).hexdigest()
         if actual != case["config_sha256"]:
@@ -49,6 +53,8 @@ def main(argv=None):
     ]
     if "cases" not in dispatch:
         command.extend(["--v0", str(dispatch["values"][index])])
+    if "config_base_dir" in case:
+        command.extend(["--config-base-dir", case["config_base_dir"]])
     if restart_count > 0 and (run_dir / "manifest.json").is_file():
         command.append("--resume")
     for field in ("material_dir", "results_dir"):

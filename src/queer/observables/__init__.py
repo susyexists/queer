@@ -21,6 +21,7 @@ for _module, _names in {
     "geometry": (
         "berry_curvature",
         "quantum_metric",
+        "band_pair_geometry",
         "chern_number",
         "chirality",
         "wilson_loop",
@@ -33,6 +34,18 @@ for _module, _names in {
 }.items():
     for _name in _names:
         _EXPORTS[_name] = (f".{_module}", _name)
+
+for _name in (
+    "crossing_scan",
+    "landau_zener_hall",
+    "hall_harmonics",
+    "critical_hall",
+    "fit_hall",
+    "houston_line",
+    "berry_flux",
+    "lindblad_line",
+):
+    _EXPORTS[_name] = ("..finite_field.api", _name)
 
 __all__ = list(_EXPORTS)
 

@@ -16,8 +16,11 @@ logger = logging.getLogger(__name__)
 
 
 def _input_files(config: WorkflowConfig) -> list[Path]:
+    from .finite_field import FINITE_FIELD_NAMES, finite_field_input_files
     from .services import SERVICE_SPECS, service_input_files
 
+    if config.workflow in FINITE_FIELD_NAMES:
+        return finite_field_input_files(config)
     if config.workflow in SERVICE_SPECS:
         return service_input_files(config)
     directory = config.material_dir
@@ -128,11 +131,15 @@ def _calculate(config: WorkflowConfig, model, store: RunStore) -> None:
             energies = model.energies(points, bands=params.get("bands"), execution=execution)
         band_arrays = {"kpoints": points, "energies": energies, "symmetry": symmetry, "labels": labels}
         if hasattr(model, "band_channels"):
-            indices = model._band_indices(params.get("bands"), params.get("spin"))
+            indices = model._band_indices(
+                params.get("bands"),
+                **({"spin": params["spin"]} if params.get("spin") is not None else {}),
+            )
             band_arrays["band_channels"] = model.band_channels[indices]
+            spin_mode = getattr(model, "spin_mode", "nonmagnetic")
             band_arrays["channel_labels"] = np.asarray(
                 [
-                    ("up" if channel == 0 else "down") if model.spin_mode == "collinear" else model.spin_mode
+                    ("up" if channel == 0 else "down") if spin_mode == "collinear" else spin_mode
                     for channel in model.band_channels[indices]
                 ]
             )
@@ -301,6 +308,7 @@ def run_workflow(
         config = config_from_mapping(config)
     from dataclasses import replace
 
+    from .finite_field import FINITE_FIELD_NAMES, calculate_finite_field, load_finite_field_source
     from .services import SERVICE_SPECS, calculate_service
 
     if force_provider is not None:
@@ -324,7 +332,19 @@ def run_workflow(
     store = RunStore(root, config.as_dict(), files, resume=resume)
     logger.info("Run directory: %s", root)
     try:
-        if config.workflow in SERVICE_SPECS:
+        if config.workflow in FINITE_FIELD_NAMES:
+            source = load_finite_field_source(config)
+            store.manifest["scientific_model"] = {
+                "model": config.inputs.get(
+                    "model", "family" if "family_manifest" in config.inputs else "grid"
+                ),
+                "preset": config.parameters.get("preset", "physical"),
+                "conventions": "Cartesian field plane; k in Angstrom^-1; eV; fields V/m; sheet current A/m",
+            }
+            store.save()
+            with execution_session(config.execution):
+                calculate_finite_field(config, source, store)
+        elif config.workflow in SERVICE_SPECS:
             spec = SERVICE_SPECS[config.workflow]
             store.manifest["scientific_model"] = {
                 "input_kind": spec.input_kind,

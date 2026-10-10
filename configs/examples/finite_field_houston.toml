@@ -1,0 +1,13 @@
+workflow = "houston_line"
+
+[inputs]
+model = "fourband"
+
+[parameters]
+preset = "physical"
+offset = 0.0
+fields = [10000.0, 20000.0]
+window = [-0.03, 0.03]
+
+[parameters.model]
+x = 0.5

@@ -23,7 +23,31 @@ def render_run(run_dir: str | Path) -> Path:
     output.mkdir(exist_ok=True)
     name = manifest["workflow"]
     files = []
-    if name in {
+    from .finite_field import FINITE_FIELD_NAMES
+
+    if name in FINITE_FIELD_NAMES:
+        from ..plotting.finite_field import render_finite_field
+
+        record = manifest["cases"].get("result")
+        if record is None:
+            raise ValueError("Finite-field rendering requires a final result")
+        with np.load(root / record["path"], allow_pickle=False) as data:
+            if record["metadata"].get("figure"):
+                from ..plotting.paper_figures import render_paper_figure
+
+                arrays = {key: data[key] for key in data.files}
+                if "render_orders" in record["metadata"]:
+                    orders = np.asarray(record["metadata"]["render_orders"])
+                    harmonic_indices = [int(np.flatnonzero(arrays["orders"] == order)[0]) for order in orders]
+                    for coefficient in ("a", "b", "c"):
+                        arrays[coefficient] = arrays[coefficient][..., harmonic_indices]
+                    arrays["orders"] = orders
+                files = render_paper_figure(arrays, record["metadata"], output)
+            else:
+                files = render_finite_field(
+                    name, {key: data[key] for key in data.files}, record["metadata"], output
+                )
+    elif name in {
         "structure",
         "hamiltonian_pack",
         "select",
@@ -232,19 +256,23 @@ def render_run(run_dir: str | Path) -> Path:
                     ),
                     0,
                 )
-                rows = np.moveaxis(values, axis, 0).reshape(values.shape[axis], -1)
+                quantity_rows = np.moveaxis(values, axis, 0).reshape(values.shape[axis], -1)
                 coordinate = {
                     "omega": "omega",
                     "energy": "omega",
                     "chemical_potential": "chemical_potentials",
                     "temperature": "temperatures",
                 }.get(dimensions[axis] if dimensions else "")
-                if coordinate not in data or data[coordinate].ndim != 1 or len(data[coordinate]) != len(rows):
+                if (
+                    coordinate not in data
+                    or data[coordinate].ndim != 1
+                    or len(data[coordinate]) != len(quantity_rows)
+                ):
                     coordinate = None
-                x = np.arange(len(rows)) if coordinate is None else data[coordinate]
-                ax.plot(x, rows.real)
-                if np.iscomplexobj(rows) and np.any(rows.imag):
-                    ax.plot(x, rows.imag, linestyle="--")
+                x = np.arange(len(quantity_rows)) if coordinate is None else data[coordinate]
+                ax.plot(x, quantity_rows.real)
+                if np.iscomplexobj(quantity_rows) and np.any(quantity_rows.imag):
+                    ax.plot(x, quantity_rows.imag, linestyle="--")
                 ax.set_xlabel(coordinate or (dimensions[axis] if dimensions else "sample"))
             ax.set_title(name.replace("_", " "))
             ax.set_ylabel(f"{key} ({unit})" if unit else key)

@@ -43,6 +43,7 @@ for _module, _names in {
     ".observables.geometry": (
         "berry_curvature",
         "quantum_metric",
+        "band_pair_geometry",
         "chern_number",
         "chirality",
         "wilson_loop",
@@ -89,7 +90,14 @@ _INTEGRALS = {
     "second_order_static",
     "boltz_transport",
 }
-_SAMPLED = {"fat_band", "spin_texture", "berry_curvature", "quantum_metric", "fermi_surface"}
+_SAMPLED = {
+    "fat_band",
+    "spin_texture",
+    "berry_curvature",
+    "quantum_metric",
+    "band_pair_geometry",
+    "fermi_surface",
+}
 _TILE_SIZE = 128
 
 

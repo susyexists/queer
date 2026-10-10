@@ -18,12 +18,45 @@ from pathlib import Path
 from queer.config import config_from_mapping
 
 
+def _toml_text(data):
+    """Serialize resolved workflow tables without an optional TOML writer."""
+
+    def literal(value):
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, (str, Path)):
+            return json.dumps(str(value))
+        if isinstance(value, (list, tuple)):
+            return "[" + ", ".join(literal(item) for item in value) + "]"
+        if isinstance(value, (int, float)):
+            return repr(value)
+        raise ValueError(f"Cannot serialize resolved TOML value: {type(value).__name__}")
+
+    lines = []
+
+    def table(values, prefix=""):
+        if prefix:
+            lines.extend(["", f"[{prefix}]"])
+        for key, value in values.items():
+            if value is not None and not isinstance(value, dict):
+                lines.append(f"{key} = {literal(value)}")
+        for key, value in values.items():
+            if isinstance(value, dict):
+                table(value, f"{prefix}.{key}" if prefix else key)
+
+    table(data)
+    return "\n".join(lines) + "\n"
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, action="append", required=True)
     parser.add_argument("--profile", type=Path, required=True)
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--split-members", action="store_true", help="Submit isolated hall_harmonics tasks for a harmonic_map"
+    )
     args = parser.parse_args(argv)
     config_path = args.config[0].expanduser().resolve()
     config_text = config_path.read_text()
@@ -40,7 +73,36 @@ def main(argv=None):
         raise ValueError("CPU allocation and concurrency must be positive integers")
     legacy = config.workflow == "momentum" and len(args.config) == 1
     cases = []
-    if legacy:
+    aggregation = None
+    if args.split_members:
+        if len(args.config) != 1:
+            raise ValueError("--split-members accepts exactly one harmonic_map configuration")
+        from queer.workflows.finite_field import finite_field_input_files, split_harmonic_map
+
+        children, aggregation = split_harmonic_map(config)
+        parent_inputs = finite_field_input_files(config)
+        for index, child in enumerate(children):
+            leaves = sorted(set(parent_inputs + finite_field_input_files(child)))
+            cases.append(
+                {
+                    "workflow": child.workflow,
+                    "results_dir": str(child.results_dir),
+                    **({"material_dir": str(child.material_dir)} if "material_dir" in child.inputs else {}),
+                    "config_base_dir": str(config_path.parent),
+                    "source": str(config_path),
+                    "text": _toml_text(child.as_dict()),
+                    "resolved_config": child.as_dict(),
+                    "member_index": index,
+                    "parameter": aggregation["parameters"][index],
+                    "label": aggregation["labels"][index],
+                    "inputs": [
+                        {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+                        for path in leaves
+                    ],
+                }
+            )
+        values = list(range(len(cases)))
+    elif legacy:
         values = config.parameters.get("v0_values", [config.parameters.get("v0")])
         if not values or any(value is None or not math.isfinite(float(value)) for value in values):
             raise ValueError("Provide finite v0 or v0_values in the workflow configuration")
@@ -52,12 +114,25 @@ def main(argv=None):
             cases.append(
                 {
                     "workflow": resolved.workflow,
-                    "material_dir": str(resolved.material_dir),
+                    **(
+                        {"material_dir": str(resolved.material_dir)}
+                        if "material_dir" in resolved.inputs
+                        else {}
+                    ),
                     "results_dir": str(resolved.results_dir),
+                    "config_base_dir": str(source.parent),
                     "source": str(source),
                     "text": text,
                 }
             )
+            from queer.workflows.finite_field import FINITE_FIELD_NAMES, finite_field_input_files
+
+            if resolved.workflow in FINITE_FIELD_NAMES:
+                leaves = finite_field_input_files(resolved)
+                cases[-1]["inputs"] = [
+                    {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+                    for path in leaves
+                ]
         values = list(range(len(cases)))
     if not args.python.absolute().is_file():
         raise ValueError("Prepared Python interpreter does not exist")
@@ -99,11 +174,12 @@ def main(argv=None):
             {
                 "config": str(snapshot),
                 "config_sha256": hashlib.sha256(snapshot.read_bytes()).hexdigest(),
-                "material_dir": str(config.material_dir),
+                **({"material_dir": str(config.material_dir)} if "material_dir" in config.inputs else {}),
                 "results_dir": str(config.results_dir),
                 "values": values,
                 "run_root": str(root),
                 **({"cases": cases} if not legacy else {}),
+                **({"aggregation": aggregation} if aggregation is not None else {}),
             },
             indent=2,
         )

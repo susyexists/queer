@@ -220,6 +220,126 @@ pytest suite, Ruff, mypy and isolated wheel/sdist checks cover packaging.
 A separate optional environment also validates an actual untrained MACE
 architecture against finite-difference forces and exact checkpoint reload.
 
+### Replaying saved Generator PythTB calculations
+
+`scripts/validation/generator_replay.py` compares an already downloaded successful
+`PYTHTB_BANDS` result against native QUEER calculations. It needs the original
+`pythtb_results.json`, `pythtb_params.json`, Wannier HR, centres XYZ and WIN files.
+The utility performs no authentication or network requests and does not import
+PythTB, ASE, PyATB or the Generator producer. Save account-scoped workflow/job
+metadata and artifact retrieval provenance separately, then pass them explicitly:
+
+```bash
+python scripts/validation/generator_replay.py \
+  --producer-dir data/replay/original-pythtb-job \
+  --wannier-dir data/replay/source-wannier-job \
+  --output-dir results/replay/comparison \
+  --job-metadata results/replay/job.json \
+  --workflow-metadata results/replay/workflow.json \
+  --download-manifest data/replay/download_manifest.json \
+  --producer-core data/replay/original-pythtb-job/_pythtb_core.py \
+  --with-dos --batch-size 64 --memory-mb 256
+```
+
+Bands use the saved fractional points, absolute energy reference, periodic axes
+and interpolation settings. Missing WS tables can be reconstructed with
+`queer.io.wannier.recompute_wsvec`, which retains unwrapped Cartesian centres,
+all tied nearest supercell images and HR degeneracy weights. Its Cartesian
+distance search checks that omitted images cannot be closer and stores orbital
+images in compact numerical arrays. It can also normalize position operators
+with the same weights. The model's own input arrays and WS construction storage
+are additional to the execution working-memory budget.
+
+The optional DOS comparison evaluates every original mesh point with the native
+eigensolver. It preserves the historical histogram bins and discrete Gaussian
+smoothing; this compatibility estimator differs from direct per-level Gaussian
+broadening in `queer.observables.dos`. No implicit spin factor, fitted energy shift,
+sign correction or grid resampling is added. Numerical arrays, checksums, coverage,
+absolute/RMS errors, resource settings and producer provenance are saved as NPZ,
+JSON and Markdown. A completed calculation can fail the requested comparison
+tolerance; completion and agreement are reported separately. Band/DOS agreement
+does not establish quantum-geometry or finite-field response accuracy.
+
+Prefer the completed calculation's original staged inputs as a coherent snapshot.
+Source-job artifacts may have been collected at different times: matching an HR
+checksum alone does not establish that its centres or reference bands are the
+ones used in the historical calculation. The parameter file and optional producer
+core are verified against recorded SHA256 values; the core is read for provenance
+and is never imported or executed. DOS-at-Fermi diagnostics explicitly distinguish
+the historical first nonnegative bin, nearest bin and linear interpolation.
+
+### Replaying saved response calculations
+
+Retrieve saved scientific inputs and output tables through the Generator's
+configured SSH broker when a historical HPC directory is outside the public
+artifact inventory. Use the authenticated user's usable host configuration and
+reuse its existing SSH session. Record remote paths, full-content SHA256 hashes,
+resolved inputs, completion logs and producer source fingerprints alongside the
+downloaded files. The replay utilities operate offline and never execute the
+third-party producer. A current source checkout alone does not establish the
+version used when an old result was generated.
+
+`scripts/validation/generator_response_replay.py` handles PyATB's single-value
+AHC prose and its 18-component shift-current table, using an explicitly verified
+SCFOUT checksum and resolved `Out/input.json`. Native workflows retain resumable
+RunStore checkpoints and resource limits. `generator_shift_replay.py` additionally
+compares every frequency/component in the recovered GaAs benchmark cases and
+records the source's estimator differences.
+
+The adapter accepts historical `engine=pyatb` as the direct/Kubo family, with
+`method` selecting the calculation, and `n_occ=m_unocc=-1` as unrestricted
+occupied-to-unoccupied transitions. Hall exports order their pseudovector as
+`yz,zx,xy`; shift-current exports contain the 18 symmetric-input components
+`xxx,xxy,xxz,xyy,xyz,xzz,yxx,yxy,yxz,yyy,yyz,yzz,zxx,zxy,zxz,zyy,zyz,zzz`.
+
+Use `generator_omx_replay.py` for a saved OMXsigmaxy two-dimensional Hall scan:
+
+```bash
+python scripts/validation/generator_omx_replay.py \
+  --scfout data/replay/test.scfout \
+  --expected-scfout-sha256 VERIFIED_SHA256 \
+  --recipe data/replay/test.in \
+  --reference data/replay/test_AHC.dat \
+  --output-dir results/replay/omxsigmaxy --workers 4
+```
+
+It preserves the original energy recipe, including its explicit Hartree
+conversion, and compares every original energy row in e²/h. Add `--resume` to
+reuse unchanged completed checkpoints. All utilities report calculation
+completion separately from agreement. Response comparisons and explicit
+finite-step metric checks return failure when their tolerances are exceeded.
+A fixed-grid comparison does not establish continuum convergence.
+
+`generator_metric_replay.py` projects the native Cartesian metric into the
+producer's normalized reciprocal directions. Supply the actual `--grid` and
+`--dimension`, the saved average and integrated tables, and `--runtime-log` or
+`--runtime-input-json` when available. `--binding inferred` records an unverified
+historical Hamiltonian association even when its mesh is recovered from a log.
+The differential metric and finite-step determinant distance have distinct
+definitions, so their comparison reports acceptance as JSON `null`. Optional
+`--finite-step` additionally evaluates determinant distances with native basis
+links and reports a numerical pass/fail. First-order links can have large
+finite-step errors; using the same mesh and determinant formula alone does not
+establish operator equivalence with the producer.
+Select `--finite-step --finite-basis-link centre_resummed` to evaluate the
+audited midpoint reference approximation with exact orbital-centre phases.
+It derives centres from native home-cell position-operator diagonals and uses
+native overlap and position matrices. This explicit reference estimator retains
+the native first-order tangent without changing the physical differential
+metric. Its finite-step value depends on the declared orbital basis, and source
+fingerprints still need to distinguish an audited checkout from an unverified
+historical generation revision.
+
+QUEER's physical shift-current calculation uses unshifted-Hamiltonian geometry
+and applies scissors to transition energies. The audited historical PyATB
+producer applies scissors inside derivative kernels, regularizes small
+denominators, and truncates its Gaussian tails. Those choices can differ
+substantially near small band splittings. Replay reports record these scientific
+differences; comparison tolerances are not adjusted to hide them. A saved metric
+must also declare its finite-difference steps and Cartesian or reciprocal
+directional basis before comparison with the native finite-basis interband
+metric.
+
 Implementation is independently written under Queer's MIT license. Redistributed
 HPKOT scientific tables retain their MIT license and attribution in
 `queer/resources/symmetry/`. No ASE or HamGNN implementation was copied.

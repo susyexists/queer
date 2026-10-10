@@ -1,0 +1,13 @@
+workflow = "berry_flux"
+
+[inputs]
+model = "fourband"
+
+[parameters]
+window = 0.03
+n = 41
+graded_scale = 0.00001
+tolerance = 0.001
+
+[parameters.model]
+x = 0.5

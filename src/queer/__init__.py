@@ -8,7 +8,7 @@ from types import ModuleType as _ModuleType
 try:
     __version__ = version("queer")
 except PackageNotFoundError:
-    __version__ = "1.2.1"
+    __version__ = "1.3.0"
 
 _EXPORTS = {
     "CapabilityError": (".capabilities", "CapabilityError"),
@@ -37,6 +37,12 @@ _EXPORTS = {
     "ObservableResult": (".observables.result", "ObservableResult"),
     "EPWModel": (".models.epw", "EPWModel"),
     "ExecutionOptions": (".execution", "ExecutionOptions"),
+    "FieldPlane": (".finite_field.native", "FieldPlane"),
+    "FiniteFieldOptions": (".finite_field.config", "FiniteFieldOptions"),
+    "PreparedHallResponse": (".finite_field.api", "PreparedHallResponse"),
+    "ModelFamily": (".finite_field.family", "ModelFamily"),
+    "FourBandModel": (".finite_field.models.fourband", "FourBandModel"),
+    "FourBandParams": (".finite_field.models.fourband", "FourBandParams"),
     "KPath": (".kpath", "KPath"),
     "model": (".model", "model"),
     "epw": (".epw", "epw"),

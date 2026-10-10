@@ -21,7 +21,7 @@ import numpy as np
 
 from ..execution import ExecutionOptions
 
-ALGORITHM_VERSION = "1.2.0-native-services-v2"
+ALGORITHM_VERSION = "1.2.1-native-finite-field-v1"
 
 
 def scheduler_context() -> dict[str, str]:
@@ -91,7 +91,18 @@ def atomic_npz(path: Path, arrays: Mapping[str, Any]) -> None:
 
 def environment_versions() -> dict[str, Any]:
     versions: dict[str, Any] = {"python": platform.python_version(), "platform": platform.platform()}
-    for package in ("queer", "numpy", "scipy", "joblib", "spglib", "torch", "mace-torch", "torch-geometric"):
+    for package in (
+        "queer",
+        "numpy",
+        "scipy",
+        "joblib",
+        "spglib",
+        "mpmath",
+        "numba",
+        "torch",
+        "mace-torch",
+        "torch-geometric",
+    ):
         try:
             versions[package] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:
@@ -139,11 +150,15 @@ class RunStore:
             {"path": str(path.resolve()), "size": path.stat().st_size, "sha256": digest_file(path)}
             for path in sorted(set(input_files))
         ]
-        # Execution and output placement do not alter scientific identity.
+        # Execution, output placement and reusable cache placement do not alter
+        # scientific identity. Cache contents are validated independently.
+        scientific_parameters = {
+            key: value for key, value in config["parameters"].items() if key != "cache_dir"
+        }
         identity = {
             "algorithm_version": ALGORITHM_VERSION,
             "workflow": config["workflow"],
-            "parameters": config["parameters"],
+            "parameters": scientific_parameters,
             "input_options": config["inputs"],
             "inputs": inputs,
         }

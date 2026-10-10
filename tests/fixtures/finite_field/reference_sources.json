@@ -1,0 +1,22 @@
+{
+  "origin": "HHH validated numerical reference tests",
+  "paper_targets_sha256": "0cfdd7c15465e6cecd58caef1d27dd72dabeb3dc01fae161703d4f35255ce7f2",
+  "source_files_sha256": {
+    "conftest.py": "fe8d240ad63a7624f3b3fb9746d2e9b744000f21ef99f59d0f048ce7c2192344",
+    "test_critical.py": "804ffeee365d2fcf3c114d249ede997422f0deba92d2cf254e300f462e654f3a",
+    "test_crossings.py": "622be4375975492c14d3964bd3ea65ec82eb8d88b530a22acb2c000443a71a5e",
+    "test_fits.py": "23120e792c9f74dc4c7ddb37b7f8694edca50618d4cde325b8eb9434cd822028",
+    "test_fourband.py": "08cb275fb2dd3ca2ea65b8e1eed900c70652af3e1e522bf3a902f9f564fb9321",
+    "test_geometry.py": "3be2676307bf145aa7adad65bac9f523da4fbe1f0979dc9c9bfac0119e4bf6ba",
+    "test_harmonics.py": "3f5724a80f16d508cb716436438f6336f3a9cc3f74a8ba15037d6256b019cf73",
+    "test_literal.py": "22cba599c0bcc4095fbac5f31698832a0b51e4d1f1d64251bb755dbbce931647",
+    "test_patch.py": "c495572ad9956ce8e23c4a2b9b1c1214429c923c2ed4046558c8cc6b3c063a75",
+    "test_physical_symmetry.py": "daf3d0a1b8a30d48f4083f25bccbb368da1c2e8c9542275025d5b1b23912f54a",
+    "test_propagation.py": "03718e27aee1815590b0ff98936288b2eb69809978d76ae0199110730df8c859",
+    "test_quadrature_tables.py": "b3d120dbff29e1875ce1bddb57fef6b0ad93b7a2d92f7084447ca470724ea497",
+    "test_tdse.py": "2b8a0e62a681cac94ca3fdbf914630d86bba7f40a1fcabb51b658946f7010ff1",
+    "test_topology.py": "6b723c518a5414b5843a35d5150f266460be1a6cd4504795747387811f69b535",
+    "test_units.py": "b262f2f20fb2d7a4aa151c66bf49463359e83ad7833d3327e01bd356fecf5add",
+    "test_wilson.py": "95c11d95b7db104b7b5c497da1f83882e72f6494bd2a2d51fd96d97317b53270"
+  }
+}

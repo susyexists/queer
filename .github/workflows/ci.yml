@@ -21,8 +21,8 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --locked --extra plot --extra symmetry --extra animation --extra notebook --group dev --python '${{ matrix.python }}'
-      - run: .venv/bin/ruff check src tests scripts/runs scripts/hpc examples benchmarks notebooks/active
-      - run: .venv/bin/ruff format --check src tests scripts/runs scripts/hpc examples benchmarks notebooks/active
+      - run: .venv/bin/ruff check src tests scripts/runs scripts/hpc scripts/validation examples benchmarks notebooks/active
+      - run: .venv/bin/ruff format --check src tests scripts/runs scripts/hpc scripts/validation examples benchmarks notebooks/active
       - run: .venv/bin/mypy
       - run: .venv/bin/python -m pytest -m 'not packaging' --cov=queer --cov-report=xml
   distribution:

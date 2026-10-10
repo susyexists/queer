@@ -184,6 +184,184 @@ def quantum_metric(
     )
 
 
+def _independent_pair_gap(model, k, data, pair):
+    """Solve an energy-centred generalized problem instead of subtracting absolute levels."""
+    from scipy.linalg import eigvalsh
+
+    v, c = pair
+    reference = 0.5 * data["energies"][v] + 0.5 * data["energies"][c]
+    h = np.asarray(model.hamiltonian(k))
+    s = data["overlap"]
+    centred = h - reference * s
+    channels = data["band_channels"]
+    members = np.flatnonzero(channels == channels[v])
+    if len(members) != len(channels):
+        # Generalized eigenvectors are only projected with the physical metric;
+        # ordinary Euclidean overlaps are never used to compare channel states.
+        coefficients = data["coefficients"][:, members]
+        centred = coefficients.conj().T @ centred @ coefficients
+        s = coefficients.conj().T @ s @ coefficients
+    shifted = eigvalsh(centred, s)
+    rank_v = int(np.flatnonzero(members == v)[0])
+    rank_c = int(np.flatnonzero(members == c)[0])
+    floor = (
+        np.finfo(float).eps
+        * model.nbnd
+        * (np.linalg.norm(h, ord=np.inf) + abs(reference) * np.linalg.norm(data["overlap"], ord=np.inf))
+    )
+    return float(shifted[rank_c] - shifted[rank_v]), float(reference), float(floor)
+
+
+def band_pair_geometry(
+    model,
+    kpoints,
+    *,
+    bands=None,
+    occupied_bands=None,
+    engine="direct",
+    degeneracy_tol=None,
+    execution=None,
+):
+    """Pair-resolved Cartesian geometry and hbar velocities in native units.
+
+    Select ``bands=(valence,conduction)`` explicitly, or an occupied count whose
+    adjacent energy-ordered bands are a single, fixed same-channel pair. Absolute
+    energies have shape (2,Nk); the independently centred gap has shape (Nk,).
+    Undefined individual-band quantities are NaN with explicit validity masks.
+    ``pair_metric`` resolves this transition; ``total_metric`` includes all other
+    retained same-channel bands and excludes external orbital spread.
+    """
+    points = np.asarray(getattr(kpoints, "path", kpoints), dtype=float)
+    if points.ndim != 2 or points.shape[1] != 3 or not len(points) or not np.isfinite(points).all():
+        raise ValueError("kpoints must be a nonempty finite (Nk,3) array")
+    if (bands is None) == (occupied_bands is None):
+        raise ValueError("specify exactly one explicit band pair or occupied_bands count")
+    pair = None
+    if bands is not None:
+        selection = np.asarray(bands)
+        if selection.shape != (2,) or selection.dtype.kind not in "iu":
+            raise ValueError("bands must be a pair of integer indices (valence, conduction)")
+        if np.any(selection < 0) or np.any(selection >= model.nbnd) or selection[0] == selection[1]:
+            raise ValueError("band pair must contain distinct indices within the model")
+        pair = tuple(map(int, selection))
+    else:
+        count = np.asarray(occupied_bands)
+        if count.shape != () or count.dtype.kind not in "iu" or not 1 <= count.item() < model.nbnd:
+            raise ValueError("occupied_bands must be an integer between one and NB-1")
+        occupied_bands = int(count.item())
+    tolerance = degeneracy_tolerance(model, degeneracy_tol)
+
+    def at(k):
+        data = band_geometry(model, k, tolerance)
+        if pair is None:
+            ordered = np.argsort(data["energies"], kind="stable")
+            selected = tuple(map(int, ordered[int(occupied_bands) - 1 : int(occupied_bands) + 1]))
+        else:
+            selected = pair
+        v, c = selected
+        channels = data["band_channels"]
+        if channels[v] != channels[c]:
+            raise ValueError("band pair must belong to the same spin channel; select an explicit pair")
+        if data["energies"][c] < data["energies"][v] - tolerance:
+            raise ValueError("band pair must be ordered as (valence, conduction)")
+        gap, reference, floor = _independent_pair_gap(model, k, data, selected)
+        equal = np.abs(data["energies"][:, None] - data["energies"][None, :]) <= tolerance
+        same = channels[:, None] == channels[None, :]
+        np.fill_diagonal(equal, False)
+        band_valid = ~np.any((equal & same)[list(selected)], axis=1)
+        gap_valid = bool(gap > max(tolerance, floor))
+        pair_valid = bool(band_valid.all() and gap_valid)
+        a = data["connections"].copy()
+        velocity = data["velocities"][:, c, v].copy()
+        # This denominator comes from the independent centred solve; it stays
+        # separate from the large absolute energy reference in the public result.
+        if gap_valid:
+            a[:, c, v] = -1j * velocity / gap
+            a[:, v, c] = a[:, c, v].conj()
+        transition = a[:, v, c]
+        pair_metric = np.outer(transition, transition.conj()).real
+        total_metric = np.empty((2, 3, 3))
+        for index, band in enumerate(selected):
+            other = (np.arange(model.nbnd) != band) & (channels == channels[band])
+            links = a[:, band, other]
+            total_metric[index] = np.einsum("am,bm->ab", links, links.conj()).real
+        updated = {**data, "connections": a}
+        curvature = _curvatures(model, k, updated, engine)[list(selected)]
+        total_metric[~band_valid] = np.nan
+        curvature[~band_valid] = np.nan
+        if not pair_valid:
+            pair_metric[:] = np.nan
+            velocity[:] = np.nan
+            transition[:] = np.nan
+        return {
+            "bands": np.asarray(selected),
+            "energies": data["energies"][list(selected)],
+            "gap": gap,
+            "energy_reference": reference,
+            "precision_floor": floor,
+            "pair_metric": pair_metric,
+            "total_metric": total_metric,
+            "curvature": curvature,
+            "velocity_cv": velocity,
+            "connection_cv": a[:, c, v] if pair_valid else np.full(3, np.nan + 1j * np.nan),
+            "valid": pair_valid,
+            "pair_valid": pair_valid,
+            "gap_valid": gap_valid,
+            "band_valid": band_valid,
+        }
+
+    samples = map_points(model, points, at, execution)
+    resolved = np.asarray([sample["bands"] for sample in samples])
+    if not np.all(resolved == resolved[0]):
+        raise ValueError("occupied_bands does not determine a fixed band pair across the requested points")
+    arrays = {key: np.asarray([sample[key] for sample in samples]) for key in samples[0] if key != "bands"}
+    for key in ("energies", "total_metric", "curvature", "band_valid"):
+        arrays[key] = np.swapaxes(arrays[key], 0, 1)
+    arrays["kpoints"] = points
+    dims = {
+        "kpoints": ("kpoint", "fractional"),
+        "energies": ("pair_band", "kpoint"),
+        "pair_metric": ("kpoint", "cartesian", "cartesian2"),
+        "total_metric": ("pair_band", "kpoint", "cartesian", "cartesian2"),
+        "curvature": ("pair_band", "kpoint", "cartesian", "cartesian2"),
+        "velocity_cv": ("kpoint", "cartesian"),
+        "connection_cv": ("kpoint", "cartesian"),
+        "band_valid": ("pair_band", "kpoint"),
+    }
+    for key in ("gap", "energy_reference", "precision_floor", "valid", "pair_valid", "gap_valid"):
+        dims[key] = ("kpoint",)
+    units = {
+        "kpoints": "fractional",
+        "energies": "eV",
+        "gap": "eV",
+        "energy_reference": "eV",
+        "precision_floor": "eV",
+        "pair_metric": "Angstrom^2",
+        "total_metric": "Angstrom^2",
+        "curvature": "Angstrom^2",
+        "velocity_cv": "eV Angstrom",
+        "connection_cv": "Angstrom",
+        "valid": "1",
+        "pair_valid": "1",
+        "gap_valid": "1",
+        "band_valid": "1",
+    }
+    return _result(
+        arrays,
+        dims,
+        units,
+        "band_pair_geometry",
+        bands=resolved[0].tolist(),
+        engine=engine,
+        degeneracy_tolerance_eV=tolerance,
+        gap_method="energy_centred_generalized_eigensolve",
+        metric_definition="finite_basis_interband",
+        energy_reference="absolute",
+        completeness="retained-basis interband; excludes external orbital spread",
+        validity="NaN geometry denotes unresolved selected-band degeneracy; inspect validity masks",
+    )
+
+
 def _occupied_link(model, k, kp, count, *, solutions=None):
     if count == 0:
         return np.empty((0, 0), complex)

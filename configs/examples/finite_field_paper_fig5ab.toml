@@ -1,0 +1,10 @@
+workflow = "paper_figure"
+
+[inputs]
+model = "fourband"
+
+[parameters]
+figure = "fig5ab"
+
+[parameters.recipe]
+xs = [0.0, 0.5, 1.0, 1.2048, 1.4]

@@ -18,7 +18,8 @@ uv sync --locked --extra plot --extra symmetry --extra notebook --group dev --py
 
 For ordinary package installation, use `python -m pip install .` for numerical
 work or `python -m pip install '.[plot,symmetry]'` for figures and named k-paths.
-Optional extras are `plot`, `symmetry`, `animation`, `notebook`, `mace`, `hamgnn`, and `all`.
+Optional extras are `plot`, `symmetry`, `animation`, `notebook`, `mace`, `hamgnn`,
+`precision` (mpmath), `acceleration` (numba), and `all`.
 Core calculations use no ASE, PyATB, SeekPath or Dans_Diffraction. Symmetry uses
 optional spglib; trained model adapters use optional producer environments.
 `requirements.txt` is a compatibility installer; `pyproject.toml` is authoritative.
@@ -91,7 +92,24 @@ arrays with named dimensions, units and JSON metadata. See
 [native workflows and capabilities](docs/openmx_workflows.md) for the inventory,
 PAO/ionic/scattering inputs, convergence controls and scientific limits.
 
-The implementation uses independently written NumPy/SciPy methods and retains
+Native [quantum geometry and finite-field Hall workflows](docs/finite_field.md)
+include pair-resolved metrics, Landau–Zener/DDP crossings, signed Hall currents,
+quasistatic harmonics, model families, critical analysis, and dynamics validation.
+Wannier HR/TB, centre XYZ, WOUT, and position operators share native interpolation;
+OpenMX uses overlap-aware geometry and the explicit `physical_eq8` response profile.
+Advanced OpenMX phases, precision patches, and character tracking remain gated.
+
+```bash
+queer crossing_scan --config configs/examples/finite_field_crossings.toml
+queer hall_harmonics --config configs/examples/finite_field_harmonics.toml
+queer paper_figure --config configs/examples/finite_field_paper_fig4d.toml --render
+```
+
+Physical conventions are the default. Named paper profiles record their separate
+normalizations. All workflows use checksummed run artifacts, resumable checkpoints,
+and artifact-only rendering; no HHH installation is required.
+
+The equilibrium implementation uses independently written NumPy/SciPy methods and retains
 Queer's MIT license. PyATB coverage was audited at commit
 `60fc6b2acafac36b9c8334208326937fef3366c5`; scientific corrections are documented.
 

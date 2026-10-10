@@ -24,6 +24,13 @@ submission. Input files, the prepared interpreter, runner, and submission direct
 must be visible from every node. Keep inputs and the prepared environment unchanged
 while the array is queued/running so all tasks use the same scientific data.
 
+Finite-field workflows also hash their transitive scientific inputs at submission,
+including model-family manifest leaves and discovered Wannier sidecars. Tasks
+reject a changed or removed submitted input. Analytical configurations and
+grid/family configurations need no `material_dir`. Generic snapshots preserve
+their original configuration base directory, so relative manifest/grid/cache
+paths retain their submission-time meaning.
+
 Each task executes one resolved workflow case through the installed CLI, writes its own run
 manifest and numerical checkpoints, and exits nonzero on failure. Logs use `%A_%a`.
 Native thread pools default to one; process workers are capped by scheduler allocation
@@ -42,6 +49,35 @@ submit distinct configurations in one array:
   --config configs/examples/openmx_dos.toml \
   --profile configs/hpc/default.toml --dry-run
 ```
+
+The same adapter submits `geometry_grid`, `crossing_scan`,
+`landau_zener_hall`, `hall_harmonics`, `harmonic_map`, `family_report`,
+`critical_hall`, `fit_hall`, `houston_line`, `lindblad_line`, `berry_flux`, and
+`paper_figure`. Repeat `--config` for each
+independent model, displacement-field member, or field-range case. Finite-field
+line checkpoints survive requeues; only the task owner commits returned worker
+results. Rendering and `queer export --profile finite_field` can run later from
+the completed numerical artifacts. See [finite-field workflows](finite_field.md)
+for scientific profiles and capabilities.
+
+Use `--split-members` for a family or analytical `harmonic_map`; each array
+task receives an isolated `hall_harmonics` configuration and run. After every
+task completes, aggregate without recalculation:
+
+```bash
+.venv/bin/python scripts/hpc/submit_sweep.py \
+  --config configs/examples/finite_field_map.toml \
+  --profile configs/hpc/default.toml --split-members --dry-run
+.venv/bin/python scripts/hpc/aggregate_sweep.py /path/to/submission/dispatch.json
+queer render /path/to/submission/map
+```
+
+Remove `--dry-run` to submit. Aggregation checks the submitted input/configuration
+hashes, completed child artifact checksums, member order, harmonic grids, units,
+and engine revision. It writes a native `harmonic_map` run with every child's
+diagnostics and explicit critical-field normalization. Missing, changed, or
+incompatible members fail without silently filling the map. Rerunning aggregation
+is idempotent for identical checked products.
 
 Each generic case gets an immutable `config-NNNN.toml` snapshot, resolved roots,
 SHA256 and a separate `task-NNNN` run. Fixed integration tiles and refinement

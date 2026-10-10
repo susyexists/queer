@@ -1,0 +1,7 @@
+workflow = "paper_figure"
+
+[inputs]
+model = "fourband"
+
+[parameters]
+figure = "fig6bd"
