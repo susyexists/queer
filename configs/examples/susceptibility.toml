@@ -1,0 +1,18 @@
+workflow = "susceptibility"
+
+[inputs]
+material_dir = "../../tests/fixtures/wannier/chain"
+hr = "wannier90_hr.dat"
+
+[parameters]
+ef = 0.0
+interpolation = "standard"
+temperature = 0.025
+broadening = 0.01
+q_path = [[0.1, 0.0, 0.0], [0.2, 0.0, 0.0]]
+k_mesh = [[0.0, 0.0, 0.0], [0.25, 0.0, 0.0], [0.5, 0.0, 0.0], [0.75, 0.0, 0.0]]
+band_indices = [0]
+
+[execution]
+workers = 1
+native_threads = 1

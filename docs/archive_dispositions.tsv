@@ -1,0 +1,10 @@
+path	retained_path	disposition	original_sha256	note
+scripts/archive/checkpoints/plot_mesh-checkpoint.py	scripts/archive/legacy/plot_mesh.py	removed exact duplicate	ad744fb8c40e3af7421f5e756c2b7e33aa44aa312b7d1444a46962f7f8451fa2	Original retained unchanged
+scripts/archive/checkpoints/plot_path-checkpoint.py	scripts/archive/legacy/plot_path.py	removed exact duplicate	f8dec135b345e2b53084cf14ad8d532dd16b28f654a97e36186270c2969661cd	Original retained unchanged
+notebooks/archive/general/spin.ipynb		removed empty placeholder	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	Not a valid notebook
+scripts/figures/deconv.py	scripts/archive/figures/deconv.py	archived unsupported script	00fa4fcf74525417d346e038b3c82998f5a135cd088fb44d630700623cb41ffe	Obsolete imports; original bytes preserved
+scripts/figures/phonon_spectra.py	scripts/archive/figures/phonon_spectra.py	archived unsupported script	4440398f8d9519ec4046d885a5436509f72f8da9fe565209625216b6e81c2a37	Obsolete imports; original bytes preserved
+scripts/figures/multi.py	scripts/archive/figures/multi.py	archived unsupported script	b3e1a2568166db7f1fad273601a3db45c0467a8d7089bddfed9d1a14e6df0275	Obsolete imports; original bytes preserved
+scripts/figures/suscep.py	scripts/archive/figures/suscep.py	archived unsupported script	f526c32b994de297f38c4c56f4c7d0cb4383c5646d4ae88b655ecbaba1b7b38c	Obsolete imports; original bytes preserved
+docs/resources/neon.mplstyle	docs/archive/neon.mplstyle	archived historical style	f4e09f0cba5bfb4be5f88022b46cff36d3011936ab8517849cc1bbcde891d2a9	Package resource is authoritative; variant preserved
+notebooks/active/Ag_primitive_single.ipynb	notebooks/archive/ag_primitive/Ag_primitive_single_pre_1.1.ipynb	preserved original before workflow migration	236e0267798da98866f08eab34cc7dbde8ac5f957fbf0944aa4d844ec22d2934	Original notebook and saved outputs retained byte-for-byte; active notebook delegates to workflows

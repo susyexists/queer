@@ -1,0 +1,13 @@
+workflow = "epw"
+
+[inputs]
+material_dir = "../../tests/fixtures/epw"
+
+[parameters]
+q_indices = [0, 1]
+temperature = 0.025
+broadening = 0.01
+
+[execution]
+workers = 1
+native_threads = 1

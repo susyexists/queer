@@ -1,0 +1,40 @@
+name: Scientific and distribution acceptance
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12', '3.13', '3.14']
+    env:
+      MPLBACKEND: Agg
+      OMP_NUM_THREADS: '1'
+      OPENBLAS_NUM_THREADS: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --locked --all-extras --group dev --python '${{ matrix.python }}'
+      - run: .venv/bin/ruff check src tests scripts/runs scripts/hpc examples benchmarks notebooks/active
+      - run: .venv/bin/ruff format --check src tests scripts/runs scripts/hpc examples benchmarks notebooks/active
+      - run: .venv/bin/mypy
+      - run: .venv/bin/python -m pytest -m 'not packaging' --cov=queer --cov-report=xml
+  distribution:
+    needs: acceptance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked --all-extras --group dev --python 3.13
+      - run: .venv/bin/python -m pytest -m packaging
+      - run: .venv/bin/python -m build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: queer-distributions
+          path: dist/*

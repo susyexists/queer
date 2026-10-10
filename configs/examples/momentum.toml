@@ -1,0 +1,25 @@
+workflow = "momentum"
+
+[inputs]
+material_dir = "../../tests/fixtures/wannier/chain"
+hr = "wannier90_hr.dat"
+poscar = "POSCAR"
+
+[parameters]
+ef = 0.0
+interpolation = "standard"
+photon_energy = 21.2
+fermi_energy = 0.0
+binding_min = 0.0
+binding_max = 0.2
+binding_step = 0.1
+v0_values = [5.0, 10.0]
+n_points = 4
+factor = 2.0
+sigma = 0.1
+energy_shift = 0.0
+
+[execution]
+workers = 1
+native_threads = 1
+batch_size = 64

@@ -1,0 +1,1 @@
+Synthetic two-mode, two-q, two-k fixture. Electronic energies/Fermi level are eV; phonon frequencies and complex couplings are meV. Mode identifiers 2 and 10 intentionally exercise numeric ordering. Data are generated specifically for tests and carry no external dataset dependency.

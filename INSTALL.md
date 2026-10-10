@@ -1,61 +1,32 @@
-# Installation And HPC Notes
+# Installation and environments
 
-## Local Editable Install
-
-```bash
-python -m pip install -e .
-python -m pip install -r requirements.txt
-```
-
-The editable install is recommended for notebooks and HPC scripts because the
-repository is still under active development. The package lives under
-`src/queer`, so installing editably is the intended way to make notebooks and
-scripts see source-code edits immediately.
-
-For this checkout, the local `.venv` has also been installed as an editable
-package and registered as the Jupyter kernel `Python (queer editable)`.
-Select that kernel in notebooks so edits under `queer/` are imported directly.
-
-## Dependencies
-
-Runtime packages are listed in `requirements.txt`: NumPy, SciPy, Matplotlib,
-Pandas, Joblib, psutil, tqdm, Pillow, ImageIO, Jupyter, nbformat, and pytest for
-smoke testing.
-
-## Organized Paths
-
-Local data and results are intentionally ignored by Git:
-
-- Inputs: `data/materials/<material>/`
-- Legacy large inputs: `data/archive/`
-- Generated figures/logs: `results/`
-
-Use environment variables to point runs at shared or scratch storage:
+Use Python 3.11–3.14. The reference development/HPC environment uses Python 3.13.
 
 ```bash
-export QUEER_DATA_DIR=/scratch/$USER/queer/data
-export QUEER_RESULTS_DIR=/scratch/$USER/queer/results
+uv sync --locked --all-extras --group dev --python 3.13
+.venv/bin/python -m ipykernel install --user --name queer-dev --display-name "Python (QUEER)"
 ```
 
-The package resolves these through `queer.paths.data_path()` and
-`queer.paths.results_path()`.
+`uv.lock` pins deployment/development resolution. Use `--locked` to reject unexpected
+lock changes. Resolve deliberate dependency updates with `uv lock`, then rerun all
+acceptance gates. Prepare environments before submitting jobs; workers never install
+dependencies or update the lockfile.
 
-## Running On Slurm
-
-Use the provided launcher:
+For pip users:
 
 ```bash
-sbatch scripts/hpc/run_v0_sweep.sbatch
+python -m pip install -e '.[all]'
 ```
 
-Optional environment variables:
+Core numerical imports require NumPy, SciPy, joblib, and threadpoolctl. Extras add
+plotting/tabular compatibility (`plot`), SeekPath (`symmetry`), animation codecs
+(`animation`), or Jupyter (`notebook`). Test/lint/build tools belong to the development
+dependency group. Distribution metadata uses the repository's MIT license.
 
-- `QUEER_VENV`: virtual environment to activate before running.
-- `QUEER_DATA_DIR`: data root containing `materials/`.
-- `QUEER_RESULTS_DIR`: output root for generated frames and logs.
+Build and inspect distributions with `python -m build` and `python -m twine check dist/*`.
+The packaging test installs the wheel into a fresh environment outside the checkout
+and checks numerical execution with only core dependencies.
 
-## Verification
-
-After moving or restoring artifacts, compare against
-`docs/artifact_manifest.tsv`. The manifest records old path, new path, size,
-category, and checksums for notebooks, scripts, docs, and data files.
+Storage configuration and Slurm submission are documented in
+[HPC operations](docs/hpc_usage.md). The historical relocation manifest records past
+moves; it is not a current-file integrity manifest.

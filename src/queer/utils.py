@@ -1,223 +1,191 @@
-import pandas as pd
-from multiprocessing import Pool, Process, Manager, cpu_count
+"""Explicit compatibility helpers; numerical domains live in dedicated modules."""
+
+import re
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
 import numpy as np
-import time
-import os
+
+__all__ = [
+    "dotdict",
+    "read_data",
+    "read_parallel",
+    "hexagon",
+    "suscep_epw",
+    "read_poscar",
+    "crystal2reciprocal",
+    "write_data",
+    "path_create",
+    "read_gvec",
+    "fermi_bands",
+    "ph_cross",
+    "g_cross",
+    "untangle",
+    "phselfen",
+]
 
 
 class dotdict(dict):
-    """dot.notation access to dictionary attributes"""
+    """Historical dictionary attribute access."""
+
     __getattr__ = dict.get
     __setattr__ = dict.__setitem__
     __delattr__ = dict.__delitem__
 
+
 def read_data(path):
-    try:
-        df = pd.read_csv(path, delimiter=' ',header=None)
-        file_name =path.split("/")[-2] 
-        # print(f"{file_name} is done")
-        return [file_name,df]
-    except OSError as e:
-        print(e)
+    """Read a whitespace DataFrame, propagating failures with their filename."""
+    import pandas as pd
 
-def read_parallel(path):
-    folders = [ name for name in os.listdir(path) if os.path.isdir(os.path.join(path, name)) ]
-    file_path=[]
-    for folder in folders:
-        files = os.listdir(path+folder)
-        for file in files:
-            file_path.append(path+folder+"/"+file)
-    start = time.time()
-    pool = Pool(cpu_count())
-    df_collection = pool.map(read_data, file_path)
-    pool.close()
-    pool.join()
-    data_folder= []
-    for i in df_collection:
-        data_folder.append(i[0])
-        # print(i[0].split("_")[0],i[0].split("_")[1].split(".")[0])
-    uniques = np.unique(np.array(data_folder))
-    data_dict = {}
-    for i in uniques:
-        data_dict[i]=[]
-    for i in df_collection:
-        data_dict[i[0]].append(i[1])
-    print(f"Total time: {time.time()-start}")
-    return data_dict
+    source = Path(path)
+    return [source.parent.name, pd.read_csv(source, sep=r"\s+", header=None)]
 
+
+def _natural_key(path):
+    return tuple(int(piece) if piece.isdigit() else piece for piece in re.split(r"(\d+)", str(path)))
+
+
+def read_parallel(path, workers=1):
+    """Return channel DataFrames in deterministic natural filename order."""
+    from .execution import ExecutionOptions
+
+    root = Path(path)
+    count = ExecutionOptions(workers=workers).resolved().workers
+    files = [
+        file
+        for folder in sorted(root.iterdir(), key=_natural_key)
+        if folder.is_dir()
+        for file in sorted(folder.iterdir(), key=_natural_key)
+        if file.is_file() and not file.name.startswith(".")
+    ]
+    if count == 1:
+        frames = map(read_data, files)
+        return _collect_frames(frames)
+    with ThreadPoolExecutor(max_workers=count) as pool:
+        return _collect_frames(pool.map(read_data, files))
+
+
+def _collect_frames(frames):
+    result = {}
+    for channel, frame in frames:
+        result.setdefault(channel, []).append(frame)
+    return result
 
 
 def hexagon():
-    a = np.array([[[-1/np.sqrt(3), 1/np.sqrt(3)], [1, 1]],
-                  [[1/np.sqrt(3), 2/np.sqrt(3)], [1, 0]],
-                  [[2/np.sqrt(3), 1/np.sqrt(3)], [0, -1]],
-                  [[1/np.sqrt(3), -1/np.sqrt(3)], [-1, -1]],
-                  [[-1/np.sqrt(3), -2/np.sqrt(3)], [-1, 0]],
-                  [[-2/np.sqrt(3), -1/np.sqrt(3)], [0, 1]],
-                  ])
-    return (a)
+    return np.array(
+        [
+            [[-1 / np.sqrt(3), 1 / np.sqrt(3)], [1, 1]],
+            [[1 / np.sqrt(3), 2 / np.sqrt(3)], [1, 0]],
+            [[2 / np.sqrt(3), 1 / np.sqrt(3)], [0, -1]],
+            [[1 / np.sqrt(3), -1 / np.sqrt(3)], [-1, -1]],
+            [[-1 / np.sqrt(3), -2 / np.sqrt(3)], [-1, 0]],
+            [[-2 / np.sqrt(3), -1 / np.sqrt(3)], [0, 1]],
+        ]
+    )
 
 
-def suscep_epw(self, point, mesh, mesh_energy, mesh_fermi, epw1, epw2=[]):
-    if epw2 == []:
-        epw2 = np.copy(epw1)
-    shifted_energy = self.parallel_solver(point+mesh)[6]
+def suscep_epw(self, point, mesh, mesh_energy, mesh_fermi, epw1, epw2=None):
+    if epw2 is None or isinstance(epw2, list) and not epw2:
+        epw2 = epw1
+    shifted_energy = self.calculate_energy(np.asarray(point) + mesh)[6]
     shifted_fermi = self.fermi(shifted_energy)
-    num = mesh_fermi-shifted_fermi
-    den = mesh_energy-shifted_energy
-    mult = -epw1*np.conj(epw2)*num/den*10**-3
-    res = np.average(mult)
-    return(res)
+    return np.average(
+        -np.asarray(epw1)
+        * np.conj(epw2)
+        * (mesh_fermi - shifted_fermi)
+        / (mesh_energy - shifted_energy)
+        * 1e-3
+    )
 
 
 def read_poscar(filename):
-    file = open(filename, 'r')
-    file.readline()
-    scale = float(file.readline())
-    a1 = file.readline().split()
-    a2 = file.readline().split()
-    a3 = file.readline().split()
-    a = [a1, a2, a3]
-    a = np.array(a, dtype='float') * scale
-    file.close()
-    return a
+    from .io.structure import read_poscar as reader
+
+    return reader(filename)[0]
 
 
-def crystal2reciprocal(a):  # this funciton is to get reciprocal lattice from primitive lattice
+def crystal2reciprocal(a):
+    from .geometry.lattice import reciprocal_lattice
 
-    v = np.dot(a[0], np.cross(a[1], a[2]))
-    b = []
-    b.append(2 * np.pi * np.cross(a[1], a[2]) / v)
-    b.append(2 * np.pi * np.cross(a[2], a[0]) / v)
-    b.append(2 * np.pi * np.cross(a[0], a[1]) / v)
-    b = np.array(b, dtype='float')
-    return b
-
-def write_data(path,data,data_label):
-    # Writing to file
-    with open(path, "w") as file:
-        # Writing data to a file
-        file.write(f"#{' '.join(data_label)} \n")
-    with open(path, "a") as file:
-            for i in data:
-                for j in i:
-                    file.write(f"{j} ")
-                file.write("\n")
-
-def path_create(n_points,corners):
-    corners=np.array(corners)
-    distance = np.zeros(shape=(len(corners)))
-    for i in range(len(corners)):
-        if i==0:
-            distance[i]=0
-        else:
-            distance[i]= np.linalg.norm(corners[i-1]-corners[i])
-    point_ratio = distance/np.sum(distance)
-    total_points = (n_points*point_ratio).round(0).astype(int)
-    total_number = np.sum(total_points).astype(int)
-    corner_points = np.zeros(len(corners),dtype=int)
-    temp=0
-    for i in range(len(corners)):
-        temp+=total_points[i]
-        corner_points[i]=temp
-    # print(corner_points)
-    counter=0
-
-    counter=0
-    path=np.zeros(shape=(n_points+1,3))
-    for i in range(1,len(corners)):
-        temp = corners[i-1].copy()
-        path[counter]=temp
-        counter+=1
-        for j in range(total_points[i]-1):
-            temp+=(corners[i]-corners[i-1])/total_points[i]
-            path[counter]=temp
-            counter+=1
-        if i==len(corners)-1:
-            temp+=(corners[i]-corners[i-1])/total_points[i]
-            try:
-                path[counter]=temp
-                counter+=1
-            except:
-                pass
-        if corner_points[-1]> n_points:
-          corner_points[-1]=n_points
-    return(corner_points,path)
+    return reciprocal_lattice(a)
 
 
+def write_data(path, data, data_label):
+    np.savetxt(path, np.asarray(data), header=" ".join(data_label), comments="#")
 
-def read_gvec(path,dim=3):
-    lines = open(path, 'r').readlines()
-    g_vec = np.zeros(shape=(3, 3))
-    count = 0
-    for i in lines:
-        if "b(" in i:
-            if count == 3:
-                continue
-            else:
-                g_vec[count] = i.split()[3:6]
-                count += 1
-        elif "lattice parameter (alat)" in i:
-            alat = float(i.split()[-2])
-    factor = 2*np.pi/(alat *0.529177)
-    return (g_vec*factor)
+
+def path_create(n_points, corners):
+    from .geometry.paths import interpolate_path
+
+    return interpolate_path(n_points, corners)
+
+
+def read_gvec(path, dim=3):
+    from .io.structure import read_qe_reciprocal
+
+    return read_qe_reciprocal(path)
 
 
 def fermi_bands(bands, window=0.5):
-    near_bands = []
-    for j,i in enumerate(bands):
-        for e in i:
-            if -0.5 <= e and e <= 0.5:
-                near_bands.append(j)
-    return set(near_bands)
+    if not np.isfinite(window) or window < 0:
+        raise ValueError("window must be nonnegative and finite")
+    bands = np.asarray(bands)
+    if bands.ndim != 2:
+        raise ValueError("bands must have shape (Nb,Nk)")
+    return set(np.flatnonzero(np.any(np.abs(bands) <= window, axis=1)).tolist())
 
 
-def ph_cross(ph,tolerance,offset=50):
-    ph_xs=[]
-    pointer = 0
-    for q in range(offset,ph.shape[1]-offset):
+def _crossing_input(values, tolerance, offset):
+    array = np.asarray(values)
+    if array.ndim != 2 or not np.isfinite(array).all():
+        raise ValueError("crossing values must be a finite (Nbranch,Nq) array")
+    if not np.isfinite(tolerance) or tolerance < 0:
+        raise ValueError("tolerance must be nonnegative and finite")
+    if isinstance(offset, bool) or not isinstance(offset, (int, np.integer)) or offset < 0:
+        raise ValueError("offset must be a nonnegative integer")
+    return array
+
+
+def ph_cross(ph, tolerance, offset=50):
+    ph = _crossing_input(ph, tolerance, offset)
+    crossings, previous = [], {}
+    for q in range(offset, ph.shape[1] - offset):
         for i in range(ph.shape[0]):
-            for j in range(ph.shape[0]):
-                if i<j:
-                    if abs(ph[i][q]-ph[j][q])<tolerance:
-                        if(q!= pointer+1):
-                            # print(i,j,q)
-                            ph_xs.append([i,j,q])
-                        pointer = q          
-    return ph_xs
-    
-def g_cross(g,tolerance,offset=50):
-    g_xs=[]
-    pointer = 0
-    for q in range(offset,g.shape[1]-offset):
+            for j in range(i + 1, ph.shape[0]):
+                if abs(ph[i, q] - ph[j, q]) < tolerance:
+                    if previous.get((i, j)) != q - 1:
+                        crossings.append([i, j, q])
+                    previous[i, j] = q
+    return crossings
+
+
+def g_cross(g, tolerance, offset=50):
+    g = _crossing_input(g, tolerance, offset)
+    crossings = []
+    for q in range(max(1, offset), g.shape[1] - offset):
         for i in range(g.shape[0]):
-            for j in range(g.shape[0]):
-                if i<j:
-                    if abs(g[i][q]-g[i][q-1])>tolerance:
-                        if abs(g[j][q]-g[j][q-1])>tolerance:
-                                # print(i,j,q)
-                                g_xs.append([i,j,q])
-    return g_xs
-    
-def untangle(band,cross):
-    fix = band.copy()
-    num_cross = len(cross)
-    for i in range(num_cross):
-        temp_1 = fix[cross[i][0]].copy()
-        temp_2 = fix[cross[i][1]].copy()
-        point = cross[i][2]
-        fix[cross[i][1]][:point] = temp_1[:point]
-        fix[cross[i][0]][:point] = temp_2[:point]
-    return fix
+            for j in range(i + 1, g.shape[0]):
+                if abs(g[i, q] - g[i, q - 1]) > tolerance and abs(g[j, q] - g[j, q - 1]) > tolerance:
+                    crossings.append([i, j, q])
+    return crossings
 
 
-def phselfen(self, λ, λ_real, γ, γ_real, ω):
-    λ = loadtxt(self.path+"lambda.dat").reshape(-1, 9).T
-    λ_real = loadtxt(self.path+"lambda_re.dat").reshape(-1, 9).T
-    γ = loadtxt(self.path+"gamma.dat").reshape(-1, 9).T
-    γ_real = loadtxt(self.path+"gamma_re.dat").reshape(-1, 9).T
-    ω = loadtxt(self.path+"omega.dat").reshape(-1, 9).T
-    return λ, λ_real, γ, γ_real, ω
+def untangle(band, cross):
+    fixed = np.asarray(band).copy()
+    if fixed.ndim < 2:
+        raise ValueError("band must have branch and q axes")
+    for i, j, point in cross:
+        if not all(isinstance(v, (int, np.integer)) for v in (i, j, point)) or not (
+            0 <= i < len(fixed) and 0 <= j < len(fixed) and 0 <= point <= fixed.shape[1]
+        ):
+            raise ValueError("crossing indices outside the array")
+        fixed[[i, j], :point] = fixed[[j, i], :point]
+    return fixed
 
 
-
+def phselfen(self, λ=None, λ_real=None, γ=None, γ_real=None, ω=None):
+    return tuple(
+        np.loadtxt(Path(self.path) / name).reshape(-1, 9).T
+        for name in ("lambda.dat", "lambda_re.dat", "gamma.dat", "gamma_re.dat", "omega.dat")
+    )

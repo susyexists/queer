@@ -4,19 +4,13 @@
 from __future__ import annotations
 
 import argparse
-import sys
-import time
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-SRC_ROOT = PROJECT_ROOT / "src"
-for path in (SRC_ROOT, PROJECT_ROOT):
-    if str(path) not in sys.path:
-        sys.path.insert(0, str(path))
+import numpy as np
 
-import queer
-from queer.momentum import binding_energy_surfaces, format_time, save_surface_plots, write_animation
-from queer.paths import data_path, results_path
+from queer.config import config_from_mapping
+from queer.paths import data_path
+from queer.workflows import run_workflow
 
 
 def parse_args(argv=None):
@@ -50,57 +44,60 @@ def main(argv=None):
     if (args.align_from is None) != (args.align_to is None):
         raise SystemExit("--align-from and --align-to must be provided together.")
 
-    start_total = time.time()
     material_dir = args.material_path or data_path("materials", args.material)
-    output_dir = args.output_dir or results_path("v0_sweep", f"V0_{args.v0:g}")
-    align = [args.align_from, args.align_to] if args.align_from is not None else None
-
-    start_model = time.time()
-    model = queer.model(
-        path=material_dir,
-        hr=args.hr,
-        ef=args.ef,
-        poscar=args.poscar,
-        num_core=args.num_core or False,
+    parameters = {
+        "ef": args.ef,
+        "interpolation": "standard",
+        "photon_energy": args.photon_energy,
+        "fermi_energy": args.fermi_energy,
+        "binding_min": args.binding_min,
+        "binding_max": args.binding_max,
+        "binding_step": args.binding_step,
+        "v0": args.v0,
+        "n_points": args.n_points,
+        "factor": args.factor,
+        "energy_shift": args.energy_shift,
+        "sigma": args.sigma,
+    }
+    if args.align_from is not None:
+        parameters["align"] = [args.align_from, args.align_to]
+    config = config_from_mapping(
+        {
+            "workflow": "momentum",
+            "inputs": {"material_dir": str(material_dir), "hr": args.hr, "poscar": args.poscar},
+            "parameters": parameters,
+            "execution": {"workers": args.num_core or 1},
+        }
     )
-    print(f"Model loading took {format_time(time.time() - start_model)}")
+    run_dir = run_workflow(config, run_dir=args.output_dir)
+    # Preserve historical render arguments, using the durable arrays as source.
+    import json
 
-    start_energy = time.time()
-    surfaces = binding_energy_surfaces(
-        model=model,
-        g_vec=model.g_vec,
-        photon_energy=args.photon_energy,
-        fermi_energy=args.fermi_energy,
-        binding_range=[args.binding_min, args.binding_max],
-        binding_step=args.binding_step,
-        v0=args.v0,
-        n_points=args.n_points,
-        factor=args.factor,
-        align=align,
-        energy_shift=args.energy_shift,
-        sigma=args.sigma,
-    )
-    print(f"Energy and intensity processing took {format_time(time.time() - start_energy)}")
+    import pandas as pd
 
-    start_plot = time.time()
-    frames = save_surface_plots(
-        surfaces,
-        output_dir=output_dir,
-        v0=args.v0,
-        energy_shift=args.energy_shift,
-        rotate_from=args.align_from,
-        rotate_to=args.align_to,
-        transparent=args.transparent,
-    )
-    print(f"Plotting took {format_time(time.time() - start_plot)}")
+    from queer.momentum import save_surface_plots, write_animation
 
+    manifest = json.loads((run_dir / "manifest.json").read_text())
+    output_dir = run_dir / "figures"
+    frames = []
+    for record in manifest["cases"].values():
+        with np.load(run_dir / record["path"], allow_pickle=False) as artifact:
+            energy = float(artifact["binding_energy"][0])
+            surface = pd.DataFrame(artifact["surface"], columns=["kx", "ky", "kz", "e", "I"])
+            frames.extend(
+                save_surface_plots(
+                    {energy: surface},
+                    output_dir,
+                    v0=args.v0,
+                    energy_shift=args.energy_shift,
+                    rotate_from=args.align_from,
+                    rotate_to=args.align_to,
+                    transparent=args.transparent,
+                )
+            )
     if args.make_animation:
-        start_video = time.time()
         write_animation(frames, output_dir)
-        print(f"Animation creation took {format_time(time.time() - start_video)}")
-
-    print(f"Saved {len(frames)} frames to {output_dir}")
-    print(f"Total execution time: {format_time(time.time() - start_total)}")
+    print(f"Saved run and {len(frames)} frames to {run_dir}")
     return 0
 
 

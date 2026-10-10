@@ -1,13 +1,2 @@
-numpy
-scipy
-matplotlib
-pandas
-joblib
-psutil
-tqdm
-pillow
-imageio
-jupyter
-nbformat
-seekpath
-pytest
+# Compatibility installer. Authoritative dependencies live in pyproject.toml.
+-e .[all]

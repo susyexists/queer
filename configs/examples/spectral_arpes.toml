@@ -1,0 +1,20 @@
+workflow = "spectral"
+
+[inputs]
+material_dir = "../../tests/fixtures/wannier/chain"
+hr = "wannier90_hr.dat"
+poscar = "POSCAR"
+
+[parameters]
+ef = 0.0
+interpolation = "standard"
+kpoints = [[0.0, 0.0, 0.0], [0.1, 0.0, 0.0], [0.2, 0.0, 0.0]]
+omega = [-1.0, 0.0, 1.0]
+eta = 0.1
+photon_energy = 21.2
+v0_values = [5.0, 10.0]
+align_zero = true
+
+[execution]
+workers = 1
+native_threads = 1

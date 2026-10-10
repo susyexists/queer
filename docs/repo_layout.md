@@ -1,19 +1,23 @@
-# Repository Layout
+# Repository responsibilities
 
-The repository is organized so library code, local inputs, generated results,
-and exploratory notebooks do not compete for the top level.
+- `src/queer/models`: Wannier/EPW representations and model evaluation.
+- `geometry`: lattice/coordinate transformations, rotations, meshes, named paths.
+- `io`: validated readers and atomic arrays/manifests.
+- `observables`: scientific response, spectral, ARPES, and momentum calculations.
+- `workflows`: calculation cases and recoverable orchestration; `plotting`: optional visualization.
+- `config.py`, `execution.py`, `cli.py`: configuration, bounded resources, installed commands.
+- Legacy top-level modules and `scripts/runs` forward supported 1.x interfaces.
+- `configs/examples`: complete small workloads; `configs/hpc`: customizable site resources.
+- `tests/{fixtures,unit,numerical,integration,packaging}`: independent acceptance gates.
+- `benchmarks`: reproducible time/memory evidence and optional real-data runs.
+- `notebooks/active`: maintained consumers; notebook/script archives: unsupported provenance.
+- `data` and `results`: ignored inputs and generated artifacts, with trackable manifests.
 
-- `src/queer/`: importable Python package.
-- `notebooks/active/`: notebooks used for current work.
-- `notebooks/archive/`: preserved development notebooks grouped by topic or
-  material.
-- `data/`: local input artifacts. Git ignores the actual data files.
-- `results/`: generated output artifacts. Git ignores generated output files.
-- `scripts/runs/`: Python entrypoints that can be run locally or from Slurm.
-- `scripts/hpc/`: HPC launchers.
-- `scripts/archive/`: older scripts kept for provenance.
-- `docs/artifact_manifest.tsv`: relocation inventory.
-- `tests/`: smoke tests for pathing and calculation primitives.
+Numerical code must not select storage paths, save figures, or discover personal
+inputs. Workflow boundaries resolve configuration and resources; numerical methods
+receive arrays and explicit options. Plotting consumes already-computed results.
+Package resources are loaded with `importlib.resources`, not checkout-relative paths.
 
-Use `queer.paths.data_path()` and `queer.paths.results_path()` in new code so
-workflows can move between local workstations and HPC scratch storage.
+The historical `artifact_manifest.tsv` remains unchanged. Archive dispositions
+are in `archive_dispositions.tsv`. Historical notebook outputs remain intact;
+unsupported figure scripts have been moved without altering their bytes.

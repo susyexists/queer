@@ -1,33 +1,24 @@
-"""Example: calculate and plot an electron band structure."""
+"""Run the maintained bands example; replace the synthetic configuration for real data."""
 
+import argparse
 from pathlib import Path
-import sys
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SRC_ROOT = PROJECT_ROOT / "src"
-if str(SRC_ROOT) not in sys.path:
-    sys.path.insert(0, str(SRC_ROOT))
-
-import queer
-from queer.paths import data_path, results_path
+from queer.config import load_config
+from queer.workflows import render_run, run_workflow
 
 
-def main():
-    material = "ag_primitive"
-    model = queer.model(
-        path=data_path("materials", material),
-        hr="wannier90_hr.dat",
-        ef=8.310342,
-        poscar="POSCAR",
-        num_core=1,
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--config", type=Path, default=Path(__file__).resolve().parents[1] / "configs/examples/bands.toml"
     )
-
-    output = results_path("bands", "ag_primitive_band_structure.png")
-    output.parent.mkdir(parents=True, exist_ok=True)
-    model.plot_band_path("GAMMA-X-W-K-GAMMA-L", n_points=200, save=output)
-
-    print(f"Saved band structure to {output}")
+    parser.add_argument("--results-dir", type=Path)
+    args = parser.parse_args(argv)
+    config = load_config(args.config, overrides={"results_dir": args.results_dir})
+    run_dir = run_workflow(config)
+    print(render_run(run_dir))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

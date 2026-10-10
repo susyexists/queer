@@ -1,52 +1,40 @@
-"""Project path helpers for local workstations and HPC runs."""
+"""Storage paths are independent of installed package locations."""
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Optional, Union
+
+PathLike = str | os.PathLike[str]
 
 
-PathLike = Union[str, os.PathLike]
-
-
-def project_root(start: Optional[PathLike] = None) -> Path:
-    """Return the repository root, honoring QUEER_PROJECT_ROOT when set."""
-    env_root = os.environ.get("QUEER_PROJECT_ROOT")
-    if env_root:
-        return Path(env_root).expanduser().resolve()
-
-    anchor = Path(start).expanduser().resolve() if start else Path(__file__).resolve()
+def project_root(start: PathLike | None = None) -> Path:
+    """Discover a source checkout for compatibility, falling back to cwd."""
+    if root := os.environ.get("QUEER_PROJECT_ROOT"):
+        return Path(root).expanduser().resolve()
+    anchor = Path(start).expanduser().resolve() if start else Path.cwd()
     if anchor.is_file():
         anchor = anchor.parent
-
     for candidate in (anchor, *anchor.parents):
-        if (candidate / "queer").is_dir() and (
-            (candidate / "setup.py").exists() or (candidate / "pyproject.toml").exists()
-        ):
+        if (candidate / "src" / "queer").is_dir() and (candidate / "pyproject.toml").is_file():
             return candidate
-        if (candidate / ".git").exists():
-            return candidate
-
-    return Path(__file__).resolve().parents[1]
+    return Path.cwd().resolve()
 
 
 def data_root() -> Path:
-    """Return the data root, using QUEER_DATA_DIR when provided."""
-    return Path(os.environ.get("QUEER_DATA_DIR", project_root() / "data")).expanduser().resolve()
+    return Path(os.environ.get("QUEER_DATA_DIR", Path.cwd() / "data")).expanduser().resolve()
 
 
 def results_root() -> Path:
-    """Return the results root, using QUEER_RESULTS_DIR when provided."""
-    return Path(os.environ.get("QUEER_RESULTS_DIR", project_root() / "results")).expanduser().resolve()
+    return Path(os.environ.get("QUEER_RESULTS_DIR", Path.cwd() / "results")).expanduser().resolve()
 
 
 def data_path(*parts: PathLike) -> Path:
-    return data_root().joinpath(*map(Path, parts))
+    return data_root().joinpath(*parts)
 
 
 def results_path(*parts: PathLike) -> Path:
-    return results_root().joinpath(*map(Path, parts))
+    return results_root().joinpath(*parts)
 
 
 def ensure_parent(path: PathLike) -> Path:

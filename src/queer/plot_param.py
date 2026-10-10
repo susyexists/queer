@@ -1,1 +1,6 @@
-colors = ['blue','red','yellow','#FFFFFF','#00FF66','#FF9100','#FF0099','magenta','cyan']
+"""Compatibility palette; new plots can import queer.plotting.palette.COLORS."""
+
+from .plotting.palette import COLORS
+
+colors = list(COLORS)
+__all__ = ["colors"]
