@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "queer"
-version = "1.3.0"
+version = "1.3.1"
 description = "Native electronic responses, crystal, atomistic and Hamiltonian workflows"
 readme = "README.md"
 requires-python = ">=3.11"

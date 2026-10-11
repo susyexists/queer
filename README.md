@@ -13,7 +13,7 @@ execution with durable numerical results.
 Python 3.11+ is required. For development and HPC environment preparation:
 
 ```bash
-uv sync --locked --extra plot --extra symmetry --extra notebook --group dev --python 3.13
+uv sync --locked --extra plot --extra symmetry --extra animation --extra notebook --extra precision --group dev --python 3.13
 ```
 
 For ordinary package installation, use `python -m pip install .` for numerical
