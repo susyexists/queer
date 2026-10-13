@@ -52,6 +52,135 @@ def test_finite_field_configuration_rejects_unknown_and_missing_sources(tmp_path
         config_from_mapping(data)
 
 
+def test_split_wannier_family_preserves_images_and_resolved_member_model(tmp_path, monkeypatch):
+    from queer.finite_field.api import PreparedHallResponse
+    from queer.models.wannier import WannierModel
+    from queer.workflows.finite_field import (
+        _crossing_map,
+        _prepare,
+        load_finite_field_source,
+        split_harmonic_map,
+    )
+
+    plus = np.array([[0.04 + 0.01j, 0.013 - 0.02j, 0], [0, -0.03 - 0.02j, 0], [0, 0, 0.07]])
+    blocks = [plus.conj().T, np.diag([-0.4, 0.3, 1.5]), plus]
+    hr, ws, centres = (
+        tmp_path / "member_hr.dat",
+        tmp_path / "member_wsvec.dat",
+        tmp_path / "member_centres.xyz",
+    )
+    with hr.open("w") as stream:
+        stream.write("test\n3\n3\n2 1 2\n")
+        for R, block in zip((-1, 0, 1), blocks, strict=True):
+            for m in range(3):
+                for n in range(3):
+                    value = block[m, n]
+                    stream.write(f"{R} 0 0 {m + 1} {n + 1} {value.real} {value.imag}\n")
+    with ws.open("w") as stream:
+        stream.write("use_ws_distance=.true.\n")
+        for R in (-1, 0, 1):
+            for m in range(3):
+                for n in range(3):
+                    shifts = [0, 2 * R] if R else [0]
+                    stream.write(f"{R} 0 0 {m + 1} {n + 1}\n{len(shifts)}\n")
+                    for shift in shifts:
+                        stream.write(f"{shift} 0 0\n")
+    centres.write_text("3\ncentres\nX 0.2 0 -2\nX -0.1 0 0\nX 0.3 0 2\n")
+    member_plane = {"origin": [0.07, -0.02, 0], "direction": [0, 1, 0], "transverse": [-1, 0, 0]}
+    lattice = np.diag([4, 5, 20]).tolist()
+    family_file = tmp_path / "family.json"
+    family_file.write_text(
+        json.dumps(
+            {
+                "lattice": lattice,
+                "members": [
+                    {
+                        "label": "member",
+                        "D": 0.1,
+                        "n_occ": 1,
+                        "band_pair": None,
+                        "plane": member_plane,
+                        "files": {"hr": hr.name, "wsvec": ws.name, "centres": centres.name},
+                    }
+                ],
+            }
+        )
+    )
+    projector = np.diag([1, 0, 0]).tolist()
+    config = config_from_mapping(
+        {
+            "workflow": "harmonic_map",
+            "inputs": {"family_manifest": str(family_file)},
+            "parameters": {
+                "amplitudes": [1e4],
+                "ef": 7.0,
+                "interpolation": "standard",
+                "occupied_bands": 2,
+                "band_pair": [1, 2],
+                "plane": {"origin": [-0.11, 0.03, 0]},
+                "lattice": np.diag([7, 7, 7]).tolist(),
+                "layer_projector": projector,
+            },
+        }
+    )
+    family = load_finite_field_source(config)
+    children, _ = split_harmonic_map(config)
+    child = children[0]
+    assert child.parameters["interpolation"] == "ws_distance"
+    assert child.parameters["occupied_bands"] == 1
+    assert "ef" not in child.parameters and "band_pair" not in child.parameters
+    assert child.parameters["lattice"] == lattice
+    loaded = load_finite_field_source(child)
+    assert loaded.interpolation == "ws_distance"
+    assert loaded.fermi_energy == family.model(0).source_model.fermi_energy == 0
+
+    class CompletedStore:
+        @staticmethod
+        def completed(case):
+            return True
+
+    # Inspect the actual views used by both preparation paths without running
+    # the expensive response stage; these settings determine their Hamiltonians.
+    monkeypatch.setattr(PreparedHallResponse, "prepare", lambda self, **kwargs: self)
+    unsplit = _prepare(config, family.model(0), CompletedStore()).model
+    split = _prepare(child, loaded, CompletedStore()).model
+    assert split.band_pair() == unsplit.band_pair() == (0, 1)
+    assert split.plane.describe() == unsplit.plane.describe()
+    np.testing.assert_array_equal(split.layer_projector(), projector)
+    np.testing.assert_array_equal(unsplit.layer_projector(), projector)
+    np.testing.assert_array_equal(split.lattice, unsplit.lattice)
+    points = np.array([0.01, -0.03, 0.07])
+    np.testing.assert_array_equal(split.hamiltonian(points, 0.02), unsplit.hamiltonian(points, 0.02))
+    from queer import finite_field
+
+    original_scan = finite_field.crossing_scan
+    crossing_views = []
+
+    def inspect_scan(model, offsets, **kwargs):
+        crossing_views.append(PreparedHallResponse(model, **kwargs).model)
+        return original_scan(model, offsets, **kwargs)
+
+    class FreshStore:
+        @staticmethod
+        def completed(case):
+            return False
+
+        @staticmethod
+        def commit(case, arrays, *, metadata=None):
+            pass
+
+    monkeypatch.setattr(finite_field, "crossing_scan", inspect_scan)
+    _crossing_map(config, family, FreshStore())
+    assert len(crossing_views) == 1
+    assert crossing_views[0].band_pair() == unsplit.band_pair()
+    assert crossing_views[0].plane.describe() == unsplit.plane.describe()
+    np.testing.assert_array_equal(crossing_views[0].layer_projector(), projector)
+    # The fixture distinguishes corrected interpolation from ordinary HR sums.
+    standard = WannierModel.from_directory(tmp_path, hr=hr.name, centres=centres.name)
+    fractional = np.array([[0.07, 0, 0], [0.13, 0, 0]])
+    assert not np.allclose(standard.energies(fractional), loaded.energies(fractional))
+
+
 def test_geometry_grid_roundtrip_render_and_export_need_no_source(tmp_path):
     config = config_from_mapping(
         {

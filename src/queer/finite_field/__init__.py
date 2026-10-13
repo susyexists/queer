@@ -1,6 +1,6 @@
 """Native nonperturbative quantum-geometry Hall response and analysis.
 
-Corrected physical settings are the default; paper profiles are explicit.
+HHH's paper settings are the default; physical corrections are explicit profiles.
 """
 
 from .api import (

@@ -15,16 +15,36 @@ uv sync --locked --extra precision --extra plot
 .venv/bin/queer hall_harmonics --config configs/examples/finite_field_harmonics.toml
 ```
 
-The default profile is `physical`: physical electron charge, covariant
-conduction-minus-valence curvature, validated DDP exponents, and geometric,
-Stokes, and twisted Landau–Zener phases. `paper` and `paper_figures` are explicit
-reproduction profiles. `physical_eq8` keeps the physical charge, curvature, and
+The default profile is `paper`, matching HHH: conduction-band curvature,
+band-pair Eq8 metric exponents, gap-minimum crossings, positive paper charge
+direction, an e²/h prefactor, and T1=T2=2 ps. `paper_figures` applies the
+figure scale 1/(4π) once. Select `physical` explicitly for physical electron
+charge, conduction-minus-valence curvature, DDP exponents, and geometric,
+Stokes, and twisted Landau–Zener corrections. `physical_eq8` keeps the physical charge, curvature, and
 current normalization, explicitly selects gap-minimum crossings and Eq8 metric
 exponents, and disables geometric, Stokes, and twisted Landau–Zener phase
 corrections. Every response output records the resolved conventions,
 relaxation settings, crossing policy, quadrature, field range, and engine source
-hash. A requested feature with insufficient model information raises a capability
-error; selecting another profile is an explicit scientific choice.
+hash. HHH's fitted DDP and Eq8 fallback exponents retain their source and
+validity flags; an unavailable diabatic projector falls back to gap minima
+with `diabatic_unavailable`. Wavefunction phases still require wavefunctions,
+and unsupported generalized-model operations raise capability errors.
+
+Berry curvature uses Ω = −2 Im⟨∂ₓu|∂ᵧu⟩ throughout. The Hall convention is
+σ_xy=C e²/h, so `hall_chern(flux)` returns −flux for flux normalized by 2π.
+The Fourier outputs obey `c=(a-i*b)/2`; a signed sine coefficient is distinct
+from the magnitude of its complex coefficient.
+
+The general `queer.observables.chern_number` API reports the geometric
+number `C_geo=∫Ω/(2π)`. Convert it with `hall_chern(C_geo)` when comparing
+HHH's Hall number. Both APIs use the same Berry curvature; equilibrium Hall
+conductivity already uses σ_xy=−C_geo e²/h=C_H e²/h.
+
+Critical diagnostics report the conduction strength `C_s` and manuscript
+strength `C_paper=-C_s`. `transport.critical.c_from_harmonic` defaults to the
+printed large-order constant; `finite_N=True` selects the exact finite-order
+factor. `c_from_slope` implements the fitted device-signal inversion without
+including its fitted intercept.
 
 Relaxation times use seconds. `parameters.relaxation.coherence="paper"` treats
 `T2` as pure dephasing, while `"bloch"` treats it as the total coherence time
@@ -108,8 +128,10 @@ sidecars enter the input checksum list, including auto-discovered files.
 Nonorthogonal OpenMX calculations retain `S(k)`, position operators, spin
 channels, and their derivatives. Complex continuation and near-critical patches
 require validated support; ordinary geometry does not imply support for these
-precision-sensitive operations. Layer-dependent models need a supplied
-covariant layer operator. Cross-family character tracking needs a validated
+precision-sensitive operations. Orthogonal Wannier models can derive a layer
+projector from their slab-unwrapped centres; an explicitly supplied projector
+takes precedence. Nonorthogonal models need a supplied covariant layer operator.
+Cross-family character tracking needs a validated
 orbital correspondence; nonorthogonal cross-model overlaps are not inferred
 from coefficient dot products.
 
@@ -130,6 +152,10 @@ half-width in Å⁻¹; this finite-window flux is not a whole-Brillouin-zone Che
 certificate. Geometry grids cannot supply these wavefunction-based validators.
 
 A geometry-grid NPZ contains model-frame tensor fields and JSON metadata.
+Polar sampling also stores optional Γ fields (`gamma_*`) and the independent
+Γ gap. Below the first radial node, quadratic interpolation in r² preserves
+the patched core. Older grids without Γ data use quadratic extrapolation with
+a cubic consistency certificate and an unresolved-core flag when necessary.
 Interpolation uses gap², curvature × gap³, and metric × gap⁴. Polar grids are
 periodic in angle; extrapolation and outside-domain samples have flags.
 Unresolved nonpositive interpolated gap² fails with a refinement message.

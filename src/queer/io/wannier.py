@@ -5,15 +5,17 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from itertools import islice
 from pathlib import Path
 
 import numpy as np
 
 from ..geometry.lattice import validated_lattice
-from .wannier_ws import ComputedWignerSeitzShifts
+from .wannier_ws import ComputedWignerSeitzShifts, PackedWignerSeitzShifts
 from .wannier_ws import recompute_wsvec as recompute_wsvec
 
 BOHR_ANGSTROM = 0.529177210903
+_FLOAT_TOKEN = r"[+\-]?(?:(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+\-]?[0-9]+)?|inf(?:inity)?|nan)"
 
 
 @dataclass(frozen=True)
@@ -92,6 +94,25 @@ def _integer(token: str, context: str) -> int:
         raise ValueError(f"{context}: expected an integer, got {token!r}") from error
 
 
+def _integer_tokens(body, context):
+    """Strict bulk integer conversion, avoiding numpy's permissive edge cases."""
+    if isinstance(body, str):
+        try:
+            body = body.encode("ascii")
+        except UnicodeEncodeError as error:
+            raise ValueError(f"{context}: expected integer data") from error
+    if re.search(rb"[^0-9+\-\s]|(?<=[0-9])[+\-]|[+\-](?![0-9])", body):
+        raise ValueError(f"{context}: expected integer data")
+    for token in re.findall(rb"[+\-]?[0-9]{19,}", body):
+        value = int(token)
+        if not np.iinfo(np.int64).min <= value <= np.iinfo(np.int64).max:
+            raise ValueError(f"{context}: integer outside int64 range")
+    try:
+        return np.fromstring(body.decode("ascii"), dtype=np.int64, sep=" ")
+    except ValueError as error:
+        raise ValueError(f"{context}: expected integer data") from error
+
+
 def read_hr(path: str | Path) -> WannierData:
     """Read by explicit orbital indices, preserving the HR degeneracy block."""
     source = Path(path)
@@ -105,8 +126,10 @@ def read_hr(path: str | Path) -> WannierData:
         if nbnd < 1 or nrpts < 1:
             raise ValueError(f"{source}: band and translation counts must be positive")
         degeneracies: list[int] = []
+        line_number = 3
         while len(degeneracies) < nrpts:
             line = stream.readline()
+            line_number += 1
             if not line:
                 raise ValueError(f"{source}: truncated HR degeneracy block")
             degeneracies.extend(_integer(value, str(source)) for value in line.split())
@@ -118,37 +141,52 @@ def read_hr(path: str | Path) -> WannierData:
         seen = np.zeros((nrpts, nbnd, nbnd), dtype=bool)
         lookup = {}
         rows = 0
-        for line_number, line in enumerate(stream, start=4 + int(np.ceil(nrpts / 15))):
-            if not line.strip():
-                continue
-            fields = line.split()
-            context = f"{source}:{line_number}"
-            if len(fields) != 7:
+        while lines := list(islice(stream, 32768)):
+            fields = [line.split() for line in lines if line.strip()]
+            context = f"{source}:{line_number + 1}"
+            if any(len(row) != 7 for row in fields):
                 raise ValueError(f"{context}: expected R1 R2 R3 m n real imaginary")
-            translation = tuple(_integer(value, context) for value in fields[:3])
-            m, n = (_integer(value, context) - 1 for value in fields[3:5])
-            if not 0 <= m < nbnd or not 0 <= n < nbnd:
-                raise ValueError(f"{context}: orbital index outside 1..{nbnd}")
-            if translation not in lookup:
-                if len(translations) >= nrpts:
-                    raise ValueError(f"{context}: too many distinct lattice translations")
-                lookup[translation] = len(translations)
-                translations.append(translation)
-            index = lookup[translation]
-            if seen[index, m, n]:
-                raise ValueError(f"{context}: duplicate translation/orbital entry")
+            line_number += len(lines)
+            if not fields:
+                continue
+            integers = _integer_tokens(" ".join(" ".join(row[:5]) for row in fields), context).reshape(-1, 5)
+            number_text = " ".join(" ".join(row[5:]) for row in fields).replace("D", "E").replace("d", "e")
+            if re.search(r"(?<!\S)(?!" + _FLOAT_TOKEN + r"(?=\s|$))\S+", number_text, re.IGNORECASE):
+                raise ValueError(f"{context}: invalid hopping matrix element")
             try:
-                value = complex(
-                    float(fields[5].replace("D", "E").replace("d", "e")),
-                    float(fields[6].replace("D", "E").replace("d", "e")),
-                )
+                numbers = np.fromstring(
+                    number_text,
+                    dtype=float,
+                    sep=" ",
+                ).reshape(-1, 2)
             except ValueError as error:
                 raise ValueError(f"{context}: invalid hopping matrix element") from error
-            if not np.isfinite(value):
+            if numbers.shape != (len(fields), 2):
+                raise ValueError(f"{context}: invalid hopping matrix element")
+            if not np.isfinite(numbers).all():
                 raise ValueError(f"{context}: nonfinite hopping matrix element")
-            hopping[index, m, n] = value
-            seen[index, m, n] = True
-            rows += 1
+            m, n = integers[:, 3] - 1, integers[:, 4] - 1
+            if np.any(m < 0) or np.any(m >= nbnd) or np.any(n < 0) or np.any(n >= nbnd):
+                raise ValueError(f"{context}: orbital index outside 1..{nbnd}")
+            vectors, first, inverse = np.unique(
+                integers[:, :3], axis=0, return_index=True, return_inverse=True
+            )
+            for item in np.argsort(first):
+                translation = tuple(vectors[item])
+                if translation not in lookup:
+                    if len(translations) >= nrpts:
+                        raise ValueError(f"{context}: too many distinct lattice translations")
+                    lookup[translation] = len(translations)
+                    translations.append(translation)
+            index = np.array([lookup[tuple(row)] for row in vectors], dtype=np.int64)[inverse]
+            flat = (index * nbnd + m) * nbnd + n
+            if len(np.unique(flat)) != len(flat) or np.any(seen.reshape(-1)[flat]):
+                raise ValueError(f"{context}: duplicate translation/orbital entry")
+            values = np.empty(len(fields), complex)
+            values.real, values.imag = numbers[:, 0], numbers[:, 1]
+            hopping.reshape(-1)[flat] = values
+            seen.reshape(-1)[flat] = True
+            rows += len(fields)
         if rows != nrpts * nbnd**2 or not seen.all():
             raise ValueError(f"{source}: incomplete HR matrix entries")
     arrays = (np.asarray(translations, dtype=np.int64), hopping, np.asarray(degeneracies, dtype=np.int64))
@@ -160,41 +198,66 @@ def read_hr(path: str | Path) -> WannierData:
 def read_wsvec(path: str | Path) -> WignerSeitzData:
     """Read integer superlattice shifts keyed by (R1,R2,R3,m,n)."""
     source = Path(path)
-    with source.open(encoding="utf-8") as stream:
-        header = stream.readline().lower()
+    entries, images = [], []
+    current, remaining = None, 0
+    line_offset = 1
+    with source.open("rb") as stream:
+        header = stream.readline().decode("utf-8").lower()
         match = re.search(r"use_ws_distance\s*=\s*\.?(true|false)\.?", header)
         if not match:
             raise ValueError(f"{source}: wsvec header must specify use_ws_distance")
         applied = re.search(r"write_ndegen_applied\s*=\s*\.?true\.?", header) is not None
-        lines = iter(
-            (line_number, line.strip()) for line_number, line in enumerate(stream, 2) if line.strip()
-        )
-        shifts = {}
-        for line_number, line in lines:
-            fields = line.split()
-            if len(fields) != 5:
-                raise ValueError(f"{source}:{line_number}: expected R1 R2 R3 m n")
-            r1, r2, r3, m, n = (_integer(value, str(source)) for value in fields)
-            key = (r1, r2, r3, m, n)
-            if key in shifts:
-                raise ValueError(f"{source}:{line_number}: duplicate wsvec entry")
-            try:
-                _, count_line = next(lines)
-                count = _integer(count_line, str(source))
-                if count < 1:
-                    raise ValueError(f"{source}: wsvec shift count must be positive")
-                entries = []
-                for _ in range(count):
-                    shift_number, shift_line = next(lines)
-                    values = shift_line.split()
-                    if len(values) != 3:
-                        raise ValueError(f"{source}:{shift_number}: expected three shift integers")
-                    entries.append([_integer(value, str(source)) for value in values])
-            except StopIteration as error:
-                raise ValueError(f"{source}: truncated wsvec entry") from error
-            if len(set(map(tuple, entries))) != count:
-                raise ValueError(f"{source}:{line_number}: duplicate equivalent shifts")
-            shifts[key] = np.asarray(entries, dtype=np.int64)
+        while lines := list(islice(stream, 65536)):
+            widths = np.fromiter((len(line.split()) for line in lines), dtype=np.int64)
+            active = np.flatnonzero(widths)
+            numbers = active + line_offset + 1
+            widths = widths[active]
+            body = b"".join(lines)
+            tokens = _integer_tokens(body, source)
+            records = np.empty((np.count_nonzero(widths == 5) + 1, 6), dtype=np.int64)
+            shifts = np.empty((np.count_nonzero(widths == 3), 3), dtype=np.int64)
+            row = token = record_count = shift_count = 0
+            while row < len(widths):
+                context = f"{source}:{numbers[row]}"
+                if remaining:
+                    count = min(remaining, len(widths) - row)
+                    if np.any(widths[row : row + count] != 3):
+                        raise ValueError(f"{context}: expected three shift integers")
+                    shifts[shift_count : shift_count + count] = tokens[token : token + 3 * count].reshape(
+                        -1, 3
+                    )
+                    shift_count += count
+                    token += 3 * count
+                    row += count
+                    remaining -= count
+                elif current is None:
+                    if widths[row] != 5:
+                        raise ValueError(f"{context}: expected R1 R2 R3 m n")
+                    current = tokens[token : token + 5].copy()
+                    row += 1
+                    token += 5
+                else:
+                    if widths[row] != 1:
+                        raise ValueError(f"{context}: expected one shift count integer")
+                    remaining = int(tokens[token])
+                    if remaining < 1:
+                        raise ValueError(f"{context}: wsvec shift count must be positive")
+                    records[record_count, :5] = current
+                    records[record_count, 5] = remaining
+                    record_count += 1
+                    current = None
+                    row += 1
+                    token += 1
+            entries.append(records[:record_count].copy())
+            images.append(shifts[:shift_count].copy())
+            line_offset += len(lines)
+    if current is not None or remaining:
+        raise ValueError(f"{source}: truncated wsvec entry")
+    entry_array = np.concatenate(entries) if entries else np.empty((0, 6), np.int64)
+    entries.clear()
+    image_array = np.concatenate(images) if images else np.empty((0, 3), np.int64)
+    images.clear()
+    shifts = PackedWignerSeitzShifts(entry_array, image_array, source=source)
     return WignerSeitzData(shifts, match.group(1) == "true", applied)
 
 
@@ -374,6 +437,16 @@ def normalized_operators(
     if data.position is None:
         translations, hopping = normalized_hopping(data, mode, wsvec)
         return translations, hopping, None
+    if mode == "ws_distance" and wsvec is not None:
+        if not wsvec.use_ws_distance or wsvec.ndegen_applied:
+            raise ValueError("ws_distance interpolation requires unapplied enabled wsvec shifts")
+        if isinstance(wsvec.shifts, ComputedWignerSeitzShifts):
+            translations, hopping = wsvec.shifts.normalized_matrices(data, data.hopping)
+            _, position = wsvec.shifts.normalized_matrices(data, data.position)
+            return translations, hopping, position
+        shifts = PackedWignerSeitzShifts.from_mapping(wsvec.shifts)
+        translations, operators = shifts.normalized_operator_arrays(data, (data.hopping, data.position))
+        return translations, operators[0], operators[1]
     joined = np.concatenate((data.hopping[..., None], data.position), axis=-1)
     translations, operators = _normalized_matrix(data, joined, mode, wsvec)
     return translations, operators[..., 0], operators[..., 1:]
@@ -393,26 +466,6 @@ def _normalized_matrix(data, matrices, mode, wsvec):
         raise ValueError("ws_distance interpolation requires a matching enabled wsvec file")
     if wsvec.ndegen_applied:
         raise ValueError("wsvec shifts have already been applied; select ndegen_applied")
-    if isinstance(wsvec.shifts, ComputedWignerSeitzShifts):
+    if isinstance(wsvec.shifts, (ComputedWignerSeitzShifts, PackedWignerSeitzShifts)):
         return wsvec.shifts.normalized_matrices(data, matrices)
-    expected = {
-        (*map(int, translation), m + 1, n + 1)
-        for translation in data.translations
-        for m in range(data.nbnd)
-        for n in range(data.nbnd)
-    }
-    if set(wsvec.shifts) != expected:
-        raise ValueError("wsvec translation/orbital keys do not match the HR file")
-    expanded = {}
-    for index, translation in enumerate(data.translations):
-        for m in range(data.nbnd):
-            for n in range(data.nbnd):
-                shifts = wsvec.shifts[(*map(int, translation), m + 1, n + 1)]
-                value = matrices[index, m, n] / (data.degeneracies[index] * len(shifts))
-                for shift in shifts:
-                    key = tuple(map(int, translation + shift))
-                    if key not in expanded:
-                        expanded[key] = np.zeros(matrices.shape[1:], dtype=np.complex128)
-                    expanded[key][m, n] += value
-    keys = sorted(expanded)
-    return np.asarray(keys, dtype=np.int64), np.asarray([expanded[key] for key in keys])
+    return PackedWignerSeitzShifts.from_mapping(wsvec.shifts).normalized_matrices(data, matrices)

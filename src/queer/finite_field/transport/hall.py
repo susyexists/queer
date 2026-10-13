@@ -10,20 +10,29 @@ explicitly mirrored path; oddness is never assumed.
 
 Twisted (nonreciprocal) LZ, PHYSICAL only. Motion d = +-1 along s through an isolated crossing gives
 ln P_d = -E_c/|E| - d tau at low field, tau = (pi/2) R_s Im k_c (transport/lines.py); the Houston TDSE
-confirms ln(P_+/P_-) -> -2 tau within 2-11% for VL/VLc <= 1. The factor multiplies the transition
+confirms ln(P_+/P_-) -> -2 tau within 2-15% for VL/VLc <= 1. The factor multiplies the transition
 amplitude of the whole line, so it is applied to the populations rho^{(j)} after the sequential
 propagation, with the line-mean tau (crossing-to-crossing differences of tau enter the individual P_j):
   suppressed direction (d tau >= 0):  rho e^{-d tau};
-  enhanced direction (d tau < 0):     odds form rho'/(1 - rho') = e^{min(|tau|, 1)} rho/(1 - rho).
-The enhancement is capped at e: beyond |tau| ~ 1 the TDSE enhancement falls well below e^{|tau|}
-already at E ~ 0.15 E_c, while the suppression follows e^{-|tau|} (lines with |tau| > 1 are flagged
-'twisted_lz_strong'). Against the TDSE (four-band, 40 lines x 2 directions, VL/VLc = 0.5-1.8, T = inf)
-the line RMS is 0.064 with this term and 0.102 without it; twisting each P_j of a crossing pair
-instead (or clipping ln P at 0, as before) gives 0.11-0.15 and makes pair populations collapse.
+  enhanced direction (d tau < 0):     odds form rho'/(1 - rho') = e^{a} rho/(1 - rho),
+                                      a = |tau| / (1 + (|tau|/1.35)^8).
+The enhancement keeps its low-field value for small |tau| (1.5% below it at |tau| = 0.8) and fades out
+smoothly beyond |tau| ~ 1.3: on strongly twisted lines (flag 'twisted_lz_strong', |tau| > 1) the TDSE
+enhancement falls far below e^{|tau|} already at E ~ 0.15 E_c (outer lines saturate at the sudden-limit
+overlap), while the suppression follows e^{-|tau|}. The window is smooth so the t-integrand has no kinks.
+Against the TDSE (four-band, 61 lines x 2 directions, VL/VLc = 0.5-2, E = 1e3-5e4 V/m, T = inf) the line
+RMS is 0.056 with this term and 0.109 without it (|tau| <= 1: 0.050 vs 0.127; strong lines: suppressed
+direction 0.014, enhanced 0.082 vs 0.100). Twisting each P_j of a crossing pair instead, or clipping
+ln P at 0 as before, makes pair populations collapse.
 
 Geometry stage (`prepare`): transverse extent t_max (beyond it E_c > p_cut * E_max), tangency
 breakpoints where the number of crossings changes (the integrand jumps there), logistic t-nodes,
 per-line solutions (lines.py). Response stage (`J`): vectorized over E.
+
+prepare(n_workers > 1) runs the layout scan in parallel when the provider is light to ship: the probe lines of
+both sides at once, then p-section rounds reaching the serial bisection bracket widths. Lines are solved one
+per task. Native worker views share read-only model arrays through joblib and omit raw input records and
+factorization caches. Execution budgets and parent-owned checkpoint callbacks apply to both stages.
 """
 
 from __future__ import annotations
@@ -34,7 +43,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .._multiplicity import validated_spin_degeneracy
-from ..config import PHYSICAL, RunConfig
+from ..config import PAPER, RunConfig
 from ..geometry.provider import ModelGeometry
 from ..lz.crossings import find_crossings
 from ..units import hall_prefactor, kappa
@@ -46,6 +55,7 @@ from .tables import LambdaGrid, eval_tables
 # logistic panels are then resolved far below the quadrature tolerance (quadrature.py)
 _DMIN_PER_LAMBDA = 1e-5
 _NO_CLUSTER = 0.05  # outer t-panel ends at t_max (integrand ~ exp(-p_cut)): no clustering needed
+_TWIST_WINDOW = 1.35
 
 
 @dataclass
@@ -97,13 +107,14 @@ def _make_group(lines: list, weights) -> _Group:
 def twisted_probability(P: np.ndarray, d_tau: np.ndarray) -> np.ndarray:
     """Twisted-LZ transform of a population P for motion d with exponent tau (module docstring).
 
-    d tau >= 0: P e^{-d tau};  d tau < 0: odds form with the factor e^{min(|tau|, 1)}.
-    Low-field limit P e^{-d tau} for |tau| <= 1; the result stays in [0, 1].
+    d tau >= 0: P e^{-d tau};  d tau < 0: odds form with the factor e^a, a = |tau| / (1 + (|tau|/1.35)^8).
+    Low-field limit P e^{-d tau} for small |tau|; the result stays in [0, 1].
     """
     P, d_tau = np.broadcast_arrays(np.asarray(P, dtype=float), np.asarray(d_tau, dtype=float))
     with np.errstate(over="ignore", invalid="ignore"):
         sup = P * np.exp(-np.maximum(d_tau, 0.0))
-        f = np.exp(np.minimum(-np.minimum(d_tau, 0.0), 1.0))  # in [1, e]
+        m = -np.minimum(d_tau, 0.0)
+        f = np.exp(m / (1.0 + (m / _TWIST_WINDOW) ** 8))  # smooth window, maximum e^{1.27}
         enh = P * f / (1.0 - P + P * f)
     return np.where(d_tau >= 0, sup, enh)
 
@@ -145,7 +156,7 @@ class HallCalculator:
     def __init__(
         self,
         model=None,
-        cfg: RunConfig = PHYSICAL,
+        cfg: RunConfig = PAPER,
         *,
         provider=None,
         keep_nodes: bool = False,
@@ -204,21 +215,16 @@ class HallCalculator:
                 raise CapabilityError(f"The geometry grid does not contain requested metric {metric}")
         model = getattr(self.provider, "source_model", getattr(self.provider, "model", None))
         if c.conventions.ec_method == "ddp" or c.crossings.definition == "branch_point":
-            if model is None or not getattr(model, "complex_k", False):
+            if model is not None and not getattr(model, "complex_k", False):
                 raise CapabilityError(
                     "Branch-point/DDP response requires a raw analytic complex-k Hamiltonian; "
-                    "select an explicit Eq8/gap-minima profile for this model or grid"
+                    "select an explicit Eq8/gap-minima profile for this model"
                 )
         if c.phase.geometric or c.phase.twisted_lz:
             if model is None or not getattr(model, "supports_wavefunction_phases", True):
                 raise CapabilityError(
                     "Geometric and twisted-LZ phases require certified physical wavefunction links"
                 )
-        if c.crossings.definition == "diabatic":
-            if model is None or not (
-                hasattr(model, "layer_projector") or hasattr(getattr(model, "p", None), "k_diabatic")
-            ):
-                raise CapabilityError("Diabatic crossings require an explicit layer/subspace projector")
         if c.crossings.mode != "per_line":
             raise CapabilityError(
                 "Global crossing substitution has no validated native formulation; use per_line"
@@ -263,14 +269,32 @@ class HallCalculator:
         return selection_rules(self.certificate, angle, wavefunction_phases=wf)
 
     # ------------------------------------------------------------------ transverse layout
-    def _line_summary(self, t: float):
+    def _line_summary(self, t: float, structure: bool = True):
+        """(structure, smallest exponent): structure changes mark the transverse breakpoints. It is the
+        number of crossings and, for branch-point crossings (whose number rarely changes), also the number
+        of gap minima: the line geometry changes at the ring tangency either way. structure=False skips
+        the gap-minimum count (the t_max search needs only the exponent)."""
         cfg = self.cfg
         ddp = cfg.conventions.ec_method == "ddp"
         lc = find_crossings(
             self.provider, t, cfg.crossings, want_ddp=ddp, e_cut=cfg.quadrature.p_cut * cfg.drive.E_max
         )
         ec = lc.Ec(cfg.conventions.metric, "ddp" if ddp else "eq8")
-        return lc.n, (float(np.nanmin(ec)) if ec.size else math.inf)
+        key = lc.n
+        if structure and cfg.crossings.definition == "branch_point":
+            key = (lc.n, len(self._minima_cached(t)))
+        return key, (float(np.nanmin(ec)) if ec.size else math.inf)
+
+    def _minima_cached(self, t: float):
+        """Gap minima of the line at t, memoized for the layout scan (the generic branch-point search runs
+        the same scan; with isotropic models it is the cheap radial path)."""
+        cache = self.__dict__.setdefault("_minima_memo", {})
+        key = float(t)
+        if key not in cache:
+            from ..lz.crossings import _minima
+
+            cache[key] = _minima(self.provider, key, self.cfg.crossings)[0]
+        return cache[key]
 
     def _scan_side(self, sign: int):
         pol, q, drive = self.cfg.crossings, self.cfg.quadrature, self.cfg.drive
@@ -278,14 +302,17 @@ class HallCalculator:
         thresh = q.p_cut * drive.E_max
         mags = np.geomspace(1e-7 * W, W, self.t_scan)
         summ = [self._line_summary(sign * m) for m in mags]
-        n = np.array([a for a, _ in summ])
+        n = [a for a, _ in summ]
         ec = np.array([b for _, b in summ])
         flags = set()
         below = np.where(ec <= thresh)[0]
         if q.t_max is not None:
             t_max = float(q.t_max)
         elif below.size == 0:
+            # every scanned line has E_c > p_cut * E_max (or no crossing): J <= exp(-p_cut) of its scale, typically
+            # exactly 0 after underflow; keep the strip |t| < 1e-7 W around Gamma and say so
             t_max = float(mags[0])
+            flags.add("no_tunnelling")
         elif below[-1] == mags.size - 1:
             t_max = W
             flags.add("t_window_limited")
@@ -293,7 +320,7 @@ class HallCalculator:
             lo, hi = mags[below[-1]], mags[below[-1] + 1]
             for _ in range(40):
                 mid = math.sqrt(lo * hi)
-                if self._line_summary(sign * mid)[1] <= thresh:
+                if self._line_summary(sign * mid, structure=False)[1] <= thresh:
                     lo = mid
                 else:
                     hi = mid
@@ -313,16 +340,123 @@ class HallCalculator:
                         hi = mid
                     if hi - lo < 1e-13 * W:
                         break
-                tangency.append(0.5 * (lo + hi))
+                tb = 0.5 * (lo + hi)
+                if tb < t_max * (1.0 - 1e-6):  # crossings cut by e_cut vanish at t_max itself: no extra panel
+                    tangency.append(tb)
         return t_max, tangency, flags
+
+    def _scan_sides_parallel(self, signs, session, n_workers: int, provider=None) -> dict:
+        """_scan_side for every sign at once on a process pool: the probe lines in one round, then p-section rounds
+        for t_max (geometric, to the bracket ratio of the 40 serial bisections) and for each tangency (linear, to
+        1e-13 W or the width of the 60 serial bisections)."""
+        pol, q, drive = self.cfg.crossings, self.cfg.quadrature, self.cfg.drive
+        W = pol.window
+        thresh = q.p_cut * drive.E_max
+        mags = np.geomspace(1e-7 * W, W, self.t_scan)
+
+        def run(points):  # [(sign, |t|, structure)] -> [(structure key, smallest exponent)]
+            from joblib import delayed
+
+            worker_provider = self.provider if provider is None else provider
+            return list(
+                session.parallel()(
+                    delayed(_summary_task)((worker_provider, self.cfg, sg * m, st)) for sg, m, st in points
+                )
+            )
+
+        res = run([(sg, m, True) for sg in signs for m in mags])
+        out, tmax_br = {}, {}
+        for i, sg in enumerate(signs):
+            part = res[i * mags.size : (i + 1) * mags.size]
+            n, ec = [a for a, _ in part], np.array([b for _, b in part])
+            flags, t_max = set(), None
+            below = np.where(ec <= thresh)[0]
+            if q.t_max is not None:
+                t_max = float(q.t_max)
+            elif below.size == 0:
+                t_max = float(mags[0])
+                flags.add("no_tunnelling")
+            elif below[-1] == mags.size - 1:
+                t_max = W
+                flags.add("t_window_limited")
+            else:
+                lo, hi = mags[below[-1]], mags[below[-1] + 1]
+                tmax_br[sg] = [lo, hi, math.log(hi / lo) / 2.0**40]
+            out[sg] = {"n": n, "t_max": t_max, "flags": flags, "tangency": []}
+        while tmax_br:  # p-section of the threshold crossing in log t
+            p = max(2, n_workers // len(tmax_br))
+            pts, owners = [], []
+            for sg, (lo, hi, _) in tmax_br.items():
+                xs = lo * (hi / lo) ** (np.arange(1, p + 1) / (p + 1))
+                owners.append((sg, xs, len(pts)))
+                pts += [(sg, x, False) for x in xs]
+            res = run(pts)
+            for sg, xs, i0 in owners:
+                lo, hi, target = tmax_br[sg]
+                ok = np.where(np.array([r[1] for r in res[i0 : i0 + xs.size]]) <= thresh)[0]
+                if ok.size == 0:
+                    hi = xs[0]
+                elif ok[-1] == xs.size - 1:
+                    lo = xs[-1]
+                else:
+                    lo, hi = xs[ok[-1]], xs[ok[-1] + 1]
+                if math.log(hi / lo) <= target:
+                    out[sg]["t_max"] = float(hi)
+                    del tmax_br[sg]
+                else:
+                    tmax_br[sg] = [lo, hi, target]
+        tang = []  # [sign, lo, hi, key below, stop width]
+        for sg in signs:
+            n, t_max = out[sg]["n"], out[sg]["t_max"]
+            for i in range(mags.size - 1):
+                if mags[i] >= t_max:
+                    break
+                if n[i] != n[i + 1]:
+                    lo, hi = mags[i], min(mags[i + 1], t_max)
+                    tang.append([sg, lo, hi, n[i], max(1e-13 * W, (hi - lo) / 2.0**60)])
+        while (
+            tang
+        ):  # p-section of the structure change (first point whose structure differs from the low end)
+            p = max(2, n_workers // len(tang))
+            pts, owners = [], []
+            for b in tang:
+                xs = b[1] + (b[2] - b[1]) * np.arange(1, p + 1) / (p + 1)
+                owners.append((b, xs, len(pts)))
+                pts += [(b[0], x, True) for x in xs]
+            res = run(pts)
+            left = []
+            for b, xs, i0 in owners:
+                keys = [r[0] for r in res[i0 : i0 + xs.size]]
+                diff = [j for j, k in enumerate(keys) if k != b[3]]
+                if diff:
+                    j = diff[0]
+                    b[1], b[2] = (xs[j - 1] if j > 0 else b[1]), xs[j]
+                else:
+                    b[1] = xs[-1]
+                if b[2] - b[1] < b[4]:
+                    tb = 0.5 * (b[1] + b[2])
+                    if tb < out[b[0]]["t_max"] * (1.0 - 1e-6):  # as _scan_side
+                        out[b[0]]["tangency"].append(tb)
+                else:
+                    left.append(b)
+            tang = left
+        return {sg: (out[sg]["t_max"], sorted(out[sg]["tangency"]), out[sg]["flags"]) for sg in signs}
 
     def _t_mirror_certified(self) -> bool:
         return bool(self.selection_rules()["t_mirror"])
 
-    def transverse_layout(self) -> TransverseLayout:
+    def transverse_layout(self, session=None, n_workers: int = 1, worker_provider=None) -> TransverseLayout:
         q = self.cfg.quadrature
         mirrored = self._t_mirror_certified()
-        tp, tang_p, flags = self._scan_side(+1)
+        if session is None:
+            tp, tang_p, flags = self._scan_side(+1)
+            negative = None
+        else:
+            sides = self._scan_sides_parallel(
+                (+1,) if mirrored else (+1, -1), session, n_workers, worker_provider
+            )
+            tp, tang_p, flags = sides[+1]
+            negative = None if mirrored else sides[-1]
         if mirrored:
             breaks = np.array([0.0, *tang_p, tp])
             # no clustering at t_max: the integrand is ~exp(-p_cut) there
@@ -330,7 +464,7 @@ class HallCalculator:
                 breaks, q.du, q.dmin, d_outer=(q.dmin, _NO_CLUSTER * (breaks[-1] - breaks[-2]))
             )
             return TransverseLayout(x, 2.0 * w, breaks, (tp, tp), True, flags)
-        tn, tang_n, flags_n = self._scan_side(-1)
+        tn, tang_n, flags_n = self._scan_side(-1) if negative is None else negative
         breaks = np.array(sorted({-tn, *[-x for x in tang_n], 0.0, *tang_p, tp}))
         x, w, _ = composite_nodes(
             breaks,
@@ -361,36 +495,51 @@ class HallCalculator:
             self.provider.mem_bytes = min(256e6, options.memory_mb * 1024**2 * 0.8 / options.workers)
             if hasattr(self.provider.patch, "mem_bytes"):
                 self.provider.patch.mem_bytes = self.provider.mem_bytes
-        self.layout = load_layout() if load_layout is not None else None
-        if self.layout is None:
-            with threadpool_limits(limits=options.native_threads):
-                self.layout = self.transverse_layout()
-        if save_layout is not None:
-            save_layout(self.layout)
-        ts = [float(t) for t in self.layout.t_nodes]
-        self.lines = [load_line(i, t) if load_line is not None else None for i, t in enumerate(ts)]
-        missing = [(i, t) for i, t in enumerate(ts) if self.lines[i] is None]
-        batch = options.bounded_batch_size(
-            max(16 * self.provider.model.n_orb**2 * 12, 1024)
-            if getattr(self.provider, "model", None) is not None
-            else 1024
+        worker_provider = _worker_provider(self.provider) if options.workers > 1 else self.provider
+        light = options.workers > 1 and (
+            worker_provider is not self.provider or _light_to_ship(worker_provider)
         )
         with execution_session(options) as session, threadpool_limits(limits=options.native_threads):
+            self.layout = load_layout() if load_layout is not None else None
+            if self.layout is None:
+                self.layout = self.transverse_layout(
+                    session=session if light else None,
+                    n_workers=options.workers,
+                    worker_provider=worker_provider,
+                )
+            if save_layout is not None:
+                save_layout(self.layout)
+            ts = [float(t) for t in self.layout.t_nodes]
+            self.lines = [load_line(i, t) if load_line is not None else None for i, t in enumerate(ts)]
+            missing = [(i, t) for i, t in enumerate(ts) if self.lines[i] is None]
+            batch = options.bounded_batch_size(
+                max(16 * self.provider.model.n_orb**2 * 12, 1024)
+                if getattr(self.provider, "model", None) is not None
+                else 1024
+            )
             if options.workers > 1 and missing:
+                batch = 1 if light else min(batch, max(1, math.ceil(len(missing) / (4 * options.workers))))
                 tasks = [missing[i : i + batch] for i in range(0, len(missing), batch)]
-                for start in range(0, len(tasks), options.workers):
-                    window = tasks[start : start + options.workers]
+                if light:
+                    results = session.parallel()(
+                        delayed(_solve_line_task)(
+                            (worker_provider, items[0][1], self.cfg, self.grid, self.keep_nodes)
+                        )
+                        for items in tasks
+                    )
+                    results = ([line] for line in results)
+                else:
                     results = session.parallel()(
                         delayed(_solve_lines_task)(
-                            (self.provider, [t for _, t in items], self.cfg, self.grid, self.keep_nodes)
+                            (worker_provider, [t for _, t in items], self.cfg, self.grid, self.keep_nodes)
                         )
-                        for items in window
+                        for items in tasks
                     )
-                    for items, solved in zip(window, results):
-                        for (index, t), line in zip(items, solved):
-                            self.lines[index] = line
-                            if save_line is not None:
-                                save_line(index, t, line)
+                for items, solved in zip(tasks, results):
+                    for (index, t), line in zip(items, solved):
+                        self.lines[index] = line
+                        if save_line is not None:
+                            save_line(index, t, line)
             else:
                 for index, t in missing:
                     line = solve_line(self.provider, t, self.cfg, self.grid, self.keep_nodes)
@@ -403,20 +552,14 @@ class HallCalculator:
     def _pack(self):
         key = self._ec_key
         if key == "ddp":
-            from ...capabilities import CapabilityError
-
-            substituted = [
-                (ln.t, c.ddp_source)
-                for ln in self.lines
-                for c in ln.crossings.crossings
-                if not c.touching and c.ddp_source not in {"exact", "model"}
+            unsupported = [
+                (line.t, crossing.ddp_source)
+                for line in self.lines
+                for crossing in line.crossings.crossings
+                if not crossing.touching and crossing.ddp_source not in {"exact", "model", "fit", "eq8"}
             ]
-            if substituted:
-                raise CapabilityError(
-                    "DDP requires a validated complex-k branch point for every crossing; "
-                    f"unavailable at offset {substituted[0][0]:.6g}. "
-                    "Select an explicit Eq8 profile to use the metric approximation."
-                )
+            if unsupported:
+                raise ValueError(f"unknown DDP source {unsupported[0][1]!r} at t = {unsupported[0][0]:.6g}")
         bad = [
             ln.t
             for ln in self.lines
@@ -540,27 +683,36 @@ class HallCalculator:
 
     def _check_fields(self, E: np.ndarray):
         E_max = self.cfg.drive.E_max
-        finite = E[np.isfinite(E)]
-        if finite.size and np.max(np.abs(finite)) > E_max * (1.0 + 1e-9):
+        num = E[~np.isnan(E)]
+        if num.size and np.max(np.abs(num)) > E_max * (1.0 + 1e-9):
             raise ValueError(
-                f"|E| = {np.max(np.abs(finite)):.6g} V/m exceeds drive.E_max = {E_max:.6g}: the transverse "
+                f"|E| = {np.max(np.abs(num)):.12g} V/m exceeds drive.E_max = {E_max:.12g}: the transverse "
                 "integration was truncated where E_c > p_cut * E_max (raise drive.E_max)"
             )
 
     def _check_interference(self, Ea: np.ndarray):
         """Flag fields at which the t-nodes under-resolve the interference term cos Phi(t).
 
-        The node density does not depend on E, while Phi = Int eps_g ds / (e|E|) grows as 1/|E|. Adjacent
-        lines (same group, same side of t = 0) whose phases differ by more than pi/2 set
-        'interference_under_resolved' if their interference amplitude 2 sqrt(P1 P2 (1-P1)(1-P2)) e^{-Gamma d}
-        exceeds 1e-3 of the largest injected population at that field.
+        The node density does not depend on E, while Phi = Int eps_g ds / (e|E|) grows as 1/|E|. For adjacent
+        lines (same group, same side of t = 0) whose phases differ by more than pi/2, the interference
+        contribution w * 2 sqrt(P1 P2 (1-P1)(1-P2)) e^{-Gamma d} |F| (F: the line's Berry-curvature integral
+        after the second crossing) is summed and compared with the total sum_lines w rho |F|; above 1e-3
+        the field sets 'interference_under_resolved'.
         """
         rel = self.cfg.relaxation
         key = self._ec_key
         if not any(g.n >= 2 for g in self._groups.values()):
             return
+        k1, k2 = kappa(Ea, rel.T1), kappa(Ea, rel.T2)
         with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
-            p_max = np.max([np.exp(-np.nanmin(g.Ec[key]) / Ea) for g in self._groups.values()], axis=0)
+            total = np.zeros(Ea.size)
+            for g in self._groups.values():
+                F = np.abs(g.F_inf[("c", 1)]) + np.abs(
+                    g.F_inf[("v", 1)]
+                )  # (L, n): scale of the line integrals
+                P = np.exp(-g.Ec[key][:, :, None] / Ea[None, None, :])
+                total += np.sum(g.w[:, None, None] * P * F[:, :, None], axis=(0, 1))
+            aliased = np.zeros(Ea.size)
             for g in self._groups.values():
                 if g.n < 2 or g.t.size < 2:
                     continue
@@ -572,15 +724,16 @@ class HallCalculator:
                     continue
                 Ec = g.Ec[key][order]
                 P1, P2 = (np.exp(-Ec[:, k, None] / Ea[None, :]) for k in (0, -1))
-                k1, k2 = kappa(Ea, rel.T1), kappa(Ea, rel.T2)
                 rate = d[:, None] / k2[None, :] + (
                     0.5 * d[:, None] / k1[None, :] if rel.coherence == "paper" else 0.0
                 )
                 amp = 2.0 * np.sqrt(P1 * P2 * (1 - P1) * (1 - P2)) * np.exp(-rate)
-                amp = np.maximum(amp[1:], amp[:-1])[same]
-                if np.any((dphi > 0.5 * math.pi) & (amp > 1e-3 * p_max[None, :])):
-                    self.response_flags.add("interference_under_resolved")
-                    return
+                F = (np.abs(g.F_inf[("c", 1)]) + np.abs(g.F_inf[("v", 1)]))[order, -1]
+                contrib = (g.w[order] * F)[:, None] * amp
+                pair = np.maximum(contrib[1:], contrib[:-1])[same]
+                aliased += np.sum(np.where(dphi > 0.5 * math.pi, pair, 0.0), axis=0)
+            if np.any(aliased > 1e-3 * total):
+                self.response_flags.add("interference_under_resolved")
 
     def J(self, E, chunk: int = 4096) -> np.ndarray:
         """J_H in A/m (times conventions.figure_scale) at fields E (V/m, any sign; NaN propagates).
@@ -684,13 +837,20 @@ class HallCalculator:
             "twisted_lz_strong",
             "ddp_invalid",
             "branch_point_missing",
+            "branch_point_unvalidated",
             "ddp_fallback_eq8",
             "diabatic_unavailable",
             "diabatic_ec_off_stationary",
             "too_many_crossings",
             "near_degenerate",
         }
-        numerical_names = {"phase_under_resolved", "shift_under_resolved", "outside_grid", "window_edge_min"}
+        numerical_names = {
+            "phase_under_resolved",
+            "shift_under_resolved",
+            "outside_grid",
+            "window_edge_min",
+            "branch_point_fit_poor",
+        }
         model_flags = {name: count for name, count in flags.items() if name in model_names}
         numerical_flags = {name: count for name, count in flags.items() if name in numerical_names}
         refinements = []
@@ -733,6 +893,60 @@ class HallCalculator:
             "patched": getattr(self.provider, "patch", None) is not None,
             "provider": prov,
         }
+
+
+def _light_to_ship(provider, limit: float = 64e6) -> bool:
+    """Whether the provider pickles small enough to send with every task."""
+    import pickle
+
+    return len(pickle.dumps(provider, protocol=pickle.HIGHEST_PROTOCOL)) <= limit
+
+
+def _worker_provider(provider):
+    """Strip native input records and caches while retaining the provider's physical operators."""
+    import copy
+
+    models = {}
+    worker = provider
+    for name in ("source_model", "model"):
+        model = getattr(provider, name, None)
+        if model is None or not hasattr(model, "light_worker_view"):
+            continue
+        if worker is provider:
+            worker = copy.copy(provider)
+        if id(model) not in models:
+            models[id(model)] = model.light_worker_view()
+        setattr(worker, name, models[id(model)])
+    patch = getattr(provider, "patch", None)
+    if worker is not provider and patch is not None:
+        worker.patch = copy.copy(patch)
+        model = getattr(patch, "_model", None)
+        if id(model) in models:
+            worker.patch._model = models[id(model)]
+        if hasattr(worker.patch, "_exp"):
+            worker.patch._exp = None
+    return worker
+
+
+def _solve_line_task(args):
+    provider, t, cfg, grid, keep = args
+    return solve_line(provider, t, cfg, grid, keep)
+
+
+def _summary_task(args):
+    """(structure key, smallest exponent) of one line: HallCalculator._line_summary for a worker process."""
+    provider, cfg, t, structure = args
+    ddp = cfg.conventions.ec_method == "ddp"
+    lc = find_crossings(
+        provider, t, cfg.crossings, want_ddp=ddp, e_cut=cfg.quadrature.p_cut * cfg.drive.E_max
+    )
+    ec = lc.Ec(cfg.conventions.metric, "ddp" if ddp else "eq8")
+    key = lc.n
+    if structure and cfg.crossings.definition == "branch_point":
+        from ..lz.crossings import _minima
+
+        key = (lc.n, len(_minima(provider, t, cfg.crossings)[0]))
+    return key, (float(np.nanmin(ec)) if ec.size else math.inf)
 
 
 def _solve_lines_task(args):

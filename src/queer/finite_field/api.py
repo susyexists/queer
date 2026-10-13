@@ -80,13 +80,10 @@ def _require_crossings(line, cfg):
             )
     if cfg.conventions.ec_method == "ddp":
         for crossing in line.crossings:
-            if not crossing.touching and crossing.ddp_source not in {"exact", "model"}:
+            if not crossing.touching and crossing.ddp_source not in {"exact", "model", "fit", "eq8"}:
                 raise CapabilityError(
-                    "DDP continuation did not validate this crossing; an explicit Eq8 "
-                    "profile is required to use the metric approximation"
+                    "DDP response requires a resolved exact, model, fitted, or flagged Eq8 exponent"
                 )
-    if cfg.crossings.definition == "diabatic" and "diabatic_unavailable" in line.flags:
-        raise CapabilityError("The supplied layer projector does not define the requested diabatic crossing")
 
 
 class PreparedHallResponse:

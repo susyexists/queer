@@ -4,7 +4,7 @@ workflow = "landau_zener_hall"
 model = "fourband"
 
 [parameters]
-preset = "physical"
+preset = "paper"
 fields = [-50000.0, -20000.0, 0.0, 20000.0, 50000.0]
 
 [parameters.model]

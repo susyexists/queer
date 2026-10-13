@@ -103,6 +103,8 @@ class _ExecutionSession:
                     return_as="generator",
                     pre_dispatch=self.options.workers,
                     batch_size=1,
+                    max_nbytes="1M",
+                    mmap_mode="r",
                 )
             )
         return self._parallel

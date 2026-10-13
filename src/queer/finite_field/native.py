@@ -6,6 +6,8 @@ fractional, and nonorthogonal geometry always uses the native covariant engine.
 
 from __future__ import annotations
 
+from contextlib import contextmanager, nullcontext
+from copy import copy
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -141,11 +143,20 @@ class NativePlaneModel:
             axes = np.vstack([self.plane._axes, self.plane.normal])
             self.R_cart = (model.translations @ self.lattice) @ axes.T
             phase = np.exp(2j * np.pi * (model.translations @ np.asarray(self.plane.origin)))
-            self.H_R = model.hopping_matrices * phase[:, None, None]
+            identity_origin = np.all(phase == 1)
+            self.H_R = (
+                model.hopping_matrices if identity_origin else model.hopping_matrices * phase[:, None, None]
+            )
+            self.H_R.setflags(write=False)
             self.centres = None if self.positions is None else np.asarray(self.positions) @ axes.T
             raw_position = getattr(model, "position_matrices", None)
             if raw_position is not None:
-                self.r_R = np.einsum("rija,ba->rijb", raw_position, axes) * phase[:, None, None, None]
+                self.r_R = (
+                    raw_position
+                    if identity_origin and np.array_equal(axes, np.eye(3))
+                    else np.einsum("rija,ba->rijb", raw_position, axes) * phase[:, None, None, None]
+                )
+                self.r_R.setflags(write=False)
                 self.gauge = "wysv"
             elif self.centres is not None:
                 self.r_R = np.zeros((*self.H_R.shape, 3), dtype=complex)
@@ -167,6 +178,35 @@ class NativePlaneModel:
 
     def band_pair(self):
         return self._pair
+
+    @contextmanager
+    def on_line(self, angle, t, *, mem_bytes=None):
+        """Factorize native Wannier operators in this view's oriented plane."""
+        on_line = getattr(self.source_model, "on_line", None)
+        if on_line is None:
+            with nullcontext():
+                yield self
+        else:
+            axes = self.plane.axes(angle)
+            origin = np.asarray(self.plane.origin) + float(t) * axes[1] @ np.linalg.inv(
+                reciprocal(self.source_model)
+            )
+            kwargs = {}
+            if mem_bytes is not None and hasattr(self.source_model, "_line_cache_limit"):
+                kwargs["cache_bytes"] = mem_bytes / 3
+            with on_line(axes[0], origin, **kwargs):
+                yield self
+
+    def light_worker_view(self):
+        """Private plain clone referencing the same immutable operator arrays."""
+        view = copy(self)
+        source = self.source_model
+        light = getattr(source, "light_worker_view", None)
+        if light is not None:
+            view.source_model = light()
+            if getattr(self._projector, "__self__", None) is source:
+                view._projector = getattr(view.source_model, self._projector.__name__)
+        return view
 
     def _points(self, kx, ky):
         kx, ky = np.broadcast_arrays(np.asarray(kx), np.asarray(ky))
@@ -196,24 +236,30 @@ class NativePlaneModel:
         x, y = self.dhamiltonian(kx, ky)
         return self.hamiltonian(kx, ky), x, y
 
-    def gap(self, kx, ky, bands=None):
+    def gap(self, kx, ky, bands=None, *, mem_bytes=256e6):
         if bands is not None and tuple(bands) != self._pair:
             raise ValueError("the plane view fixes its band pair at construction")
         points, shape = self._points(kx, ky)
         v, c = self._pair
         if hasattr(self.source_model, "hopping_matrices"):
             from ..execution import ExecutionOptions
-            from ..models.wannier import _assemble
 
             options = getattr(self.source_model, "execution", ExecutionOptions()).resolved()
-            batch = options.bounded_batch_size(16 * self.nbnd**2 * 6)
+            per_point = 16 * self.nbnd**2 * 6
+            cache_limit = getattr(self.source_model, "_line_cache_limit", None)
+            working_bytes = mem_bytes if cache_limit is None else max(0, mem_bytes - cache_limit)
+            batch = min(options.bounded_batch_size(per_point), max(1, int(working_bytes // per_point)))
             out = np.empty(len(points))
             for start in range(0, len(points), batch):
-                matrices, _ = _assemble(
-                    self.source_model.translations,
-                    self.source_model.hopping_matrices,
-                    points[start : start + batch],
-                )
+                chunk = points[start : start + batch]
+                if hasattr(self.source_model, "_assemble_points"):
+                    matrices, _ = self.source_model._assemble_points(chunk)
+                else:
+                    from ..models.wannier import _assemble
+
+                    matrices, _ = _assemble(
+                        self.source_model.translations, self.source_model.hopping_matrices, chunk
+                    )
                 reference = np.trace(matrices, axis1=-2, axis2=-1).real / self.nbnd
                 matrices -= reference[:, None, None] * np.eye(self.nbnd)
                 e = np.linalg.eigvalsh(matrices)
@@ -241,6 +287,8 @@ class NativePlaneModel:
     def geometry(self, kx, ky, angle=0.0, **kwargs):
         from .geometry.kubo import BandGeometry
 
+        if hasattr(self.source_model, "_fourier_values") and not self.supports_generalized:
+            return self._wannier_geometry(kx, ky, angle, **kwargs)
         points, shape = self._points(kx, ky)
         axes = self.plane.axes(angle)
         v, c = self._pair
@@ -290,6 +338,111 @@ class NativePlaneModel:
             for name in ("omega_v", "omega_c", "g_cv", "g_v_total", "g_c_total", "v_cv"):
                 a = getattr(result, name)
                 a[result.deg_flag] = np.nan
+        return result
+
+    def _wannier_geometry(self, kx, ky, angle, **kwargs):
+        """Bounded orthogonal covariant sums for the two requested bands.
+
+        The retained Wannier connection contributes both the interband metric
+        and its curl/commutator Berry terms. Projecting only the selected rows
+        avoids forming complete band-space connections and commutators.
+        """
+        from .geometry.kubo import BandGeometry
+
+        model = self.source_model
+        if kwargs.get("bands") is not None and tuple(kwargs["bands"]) != self._pair:
+            raise ValueError("the plane view fixes its band pair at construction")
+        engine = kwargs.get("engine", "direct")
+        if engine not in {"direct", "kubo"}:
+            raise ValueError("curvature engine must be 'direct' or 'kubo'")
+        points, shape = self._points(kx, ky)
+        axes = self.plane.axes(angle)
+        v, c = self._pair
+        selected = np.array([v, c])
+        n, count = self.nbnd, len(points)
+        budget = kwargs.get("mem_bytes", 256e6)
+        cache_limit = getattr(model, "_line_cache_limit", None)
+        if cache_limit is not None:
+            budget = max(0, budget - cache_limit)
+        options = model.execution.resolved()
+        batch = min(options.bounded_batch_size(16 * n**2 * 24), max(1, int(budget // (16 * n**2 * 24))))
+        values = [np.empty(count) for _ in range(4)]
+        metrics = [np.empty((count, 3)) for _ in range(3)]
+        velocity = np.empty((count, 2), complex)
+        degenerate = np.zeros(count, bool)
+        gap = np.empty(count)
+        all_energies = np.empty((count, n)) if kwargs.get("keep_eps", False) else None
+        self_mask = np.zeros((2, n), bool)
+        self_mask[0, v] = self_mask[1, c] = True
+        moments = [tuple(axis) for axis in axes]
+        for start in range(0, count, batch):
+            sl = slice(start, min(start + batch, count))
+            k = points[sl]
+            H, _ = model._assemble_points(k)
+            reference = np.trace(H, axis1=-2, axis2=-1).real / n
+            H -= reference[:, None, None] * np.eye(n)
+            energy, U = np.linalg.eigh(H)
+            Usel = U[:, :, selected]
+            UsH = Usel.conj().transpose(0, 2, 1)
+            delta = energy[:, selected, None] - energy[:, None, :]
+            gap[sl] = energy[:, c] - energy[:, v]
+            absolute = energy + reference[:, None]
+            values[0][sl], values[1][sl] = absolute[:, v], absolute[:, c]
+            if all_energies is not None:
+                all_energies[sl] = absolute
+            projected_h = [
+                (UsH @ model._fourier_values(k, model.hopping_matrices, "H", (moment,))) @ U
+                for moment in moments
+            ]
+            if model.position_matrices is None:
+                if model.centres is None:
+                    connections = [np.zeros_like(projected_h[0]) for _ in range(2)]
+                else:
+                    positions = np.asarray(model.centres) @ axes.T
+                    connections = [(UsH * positions[:, a]) @ U for a in range(2)]
+            else:
+                orbital_connections = [np.zeros((len(k), n, n), complex) for _ in axes]
+                for a in range(3):
+                    component, _ = model._assemble_points(k, model.position_matrices[..., a], ("r", a))
+                    for axis, orbital in zip(axes, orbital_connections, strict=True):
+                        orbital += axis[a] * component
+                connections = [(UsH @ orbital) @ U for orbital in orbital_connections]
+            covariant = [h + 1j * delta * a for h, a in zip(projected_h, connections, strict=True)]
+            separated = (np.abs(delta) > self.degeneracy_tol) & ~self_mask
+            inverse = np.zeros_like(delta)
+            np.divide(1.0, delta**2, out=inverse, where=separated)
+            cross = covariant[0] * covariant[1].conj()
+            omega = -2.0 * np.sum(cross.imag * inverse, axis=-1)
+            if engine == "direct":
+                omega += 2.0 * np.sum((connections[0] * connections[1].conj()).imag, axis=-1)
+                if model.position_matrices is not None:
+                    curl = np.zeros((len(k), n, n), complex)
+                    coefficients = np.outer(axes[0], axes[1]) - np.outer(axes[1], axes[0])
+                    for a, b in zip(*np.nonzero(coefficients), strict=True):
+                        curl += coefficients[a, b] * model._fourier_values(
+                            k, model.position_matrices[..., b], ("r", int(b)), (int(a),)
+                        )
+                    omega += np.einsum("kbi,kib->kb", UsH @ curl, Usel).real
+            values[2][sl], values[3][sl] = omega[:, 0], omega[:, 1]
+            gss = np.abs(covariant[0]) ** 2 * inverse
+            gst = cross.real * inverse
+            gtt = np.abs(covariant[1]) ** 2 * inverse
+            metrics[0][sl] = np.stack([gss[:, 0, c], gst[:, 0, c], gtt[:, 0, c]], axis=-1)
+            totals = np.stack([gss.sum(-1), gst.sum(-1), gtt.sum(-1)], axis=-1)
+            metrics[1][sl], metrics[2][sl] = totals[:, 0], totals[:, 1]
+            velocity[sl] = np.stack([covariant[0][:, 1, v], covariant[1][:, 1, v]], axis=-1)
+            degenerate[sl] = np.any((np.abs(delta) <= self.degeneracy_tol) & ~self_mask, axis=(1, 2))
+        result = BandGeometry(
+            *values,
+            *metrics,
+            velocity,
+            degenerate,
+            all_energies,
+            {"gap": gap, "native_covariant": True},
+        ).reshape(shape)
+        if np.any(result.deg_flag):
+            for name in ("omega_v", "omega_c", "g_cv", "g_v_total", "g_c_total", "v_cv"):
+                getattr(result, name)[result.deg_flag] = np.nan
         return result
 
     def position_connection(self, kx, ky):
@@ -373,7 +526,14 @@ class NativePlaneModel:
         payload = [self.describe(), self.lattice, reciprocal(self.source_model)]
         payload.append(np.asarray(getattr(self.source_model, "band_channels", np.zeros(self.nbnd, int))))
         if self._projector is not None:
-            payload.append(self._projector() if callable(self._projector) else self._projector)
+            try:
+                payload.append(self._projector() if callable(self._projector) else self._projector)
+            except (CapabilityError, ValueError) as error:
+                if getattr(self._projector, "__self__", None) is not self.source_model:
+                    raise
+                # A centre-derived projector can be unavailable even when the
+                # Hamiltonian is valid for a gap-minimum calculation.
+                payload.append({"unavailable_source_projector": str(error)})
         for name in ("translations", "hopping_matrices", "position_matrices", "centres"):
             if hasattr(self.source_model, name):
                 payload.append(getattr(self.source_model, name))

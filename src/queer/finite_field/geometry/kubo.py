@@ -99,7 +99,7 @@ def band_gap(
     kx, ky = np.broadcast_arrays(np.asarray(kx, dtype=float), np.asarray(ky, dtype=float))
     v, c = bands if bands is not None else model.band_pair()
     if getattr(model, "native_band_geometry", False):
-        return model.gap(kx, ky, bands=(v, c))
+        return model.gap(kx, ky, bands=(v, c), mem_bytes=mem_bytes)
     kxf, kyf = kx.ravel(), ky.ravel()
     out = np.empty(kxf.size)
     chunk = _chunk_size(model.n_orb, max_chunk, mem_bytes)
@@ -133,7 +133,9 @@ def band_geometry(
     position matrix) are routed to their covariant-velocity geometry (models/wannier.py).
     """
     if getattr(model, "native_band_geometry", False):
-        return model.geometry(kx, ky, angle=angle, bands=bands, deg_tol=deg_tol, keep_eps=keep_eps)
+        return model.geometry(
+            kx, ky, angle=angle, bands=bands, deg_tol=deg_tol, keep_eps=keep_eps, mem_bytes=mem_bytes
+        )
     kx, ky = np.broadcast_arrays(np.asarray(kx, dtype=float), np.asarray(ky, dtype=float))
     shape = kx.shape
     kxf, kyf = kx.ravel(), ky.ravel()

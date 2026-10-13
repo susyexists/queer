@@ -595,8 +595,8 @@
   },
   "known_inconsistencies": [
     "Ext. Data Fig. 9h, trivial side (V_L > V_Lc): the plotted g_xx is off by a factor of about 2.85 relative to the rest of the calculation. Do not use it as a regression target.",
-    "Fig. 5b, panel 2 is internally inconsistent with the other panels. Do not use it as a regression target.",
-    "Fig. 5a: the colour-bar scale of the quantum metric g is inconsistent with the plotted data. Do not use it as a regression target.",
+    "Fig. 5a/5b V_L labels: panel 4 ('1.1005 meV') was drawn at V_L/V_Lc = 1.10 (V_L ~ 1.005 meV; the label is the ratio), panel 2 ('0.4567 meV') at V_L ~ 0.581 meV in Fig. 5a and ~0.850 meV (V_L/V_Lc = 0.930) in Fig. 5b. Do not use panels 2 and 4 at their labels as regression targets.",
+    "Fig. 5a: the line colours follow Eq. 9's band-resolved g_xx on a linear scale from white (0) to black (~2.5e5 A^2), but the printed 0/1/2 colour-bar ticks sit at ~0.11/1.06/2.01e5 A^2 of that scale. Do not use the colour bar as a regression target.",
     "Ext. Data Fig. 9g caption: g_xx^EXP = (eps_g/(e E_c))^2 omits the factor (pi/4)^2 = 0.617 that Eq. 8 implies, g_xx = (pi eps_g/(4 e E_c))^2.",
     "Units 'mA/m^2' on the Ext. Data Fig. 7a/7b colour bars: J_y^(N omega) is a 2D sheet current, so the unit is mA/m. ext7a_maps.npz stores mA/m.",
     "Ext. Data Fig. 9b: the dashed guide line labelled '1.5' has slope 1.417 in data coordinates. The theory curves have local log-log slopes of 1.26-1.44, computed with T1 = T2 = inf.",

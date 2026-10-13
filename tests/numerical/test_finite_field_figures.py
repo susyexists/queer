@@ -15,6 +15,11 @@ def test_paper_single_and_double_passage_figure_identities():
     )
     double = compute_figure("fig4d", fields=fields)
     ec, frequency = double.metadata["critical_field"], double.metadata["interference_frequency"]
+    assert ec == pytest.approx(15757.27729246, rel=1e-9)
+    assert frequency == pytest.approx(12138.99112985, rel=1e-9)
+    assert double.metadata["options"]["crossings"]["definition"] == "diabatic"
+    # The first three fringe zeros pin the recovered displacement/crossing recipe.
+    assert np.allclose(2 * frequency / np.array([1, 3, 5]), [24278, 8093, 4856], atol=2)
     probability = np.exp(-ec / double["fields"])
     assert np.allclose(
         double["probability"],

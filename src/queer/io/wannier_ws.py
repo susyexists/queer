@@ -15,6 +15,136 @@ if TYPE_CHECKING:
 WSKey = tuple[int, int, int, int, int]
 
 
+class PackedWignerSeitzShifts(Mapping[WSKey, np.ndarray]):
+    """File images stored as integer arrays with the native one-based keys.
+
+    Iteration and normalization do not materialize a Python dictionary of the
+    millions of orbital pairs in a production Wannier file.
+    """
+
+    def __init__(self, entries, shifts, *, source="wsvec", chunk_size=65536):
+        entries = np.asarray(entries, dtype=np.int64).reshape(-1, 6)
+        shifts = np.asarray(shifts, dtype=np.int64).reshape(-1, 3)
+        self.entries = entries
+        self.offsets = np.r_[0, np.cumsum(entries[:, 5], dtype=np.int64)]
+        self.images = shifts
+        self.chunk_size = int(chunk_size)
+        if np.any(entries[:, 5] < 1) or self.offsets[-1] != len(shifts):
+            raise ValueError(f"{source}: truncated wsvec entry or nonpositive shift count")
+        self._order = np.lexsort(tuple(entries[:, column] for column in range(4, -1, -1)))
+        for start in range(1, len(entries), self.chunk_size):
+            stop = min(start + self.chunk_size, len(entries))
+            left = entries[self._order[start - 1 : stop - 1], :5]
+            right = entries[self._order[start:stop], :5]
+            if np.any(np.all(left == right, axis=1)):
+                raise ValueError(f"{source}: duplicate wsvec entry")
+        for index in np.flatnonzero(entries[:, 5] > 1):
+            block = shifts[self.offsets[index] : self.offsets[index + 1]]
+            if len(np.unique(block, axis=0)) != len(block):
+                raise ValueError(f"{source}: duplicate equivalent shifts at entry {index + 1}")
+        for array in (entries, self.offsets, shifts, self._order):
+            array.setflags(write=False)
+
+    def __len__(self):
+        return len(self.entries)
+
+    @classmethod
+    def from_mapping(cls, mapping):
+        if isinstance(mapping, cls):
+            return mapping
+        entries = np.empty((len(mapping), 6), dtype=np.int64)
+        blocks = []
+        for index, (key, values) in enumerate(mapping.items()):
+            raw = np.asarray(values)
+            if (
+                not isinstance(key, tuple)
+                or len(key) != 5
+                or any(not isinstance(value, (int, np.integer)) for value in key)
+                or raw.ndim != 2
+                or raw.shape[1] != 3
+                or raw.dtype.kind not in "iu"
+            ):
+                raise ValueError("wsvec shifts require integer translation/orbital keys and image vectors")
+            entries[index, :5], entries[index, 5] = key, len(raw)
+            blocks.append(raw)
+        return cls(entries, np.concatenate(blocks) if blocks else np.empty((0, 3), np.int64))
+
+    def __iter__(self):
+        for row in self.entries:
+            yield tuple(int(value) for value in row[:5])
+
+    def __getitem__(self, key):
+        if not isinstance(key, tuple) or len(key) != 5:
+            raise KeyError(key)
+        if any(not isinstance(value, (int, np.integer)) for value in key):
+            raise KeyError(key)
+        key = tuple(int(value) for value in key)
+        lo, hi = 0, len(self._order)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            candidate = tuple(int(value) for value in self.entries[self._order[mid], :5])
+            if candidate < key:
+                lo = mid + 1
+            else:
+                hi = mid
+        if lo == len(self._order):
+            raise KeyError(key)
+        index = int(self._order[lo])
+        if tuple(int(value) for value in self.entries[index, :5]) != key:
+            raise KeyError(key)
+        return self.images[self.offsets[index] : self.offsets[index + 1]]
+
+    def _source_rows(self, data):
+        expected = len(data.translations) * data.nbnd**2
+        if len(self) != expected:
+            raise ValueError("wsvec translation/orbital keys do not match the HR file")
+        lookup = {tuple(row): index for index, row in enumerate(data.translations)}
+        if len(lookup) != len(data.translations):
+            raise ValueError("wsvec translation/orbital keys do not match the HR file")
+        for start in range(0, len(self), self.chunk_size):
+            rows = self.entries[start : start + self.chunk_size]
+            if np.any(rows[:, 3:5] < 1) or np.any(rows[:, 3:5] > data.nbnd):
+                raise ValueError("wsvec translation/orbital keys do not match the HR file")
+            vectors = np.unique(rows[:, :3], axis=0)
+            if any(tuple(row) not in lookup for row in vectors):
+                raise ValueError("wsvec translation/orbital keys do not match the HR file")
+        # Distinct entries, the expected count and valid indices certify coverage.
+        return lookup
+
+    def _image_chunks(self):
+        for start in range(0, len(self.images), self.chunk_size):
+            stop = min(start + self.chunk_size, len(self.images))
+            owner = np.searchsorted(self.offsets, np.arange(start, stop), side="right") - 1
+            yield self.entries[owner], self.images[start:stop]
+
+    def normalized_operator_arrays(self, data, arrays):
+        """Scatter shared image weights into separately allocated operators."""
+        source_lookup = self._source_rows(data)
+        output_keys = set()
+        for rows, images in self._image_chunks():
+            output_keys.update(map(tuple, np.unique(rows[:, :3] + images, axis=0)))
+        ordered = sorted(output_keys)
+        lookup = {key: index for index, key in enumerate(ordered)}
+        outputs = [np.zeros((len(ordered),) + values.shape[1:], complex) for values in arrays]
+        for rows, images in self._image_chunks():
+            source_vectors, inverse = np.unique(rows[:, :3], axis=0, return_inverse=True)
+            source = np.array([source_lookup[tuple(row)] for row in source_vectors], dtype=np.int64)[inverse]
+            destination_vectors, inverse = np.unique(rows[:, :3] + images, axis=0, return_inverse=True)
+            destination = np.array([lookup[tuple(row)] for row in destination_vectors], dtype=np.int64)[
+                inverse
+            ]
+            m, n = rows[:, 3] - 1, rows[:, 4] - 1
+            weight = 1.0 / (data.degeneracies[source] * rows[:, 5])
+            for values, output in zip(arrays, outputs, strict=True):
+                scaled = values[source, m, n] * weight.reshape((-1,) + (1,) * (values.ndim - 3))
+                np.add.at(output, (destination, m, n), scaled)
+        return np.asarray(ordered, dtype=np.int64), outputs
+
+    def normalized_matrices(self, data, matrices):
+        translations, outputs = self.normalized_operator_arrays(data, (matrices,))
+        return translations, outputs[0]
+
+
 def _positive_integer(value, name):
     if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, float, np.integer, np.floating)):
         raise ValueError(f"{name} must be a positive integer")

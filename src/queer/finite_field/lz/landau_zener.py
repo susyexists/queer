@@ -302,15 +302,34 @@ class PairContinuation:
         """(lambda_c - lambda_v)^2: analytic at the branch point, which is a simple zero."""
         return complex((pair[1] - pair[0]) ** 2)
 
+    def pair_center(self, z0: complex) -> complex:
+        """(eps_v + eps_c)/2 continued from the real axis to z0 (Taylor series to 4th order from 5-point
+        differences with step Im z0 / 2; exact for a band centre polynomial of degree <= 4). The sum of the
+        pair is analytic at its own branch points, so this follows the band-centre dispersion (identity
+        terms, tilt) that shifts the pair at complex k."""
+        x0, y = float(z0.real), float(z0.imag)
+        if not y > 0:
+            return complex(np.mean(self.real_pair(x0)))
+        h = 0.5 * y
+        c = np.array([float(np.mean(np.real(self.real_pair(x0 + j * h)))) for j in range(-2, 3)])
+        # 5-point differences: d1, d2 to O(h^4), d3, d4 to O(h^2); exact for a quartic band centre
+        d1 = (c[0] - 8.0 * c[1] + 8.0 * c[3] - c[4]) / (12.0 * h)
+        d2 = (-c[0] + 16.0 * c[1] - 30.0 * c[2] + 16.0 * c[3] - c[4]) / (12.0 * h**2)
+        d3 = (c[4] - 2.0 * c[3] + 2.0 * c[1] - c[0]) / (2.0 * h**3)
+        d4 = (c[4] - 4.0 * c[3] + 6.0 * c[2] - 4.0 * c[1] + c[0]) / h**4
+        iy = 1j * y
+        return complex(c[2] + iy * d1 + iy**2 / 2.0 * d2 + iy**3 / 6.0 * d3 + iy**4 / 24.0 * d4)
+
     def near_degeneracy(self, z0: complex, pair0=None) -> float:
-        """Smallest separation at z0 of two eigenvalues whose midpoint lies within eps_g/2 of the gap centre
-        at Re z0, in units of eps_g(Re z0) (cheap screening of candidates; inf if there is none)."""
+        """Smallest separation at z0 of two eigenvalues whose midpoint lies within eps_g/2 of the pair
+        centre continued to z0 (`pair_center`), in units of eps_g(Re z0) (cheap screening of candidates;
+        inf if there is none)."""
         p = self.real_pair(z0.real) if pair0 is None else pair0
         eg = float(np.real(p[1] - p[0]))
         if not eg > 0:
             return math.inf
         lam = self.eigvals([z0])[0]
-        mid = 0.5 * (p[0] + p[1])
+        mid = self.pair_center(z0)
         near = lam[np.argsort(np.abs(lam - mid))[:6]]
         sep = np.abs(near[:, None] - near[None, :])
         cen = np.abs(0.5 * (near[:, None] + near[None, :]) - mid)
@@ -404,6 +423,22 @@ class PairContinuation:
 # ---- dominance ------------------------------------------------------------------------------------------
 
 
+def vertical_partner(kept, dropped, t: float, ratio: float = 2.5) -> bool:
+    """True if a dropped root sits above a kept one on (nearly) the same vertical line and the two are close
+    as degeneracies in k^2 = s^2 + t^2 (|k^2| ratio < `ratio`): two branch points about to coalesce.
+
+    Just below the onset of a crossing pair (VL/VLc ~ 1.11-1.12, k^2 ratio 1.5-2.4) the Houston TDSE exceeds
+    exp(-E_DDP/E) by 30-45%; at k^2 ratio 6 (VL/VLc = 1.10) by 3%. Ratios in s alone are no criterion: on
+    lines far from Gamma (|t| >> |k_c|) all roots crowd near s = i t, without consequence for the DDP formula.
+    """
+    tt = t * t
+    return any(
+        abs(d.real - k.real) <= 0.1 * k.imag and k.imag < d.imag and abs(d * d + tt) < ratio * abs(k * k + tt)
+        for k in kept
+        for d in dropped
+    )
+
+
 def dominant_roots(roots, key=lambda r: r) -> list:
     """Drop roots that have a lower root in their downward 45-degree cone (|dRe| <= dIm) and duplicates.
 
@@ -447,12 +482,13 @@ def line_branch_points(
     Candidates come from the chopped Chebyshev interpolant of eps_g^2 (`chebyshev_interpolant`, plateau
     tolerance fit_tol: 1e-14 for models, 1e-10 for interpolated grids). With a complex-k model
     (provider.model, `complex_k`) and validate=True every candidate is screened (two eigenvalues centred
-    within eps_g/2 of the gap centre must be closer than `screen` x eps_g(Re z)), refined (with deflation
+    within eps_g/2 of the continued pair centre must be closer than `screen` x eps_g(Re z)), refined (with deflation
     by the roots already found, plus a search for the partner of near-double roots) and verified on the
     exact H(k), and E_DDP is integrated over the exact eigenvalues. Otherwise (unvalidated) the continued
-    interpolant is used for roots that move by < 2e-2 Im under truncation to 80% of its length (genuine
-    roots of interpolated grids move by ~1e-2 Im at most, fit artefacts by ~5e-2 Im or more), and only if it
-    is resolved with a relative residual <= max_residual ('branch_point_fit_poor' otherwise).
+    interpolant is used for roots that survive truncation to 80% of its length (moving by < 0.1 Im, with
+    an E_DDP that changes by < 2%; genuine roots of interpolated grids move by up to ~6e-2 Im, fit
+    artefacts change their exponent by far more), and only if it is resolved with a relative residual
+    <= max_residual ('branch_point_fit_poor' otherwise).
 
     Returns {"branch_points": [k_c], "E_ddp": [V/m], "source": "model" | "fit", "validated": bool,
     "fit_residual", "resolved", "n_candidates", "flags": set}.
@@ -503,7 +539,10 @@ def line_branch_points(
                     if zp is not None and abs(zp - k_c) < 0.5 * k_c.imag and zp.imag > 0:
                         seeds.append((zp, False))  # near-double root: the fit may have merged the pair
         bps, E = [], []
-        for k_c in dominant_roots(roots):
+        dom = dominant_roots(roots)
+        if vertical_partner(dom, [z for z in roots if z not in dom], t):
+            flags.add("not_separated")
+        for k_c in dom:
             e, ok = pc.vertical_ddp(k_c, n_ddp)
             if ok:
                 bps.append(k_c)
@@ -519,11 +558,20 @@ def line_branch_points(
         flags.add("branch_point_fit_poor")
     else:
         coef = fit["coef"]
-        short = _series_roots(coef[: max(2, int(0.8 * len(coef)))], fit["domain"])
-        stable = [z for z in cand if short.size and np.min(np.abs(short - z)) <= 2e-2 * z.imag]
-        for z in dominant_roots(stable):
+        cshort = coef[: max(2, int(0.8 * len(coef)))]
+        short = _series_roots(cshort, fit["domain"])
+        stable = []
+        for z in cand:  # a genuine root and its exponent survive truncation of the interpolant
+            if not short.size:
+                break
+            zs = short[np.argmin(np.abs(short - z))]
+            if abs(zs - z) <= 0.1 * z.imag and zs.imag > 0:
+                e, es = (ddp_exponent_from_poly(c, fit["domain"], w) for c, w in ((coef, z), (cshort, zs)))
+                if abs(es - e) <= 0.02 * abs(e):
+                    stable.append((z, e))
+        for z, e in dominant_roots(stable, key=lambda r: r[0]):
             bps.append(z)
-            E.append(ddp_exponent_from_poly(coef, fit["domain"], z))
+            E.append(e)
     out.update(branch_points=bps, E_ddp=E, source="fit", validated=False)
     return out
 
@@ -549,26 +597,43 @@ def _fourband_discriminant_coeffs(params):
 
 
 def fourband_branch_points_k2(params) -> np.ndarray:
-    """Complex k^2 where the traceless four-band gap closes: S(k^2)^2 - 4 P(k^2) = 0 (all roots)."""
+    """Complex k^2 where the traceless four-band gap closes: S(k^2)^2 - 4 P(k^2) = 0 (all roots).
+
+    The companion-matrix roots carry absolute errors ~eps * max|c| (~1e-21 A^-2 here), far larger than the
+    root near q = 0 just off the critical point (~ -d0^2 / (4 A^2 Bl^2)); every root is therefore
+    polished by Newton steps on the factored form, which keeps full relative precision.
+    """
     from numpy.polynomial import polynomial as Pl
 
-    return Pl.polyroots(_fourband_discriminant_coeffs(params)[3])
+    d0, a1, a2, c = _fourband_discriminant_coeffs(params)
+    q = Pl.polyroots(c).astype(complex)
+    AB = 4.0 * params.A**2 * params.Bl**2
+    for _ in range(6):
+        lin = d0 + a1 * q + a2 * q * q
+        f = lin * lin + AB * q
+        df = 2.0 * lin * (a1 + 2.0 * a2 * q) + AB
+        step = np.where(df != 0, f / np.where(df != 0, df, 1.0), 0.0)
+        q = q - step
+    return q
 
 
-def fourband_ddp_t(params, t: float, s_r: float = 0.0, n: int = 96) -> list:
+def fourband_ddp_t(params, t: float, s_r: float = 0.0, n: int = 96, dominant_only: bool = True) -> list:
     """Exact dominant branch points on the line at t (Im s > 0) and their E_DDP (V/m), sorted by (Im, Re).
 
     Roots in the downward cone of a nearer one (`dominant_roots`), e.g. further up the same vertical
-    line, are not returned: their vertical DDP path would cross the nearer branch point.
+    line, are not returned (dominant_only=False returns them too; their E_DDP is then not meaningful):
+    their vertical DDP path would cross the nearer branch point. Real roots (Im k_c = 0, the touching
+    point of the critical model) carry E_DDP = 0.
     """
     out = []
     for q in fourband_branch_points_k2(params):
         s = np.sqrt(q - t * t + 0j)
         for z in (s, -s):
-            if z.imag > 0:
+            # Im = 0: a real degeneracy on the line (critical point), E_DDP = 0
+            if z.imag > 0 or (z.imag == 0 and not any(abs(complex(z) - o) == 0 for o in out)):
                 out.append(complex(z))
-    out = sorted(dominant_roots(out), key=lambda z: (abs(z.imag), z.real))
-    return [(z, _fourband_ddp_exact(params, t, z, n)) for z in out]
+    out = sorted(dominant_roots(out) if dominant_only else out, key=lambda z: (abs(z.imag), z.real))
+    return [(z, _fourband_ddp_exact(params, t, z, n) if z.imag > 0 else 0.0) for z in out]
 
 
 def _fourband_ddp_exact(params, t, k_c, n=96):

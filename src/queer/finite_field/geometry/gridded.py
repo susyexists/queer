@@ -5,40 +5,54 @@ NPZ schema (internal units, model frame):
   layout "polar":     r (nr,) increasing with r[0] > 0, 1/A; phi (nphi,) uniform on [0, 2 pi); fields (nr, nphi)
   eps_v, eps_c (eV); omega_c, omega_v (A^2); g_cv (..., 3) = [xx, xy, yy] band-resolved metric (A^2);
   optional g_v_total, g_c_total (..., 3); "__meta__" JSON (band indices, gauge, D, metric kind).
+  Optional (polar): the same fields at Gamma, gamma_eps_v, gamma_eps_c, gamma_omega_c, gamma_omega_v
+  (shape (1,)) and gamma_g_cv [, gamma_g_v_total, gamma_g_c_total] (shape (3,)); at a closed gap
+  (gamma_eps_c = gamma_eps_v) the Omega and g entries are not used (they may be nan). `sample` stores them;
+  they anchor the interpolation below r[0] (below).
+  `gap` and `gamma_gap` optionally retain independent splittings when absolute energies have a large
+  offset; they must agree with the energies within their floating-point rounding tolerance.
 
 The interpolated quantities are smooth surrogates that are exact constants or polynomials for a
 two-band Dirac gap, eps_g^2, Omega eps_g^3 and g eps_g^4 (plus the band centre), so sharply peaked
-Omega and g near small gaps are reproduced from coarse grids. Bicubic splines; polar grids are
+Omega and g near small gaps are reproduced from grids that resolve the m2 k^2 mass term (below). Bicubic splines; polar grids are
 periodic in phi. Wavefunctions are not available, so the geometric (shift-vector) phase and the
 TDSE validator cannot use this provider.
 
 Queries outside the grid:
-  * polar, r < r[0]: every surrogate is extrapolated linearly in r^2 from the first two radial nodes
-    (at the query's phi). Near Gamma eps_g^2 = 4 (m0^2 + hbar_v^2 r^2) + O(r^4), and Omega eps_g^3 and
-    the Cartesian g eps_g^4 are linear in r^2 as well, so the 1/k curvature at the critical point
-    continues below r[0].
+  * polar, r < r[0]: with Gamma data (optional 'gamma_*' fields, stored by `sample`) every surrogate is
+    interpolated quadratically in r^2 through Gamma, r[0] and r[1] (at the query's phi): near Gamma
+    eps_g^2 = 4 (m0^2 + hbar_v^2 r^2 + m2^2 r^4) and, for a Dirac pair, Omega eps_g^3 and the Cartesian
+    g eps_g^4 are polynomials of the same degree, so the Dirac core (m0, and the 1/k curvature at the
+    critical point) is reproduced for any r[0] in the Dirac regime, also near (not only at) D_c.
+    Without Gamma data they are extrapolated quadratically in r^2 through the first three nodes, which
+    keeps the m2^2 k^4 term of eps_g^2. The cubic through the first four nodes checks the values at
+    Gamma: if they differ by more than 1e-3 (relative) for eps_g^2, Omega eps_g^3 or a metric trace g eps_g^4,
+    or eps_g^2(0) <= 0, the extrapolated points are flagged like points outside the grid
+    (`extrapolation_reliable` False). The test is at Gamma itself because an unresolved core
+    (|m0| << hbar_v r[0]) still carries a Berry flux set by these intercepts.
   * polar, r > r[-1], and cartesian queries outside the [kx, ky] box: clamped to the boundary and
     flagged in `BandGeometry.extras["outside_grid"]` (boolean mask; transport/lines.py reports it).
     `extras["below_r0"]` marks the extrapolated points.
 An interpolated eps_g^2 <= 0 (a closing gap that the grid does not resolve) raises ValueError.
 
 Choosing r[0] near D_c (gap at Gamma 2|m0| with |m0| <~ |m2| r[0]^2):
-  * The two-node secant misses the k^4 term of eps_g^2 = 4 (m0^2 + hbar_v^2 k^2 + m2^2 k^4 + ...), so
-    at D_c the extrapolated eps_g^2 turns negative (ValueError) below r ~ |m2| r[0]^2 / hbar_v. The
-    transverse quadrature reaches |t| ~ quadrature.dmin / 2, hence r[0] <~ sqrt(hbar_v dmin / (2 |m2|))
-    (four-band model, dmin = 1e-12 1/A: r[0] <~ 4e-8 1/A; r[0] = 1e-7 and 1e-6 fail at VL = VLc).
-    Raising is deliberate: continuing eps_g^2 ~ r^2 instead runs, but the Omega eps_g^3 secant then
-    errs by ~(r[0]/r)^2 (J_H at 1 V/m off by -88% for r[0] = 1e-6).
-  * A relative data error err at r[0] and r[1] continues below r[0] as an Omega error of about
-    2 err / (r[1]^2/r[0]^2 - 1) * (r[0]/r)^2. Float64 sums over states have such errors at D_c
-    (four-band: Omega_c off by 4e-5 at k = 1e-8 and 3e-3 at 1e-9 1/A), so sample a provider that is
-    accurate there (ModelGeometry.at_cartesian applies the near-Gamma patch of isotropic models) when
-    the grid must serve fields below ~100 V/m at D_c.
-  Measured at VL = VLc (four-band, PAPER, 240 x 48 polar grid up to 0.045 1/A, E = 1 ... 1e4 V/m):
-  samples of ModelGeometry (patched) with r[0] = 1e-8, 1e-10 or 1e-12 reproduce J_H to <= 1e-6 and
-  hbar_v, C_s to 1e-7 (also below r[0]); unpatched float64 samples gave J_H errors of -11%
-  (r[0] = 1e-8) and +1.2% (1e-9) at 1 V/m and of -1.4% / +0.15% at 10 V/m. Away from D_c
-  (|m0| >> |m2| r[0]^2) any r[0] in the Dirac regime (r[0] << hbar_v/|m2|, four-band ~4e-3 1/A) works.
+  * With Gamma data (`sample` stores them) the core below r[0] is interpolated, not extrapolated: at
+    and near VL = VLc (|x - 1| = 0, 6e-8, 1e-7, 1e-6) a 240 x 48 polar grid with r[0] = 1e-6 or 3e-8
+    reproduces J_H(PAPER) to <= 1e-6 at E = 1 ... 1e4 V/m, and hbar_v, C_s to 1e-12 also below r[0].
+    The samples must themselves be accurate there (ModelGeometry.at_cartesian applies the near-Gamma
+    patch); the Dirac regime r[0] << hbar_v/|m2| (four-band ~4e-3 1/A) is the only condition on r[0].
+  * Without Gamma data the quadratic keeps m0^2, hbar_v^2 k^2 and m2^2 k^4 of eps_g^2 = 4 (m0^2 +
+    hbar_v^2 k^2 + m2^2 k^4 + ...); the next terms bound r[0]. Four-band model, polar grid geometric in
+    r below 2e-3 1/A (ratio ~1.06), PAPER J_H at E = 1 ... 1e4 V/m against the direct provider:
+    r[0] = 1e-6 gives <= 2e-5 for |x - 1| >= 1e-7; r[0] = 1e-5 gives <= 9e-5 for |x - 1| >= 1e-6 and is
+    flagged at 1e-7 (1% off); r[0] = 1e-4 is flagged for |x - 1| <= 1e-4 (1% off, or eps_g^2 turns
+    negative: ValueError) and gives <= 2e-4 from 1e-3 on; r[0] = 1e-3 is beyond the quadratic's reach
+    and flagged even at x = 0.5 (13% off). Unflagged errors stayed <= 2e-4 over x - 1 = +-1e-7 ... 1e-2
+    and x = 0.5. Exactly at D_c (m0 = 0) the intercepts are not determined and the grid is flagged
+    (J_H itself was right to 2e-6 for r[0] = 1e-6). Store Gamma data (`sample` does) near D_c.
+  * Cartesian grids have no such treatment: near a small gap the node spacing h must satisfy
+    h << sqrt(|m0 / m2|) (the bicubic spline of eps_g^2 misses m2^2 k^4 otherwise; 161^2 nodes over
+    +-0.04 1/A give 1-2% errors in J_H at VL/VLc = 0.99-1.0005, unflagged). Use polar grids near D_c.
 """
 
 from __future__ import annotations
@@ -54,6 +68,18 @@ from ..models.base import field_frame
 from .kubo import BandGeometry
 
 _TENSORS = ("g_cv", "g_v_total", "g_c_total")
+
+
+def _lagrange(nodes, values, x):
+    """Polynomial through radial surrogate values, with broadcast evaluation points."""
+    out = 0.0
+    for i, ui in enumerate(nodes):
+        weight = 1.0
+        for j, uj in enumerate(nodes):
+            if j != i:
+                weight = weight * (x - uj) / (ui - uj)
+        out = out + weight * values[i]
+    return out
 
 
 class GriddedGeometry:
@@ -126,6 +152,64 @@ class GriddedGeometry:
                 sur[f"{t}_{comp}"] = a[t][..., i] * eg**4
         self._raw = a
         self._splines = {k: self._spline(v) for k, v in sur.items()}
+        self._gamma = self._gamma_surrogates(a) if self.layout == "polar" else None
+        self.extrapolation_reliable = True
+        if self.layout == "polar" and self._gamma is None:
+            # A quadratic retains the k^4 mass contribution. Compare its Gamma
+            # intercept with the cubic before trusting an unresolved core.
+            u = self.r[:4] ** 2
+            ok = True
+            for name in ("gap2", "om_c", "om_v", *self.tensors):
+                values = sur[name] if name in sur else sur[f"{name}_xx"] + sur[f"{name}_yy"]
+                quad = _lagrange(u[:3], values[:3], 0.0)
+                cubic = _lagrange(u, values[:4], 0.0)
+                ok &= bool(np.all(np.abs(quad - cubic) <= 1e-3 * np.abs(quad)))
+                if name == "gap2":
+                    ok &= bool(np.all(quad > 0))
+            self.extrapolation_reliable = ok
+
+    def _gamma_surrogates(self, arrays):
+        """Validate optional Gamma anchors and form gap-scaled surrogate values."""
+        gamma_keys = {key for key in arrays if key.startswith("gamma_")}
+        if not gamma_keys:
+            return None
+        required = {f"gamma_{name}" for name in ("eps_v", "eps_c", "omega_v", "omega_c", *self.tensors)}
+        if missing := required - gamma_keys:
+            raise ValueError(f"Gamma geometry is missing fields: {sorted(missing)}")
+        for name in ("eps_v", "eps_c", "omega_v", "omega_c", *self.tensors, "gap"):
+            key = f"gamma_{name}"
+            if key in arrays:
+                expected = (3,) if name in _TENSORS else (1,)
+                if arrays[key].shape != expected:
+                    raise ValueError(f"Grid field {key} must have shape {expected}")
+        ev, ec = float(arrays["gamma_eps_v"][0]), float(arrays["gamma_eps_c"][0])
+        if not math.isfinite(ev) or not math.isfinite(ec):
+            raise ValueError("Gamma band energies must be finite")
+        difference = ec - ev
+        eg = float(arrays.get("gamma_gap", np.array([difference]))[0])
+        tolerance = 16 * np.finfo(float).eps * (abs(ev) + abs(ec)) + 1e-10 * abs(eg)
+        if not math.isfinite(eg) or eg < 0 or abs(eg - difference) > tolerance:
+            raise ValueError("Gamma gap must be nonnegative and agree with its band energies")
+
+        def product(name, power):
+            values = arrays[f"gamma_{name}"]
+            if eg == 0:
+                return np.zeros_like(values)
+            if not np.isfinite(values).all():
+                raise ValueError(f"Grid field gamma_{name} must be finite at a nonzero gap")
+            return values * eg**power
+
+        out = {
+            "gap2": eg * eg,
+            "mid": 0.5 * (ec + ev),
+            "om_c": float(product("omega_c", 3)[0]),
+            "om_v": float(product("omega_v", 3)[0]),
+        }
+        for name in self.tensors:
+            values = product(name, 4)
+            for i, component in enumerate(("xx", "xy", "yy")):
+                out[f"{name}_{component}"] = float(values[i])
+        return out
 
     # ---- construction ---------------------------------------------------------------------------
     def _spline(self, z):
@@ -150,6 +234,7 @@ class GriddedGeometry:
             "omega_v",
             *self.tensors,
             *(("gap",) if "gap" in self._raw else ()),
+            *(key for key in self._raw if key.startswith("gamma_")),
         )
         return save_npz(path, {k: self._raw[k] for k in (*keys, *fields)}, self.meta)
 
@@ -177,6 +262,16 @@ class GriddedGeometry:
             "g_v_total": geo.g_v_total,
             "g_c_total": geo.g_c_total,
         }
+        if r is not None:
+            with np.errstate(invalid="ignore", divide="ignore"):
+                gamma = provider.at_cartesian(np.zeros(1), np.zeros(1))
+            arrays.update(
+                {
+                    f"gamma_{name}": np.asarray(getattr(gamma, name), dtype=float).reshape(-1)
+                    for name in ("eps_v", "eps_c", "omega_c", "omega_v", "g_cv", "g_v_total", "g_c_total")
+                }
+            )
+            arrays["gamma_gap"] = np.asarray(gamma.eps_g, dtype=float).reshape(-1)
         m = {
             "sampled_from": provider.describe() if hasattr(provider, "describe") else str(provider),
             **(meta or {}),
@@ -213,13 +308,24 @@ class GriddedGeometry:
         rc = np.clip(r, *self.bounds)
         vals = {k: s.ev(rc.ravel(), phi.ravel()).reshape(r.shape) for k, s in self._splines.items()}
         if np.any(below):
-            r0, r1 = self.r[0], self.r[1]
+            r0, r1, r2 = self.r[:3]
             ph = phi[below]
-            u = (r[below] ** 2 - r0 * r0) / (r1 * r1 - r0 * r0)  # linear in r^2 through the first two nodes
+            u0, u1, u = r0 * r0, r1 * r1, r[below] ** 2
             for k, s in self._splines.items():
                 f0 = s.ev(np.full(ph.shape, r0), ph)
                 f1 = s.ev(np.full(ph.shape, r1), ph)
-                vals[k][below] = f0 + u * (f1 - f0)
+                if self._gamma is not None:
+                    fg = self._gamma[k]
+                    vals[k][below] = (
+                        fg * (u - u0) * (u - u1) / (u0 * u1)
+                        + f0 * u * (u - u1) / (u0 * (u0 - u1))
+                        + f1 * u * (u - u0) / (u1 * (u1 - u0))
+                    )
+                else:
+                    f2 = s.ev(np.full(ph.shape, r2), ph)
+                    vals[k][below] = _lagrange((u0, u1, r2 * r2), (f0, f1, f2), u)
+            if not self.extrapolation_reliable:
+                outside = outside | below
         return vals, outside, below
 
     def _eps_g(self, gap2, kx, ky) -> np.ndarray:
@@ -280,4 +386,11 @@ class GriddedGeometry:
         return None
 
     def describe(self) -> dict:
-        return {"provider": "gridded", "layout": self.layout, "angle": self.angle, **self.meta}
+        return {
+            "provider": "gridded",
+            "layout": self.layout,
+            "angle": self.angle,
+            "gamma_anchor": self._gamma is not None,
+            "extrapolation_reliable": self.extrapolation_reliable,
+            **self.meta,
+        }

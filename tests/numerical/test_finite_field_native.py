@@ -140,4 +140,4 @@ def test_generalized_eq8_hall_and_harmonics_match_orthogonal_basis():
     reference, actual = [response.harmonics([4e6], n_max=3)["b"] for response in responses]
     np.testing.assert_allclose(actual, reference, rtol=2e-8, atol=1e-13)
     with pytest.raises(CapabilityError, match="complex-k"):
-        PreparedHallResponse(NativePlaneModel(generalized, band_pair=(0, 1)))
+        PreparedHallResponse(NativePlaneModel(generalized, band_pair=(0, 1)), options="physical")

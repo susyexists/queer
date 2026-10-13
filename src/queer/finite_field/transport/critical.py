@@ -11,7 +11,7 @@ a log-corrected 3/2 law (local exponent ~1.4, as in Ext. Data Fig. 9b). With fin
 length lambda = e|E|T1/hbar replaces k_c; for lambda << delta the response crosses over to ~E^2 ln.
 
 Methods 5 inverts the critical harmonics for C. The asymptotic constant c_F = 1.1968 is used in the
-paper; `c_from_harmonic` uses the exact finite-N factor beta_N(3/2) (c_F is 32% off at N = 3). The
+paper and by default; `finite_N=True` uses the exact beta_N(3/2) (c_F is 32% off at N = 3). The
 inversions need the normalization that produced b_N (prefactor and conventions.figure_scale; pass cfg).
 """
 
@@ -45,6 +45,7 @@ def critical_constants(provider, k=None, angles=(0.0, 0.7)) -> dict:
     return {
         "hbar_v": float(hv[0, 0]),
         "C_s": float(cs[0, 0]),
+        "C_paper": -float(cs[0, 0]),
         "hbar_v_spread": float(np.ptp(hv) / abs(hv[0, 0])),
         "C_spread": float(np.ptp(cs) / abs(cs[0, 0])),
     }
@@ -101,7 +102,7 @@ def c_from_harmonic(
     E0,
     hbar_v: float,
     prefactor: str = "e2_h",
-    finite_N: bool = True,
+    finite_N: bool = False,
     figure_scale: float = 1.0,
     cfg=None,
 ) -> np.ndarray:
@@ -110,18 +111,46 @@ def c_from_harmonic(
     G = e^2/h ("e2_h") or e^2/(2 pi h) ("e2_2pi_h") and s = figure_scale must be those that produced b_N;
     cfg (a RunConfig) supplies both from cfg.conventions (b_N of PAPER_FIGURES-based presets carry
     s = 1/(4 pi)). Odd N only. With finite_N=False the paper's asymptotic factor c_F N^{-5/2} replaces
-    |beta_N| (the sign of beta_N is kept: + for N = 1, 5, 9, ..., - for N = 3, 7, ...); C then comes out
+    |beta_N| (beta_1 is positive and every odd beta_N for N >= 3 is negative); C then comes out
     32% too large at N = 3 and 24% too small at N = 1.
     """
     from ..harmonics import C_F, power_law_bN
 
+    berry = 1.0
     if cfg is not None:
         prefactor, figure_scale = cfg.conventions.prefactor, cfg.conventions.figure_scale
+        berry = {"c": 1.0, "c_minus_v": 2.0, "v": -1.0}[cfg.conventions.berry]
     N = _odd_orders(N)
     exact = power_law_bN(N, 1.5)
     beta = exact if finite_N else np.sign(exact) * C_F * np.asarray(N, dtype=float) ** -2.5
-    K = hall_prefactor(prefactor) * figure_scale * math.sqrt(V_PER_M_TO_EV_PER_A / hbar_v)
+    K = berry * hall_prefactor(prefactor) * figure_scale * math.sqrt(V_PER_M_TO_EV_PER_A / hbar_v)
     return np.asarray(b_N, dtype=float) / (beta * K * np.asarray(E0, dtype=float) ** 1.5)
+
+
+def c_from_slope(
+    slope: float,
+    L: float,
+    W: float,
+    R_xx: float | None,
+    hbar_v: float,
+    *,
+    rho_xx: float | None = None,
+) -> float:
+    """Methods 5 |C| in Å from the fitted slope of N V_N against (I/N)**1.5.
+
+    The fitted intercept is excluded. Resistance and geometry use the same SI
+    conventions as c_from_device; hbar_v is in eV Å.
+    """
+    from ..harmonics import C_F
+
+    if rho_xx is not None:
+        if R_xx is not None:
+            raise ValueError("give R_xx or rho_xx, not both")
+        R_xx = rho_xx * L / W
+    elif R_xx is None:
+        raise ValueError("R_xx (longitudinal resistance) or rho_xx (sheet resistance) is required")
+    sqrt_e_hv = math.sqrt(1.0 / (hbar_v * 1e-10))
+    return float(abs(slope) * L**2.5 / (C_F * W**2 * R_xx**2.5) / (sqrt_e_hv * E2_H) * 1e10)
 
 
 def c_from_device(

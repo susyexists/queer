@@ -115,6 +115,78 @@ def _crossing(provider, s: float, t: float, kind: str, touching_floor: float) ->
     return Crossing(s=float(s), eps_g=eg, g_ss=g, Ec=Ec, touching=touching, kind=kind)
 
 
+def _polish_native_gap_minimum(provider, t, lo, hi, candidate, touching_floor):
+    """Resolve a flat native minimum with analytic band slopes in its original basin.
+
+    Gap-squared differences can fall below the eigensolver's rounding noise
+    before the minimum's position converges. Hellmann--Feynman slopes avoid
+    subtracting such differences and are invariant under orbital gauge and
+    the Hamiltonian's energy zero. Precision patches and generalized problems
+    retain their existing minimizer.
+    """
+    from contextlib import nullcontext
+
+    from ..models.base import field_frame
+
+    model = getattr(provider, "model", None)
+    if (
+        not getattr(model, "native_band_geometry", False)
+        or getattr(model, "supports_generalized", False)
+        or not hasattr(model, "dhamiltonian")
+    ):
+        return candidate
+    angle = provider.angle
+    cangle, sangle = math.cos(angle), math.sin(angle)
+    v, c = model.band_pair()
+    cache = {}
+
+    def evaluate(s):
+        if s not in cache:
+            kx, ky = field_frame(s, t, angle)
+            if getattr(provider, "patch", None) is not None and np.hypot(kx, ky) < provider.k_patch:
+                raise ValueError("minimum is covered by the precision patch")
+            h = np.asarray(model.hamiltonian(kx, ky), dtype=complex)
+            scale = float(np.linalg.norm(h, ord=np.inf))
+            reference = float(np.trace(h).real / h.shape[0])
+            energy, states = np.linalg.eigh(h - reference * np.eye(h.shape[0]))
+            gap = float(energy[c] - energy[v])
+            error = 128 * np.finfo(float).eps * max(scale, abs(reference))
+            floor = max(touching_floor, error, getattr(provider, "deg_tol", 0))
+            separations = np.abs(energy[[v, c], None] - energy[None, :])
+            separations[0, v], separations[1, c] = np.inf, np.inf
+            if gap <= floor or np.min(separations) <= floor:
+                raise ValueError("individual band slopes are undefined at a touching point")
+            dx, dy = model.dhamiltonian(kx, ky)
+            derivative = cangle * dx + sangle * dy
+            pair = states[:, [v, c]]
+            slopes = np.real(np.einsum("in,ij,jn->n", pair.conj(), derivative, pair))
+            cache[s] = gap, float(slopes[1] - slopes[0]), error
+        return cache[s]
+
+    on_line = getattr(model, "on_line", None)
+    try:
+        with (
+            on_line(angle, t, mem_bytes=getattr(provider, "mem_bytes", 256e6))
+            if on_line is not None
+            else nullcontext()
+        ):
+            gap, _, error = evaluate(candidate)
+            left, right = evaluate(float(lo))[1], evaluate(float(hi))[1]
+            if not (math.isfinite(left) and math.isfinite(right) and left < 0 < right):
+                return candidate
+            polished = float(brentq(lambda s: evaluate(s)[1], lo, hi, xtol=max(1e-15, 1e-12 * (hi - lo))))
+            new_gap, slope, new_error = evaluate(polished)
+            if (
+                not math.isfinite(slope)
+                or not math.isfinite(new_gap)
+                or new_gap > gap + max(error, new_error)
+            ):
+                return candidate
+            return polished
+    except (ValueError, NotImplementedError, np.linalg.LinAlgError):
+        return candidate
+
+
 def gap_minima(
     provider,
     t: float,
@@ -122,8 +194,10 @@ def gap_minima(
     scan_points: int = 2049,
     prominence_rel: float = 1e-9,
     d0: float = 1e-12,
+    *,
+    touching_floor: float = 1e-12,
 ) -> tuple[list, set]:
-    """Positions of interior local minima of eps_g along the line (refined by bounded Brent on eps_g^2)."""
+    """Interior gap minima, with bounded gap-squared refinement and native band-slope polishing."""
     s = _scan_grid(window, scan_points, d0)
     eg = provider.gap(s, np.full_like(s, t))
     flags = set()
@@ -157,7 +231,8 @@ def gap_minima(
         res = minimize_scalar(
             f, bounds=(lo, hi), method="bounded", options={"xatol": max(1e-15, 1e-12 * (hi - lo))}
         )
-        out.append(float(res.x) if f(res.x) <= eg[i] ** 2 else float(s[i]))
+        candidate = float(res.x) if f(res.x) <= eg[i] ** 2 else float(s[i])
+        out.append(_polish_native_gap_minimum(provider, t, float(lo), float(hi), candidate, touching_floor))
     return sorted(out), flags
 
 
@@ -166,7 +241,14 @@ def _minima(provider, t: float, policy) -> tuple[list, set]:
         provider, "isotropic", False
     ):  # same prominence threshold as the scan path
         return provider.line_minima_radial(t, policy.window, prominence_rel=policy.prominence_rel), set()
-    return gap_minima(provider, t, policy.window, policy.scan_points, policy.prominence_rel)
+    return gap_minima(
+        provider,
+        t,
+        policy.window,
+        policy.scan_points,
+        policy.prominence_rel,
+        touching_floor=policy.touching_floor,
+    )
 
 
 # ---- diabatic crossings ---------------------------------------------------------------------------------
@@ -415,9 +497,11 @@ def _generic_branch_points(provider, t: float, policy):
     geo = provider.geometry(mins, np.full(mins.size, t))
     W = policy.window
     info, intervals = [], []
+    touching = []
     for s_m, e_m, g_m in zip(mins, geo.eps_g, geo.metric("cv")[:, 0]):
         if e_m < policy.touching_floor:
-            continue  # touching point: real degeneracy, P = 1 without a branch point
+            touching.append((complex(float(s_m), 0.0), 0.0, "touching"))  # real degeneracy: E_DDP = 0, P = 1
+            continue
         guess = 0.5 / math.sqrt(g_m) if g_m > 0 else 1e-3 * W
         d = _doubling_distance(provider, t, float(s_m), float(e_m), guess, W)
         info.append((float(s_m), float(critical_field(e_m, g_m)) if g_m > 0 else math.nan, d))
@@ -429,7 +513,7 @@ def _generic_branch_points(provider, t: float, policy):
             merged[-1][2] = max(merged[-1][2], d)
         else:
             merged.append([lo, hi, d])
-    roots, validated = [], True
+    roots, validated = list(touching), True
     for lo, hi, d in merged:
         res = line_branch_points(provider, t, lo, hi, im_max=2.0 * d)
         flags |= res["flags"]
@@ -439,7 +523,7 @@ def _generic_branch_points(provider, t: float, policy):
 
 
 def _branch_search(provider, t: float, policy, e_cut: float = np.inf) -> _BranchSearch:
-    from .landau_zener import dominant_roots
+    from .landau_zener import dominant_roots, vertical_partner
 
     exact = provider.exact_branch_points(t) if hasattr(provider, "exact_branch_points") else None
     if exact is not None:
@@ -453,7 +537,17 @@ def _branch_search(provider, t: float, policy, e_cut: float = np.inf) -> _Branch
         raw, flags, info, definition = _generic_branch_points(provider, t, policy)
     # dominance (the nearest root per vertical line and its cone) first, then the validity of E_DDP
     roots = dominant_roots(raw, key=lambda r: r[0])
-    good = [r for r in roots if math.isfinite(r[1]) and r[1] > 0]
+    if vertical_partner([r[0] for r in roots], [r[0] for r in raw if r not in roots], t):
+        flags.add("not_separated")  # a branch point nearly coalescing with its partner on the same vertical
+    good = []
+    for r in roots:
+        if not (math.isfinite(r[1]) and r[1] >= 0):
+            continue
+        if r[0].imag <= 0:  # a real degeneracy (E_DDP = 0, P = 1) must be one: check the gap there
+            eg = float(provider.gap(np.array([r[0].real]), np.array([t]))[0])
+            if not eg < policy.touching_floor:
+                continue
+        good.append(r)
     if len(good) < len(roots):
         flags.add("ddp_invalid")
     good.sort(key=lambda r: r[0].real)

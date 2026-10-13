@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import math
+from contextlib import nullcontext
 
 import numpy as np
 
@@ -109,6 +110,23 @@ class ModelGeometry:
                     self.patch_error = str(err)
         if self.patch is None and near_critical:
             self.precision_floor = self._estimate_precision_floor()
+        elif self.patch is not None and not getattr(self.patch, "exact_pair", True):
+            self.precision_floor = {
+                "reason": f"{self.patch.P.size} bands within the patch tolerance of the v/c pair at Gamma: "
+                "pair term from float64 eigenvectors of H_eff (relative errors grow toward k -> 0 "
+                "at exact criticality and with the patch radius)",
+                "k_floor": None,
+                "n_P": int(self.patch.P.size),
+            }
+        if self.patch is not None and self.precision_floor is None:
+            ov = self.patch_overlap()
+            if not (ov is not None and ov <= 1e-3):
+                self.precision_floor = {
+                    "reason": f"patch overlap certificate {ov} > 1e-3 (patch and float64 disagree at "
+                    "the patch radius: a band joining the v/c pair inside the patch?)",
+                    "k_floor": None,
+                    "patch_overlap": None if ov is None else float(ov),
+                }
 
     @property
     def _radial_ok(self) -> bool:
@@ -147,11 +165,22 @@ class ModelGeometry:
         geo.extras["patched"] = near
         return geo
 
+    def _on_line(self, t):
+        """Use factorized Bloch sums when all points share one field-line offset."""
+        on_line = getattr(self.model, "on_line", None)
+        tf = np.ravel(t)
+        if on_line is None or tf.size == 0 or not np.all(tf == tf[0]):
+            return nullcontext()
+        if getattr(self.model, "native_band_geometry", False):
+            return on_line(self.angle, float(tf[0]), mem_bytes=self.mem_bytes)
+        return on_line(self.angle, float(tf[0]))
+
     def geometry(self, s, t) -> BandGeometry:
         """Band geometry at field-frame coordinates (broadcast shape of s and t)."""
         s, t = np.broadcast_arrays(np.asarray(s, dtype=float), np.asarray(t, dtype=float))
         kx, ky = self.cartesian(s, t)
-        return self._evaluate(kx, ky, self.angle, s, t)
+        with self._on_line(t):
+            return self._evaluate(kx, ky, self.angle, s, t)
 
     __call__ = geometry
 
@@ -159,11 +188,12 @@ class ModelGeometry:
         s, t = np.broadcast_arrays(np.asarray(s, dtype=float), np.asarray(t, dtype=float))
         kx, ky = self.cartesian(s, t)
         near = self._near(kx, ky)
-        if not near.any():
-            return band_gap(self.model, kx, ky, mem_bytes=self.mem_bytes)
-        g = np.empty(kx.shape)
-        if (~near).any():
-            g[~near] = band_gap(self.model, kx[~near], ky[~near], mem_bytes=self.mem_bytes)
+        with self._on_line(t):
+            if not near.any():
+                return band_gap(self.model, kx, ky, mem_bytes=self.mem_bytes)
+            g = np.empty(kx.shape)
+            if (~near).any():
+                g[~near] = band_gap(self.model, kx[~near], ky[~near], mem_bytes=self.mem_bytes)
         g[near] = self.patch.gap(kx[near], ky[near])
         return g
 
@@ -263,7 +293,7 @@ class ModelGeometry:
             return None
         from ..lz.landau_zener import fourband_ddp_t
 
-        return fourband_ddp_t(p, t)
+        return fourband_ddp_t(p, t, dominant_only=False)
 
     def diabatic_radius(self) -> float | None:
         """Radius of the uncoupled surface-band crossing circle, if the model provides it (four-band)."""

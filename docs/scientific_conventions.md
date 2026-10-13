@@ -151,7 +151,7 @@ degenerate block. Individual-band Berry curvature at such a block is undefined.
 | --- | --- |
 | `berry_curvature` | Cartesian antisymmetric tensor in Å², with individual-band or occupied-manifold axes. |
 | `quantum_metric` | Explicit `definition="finite_basis_interband"`: `g_ab=Re sum_(n occupied,m unoccupied) A_a,nm A_b,mn`, in Å². This is positive semidefinite and invariant under occupied/unoccupied block rotations. |
-| `chern_number` | Occupied-manifold Berry flux divided by `2*pi`; no extra spin multiplicity is applied to the topological integer. Supports direct/Kubo integration and FHS plaquettes. |
+| `chern_number` | Geometric `C_geo`: occupied-manifold Berry flux divided by `2*pi`; no extra spin multiplicity is applied. Supports direct/Kubo integration and FHS plaquettes. HHH's Hall number is `C_H=-C_geo`, obtained with `queer.finite_field.geometry.topology.hall_chern(C_geo)`. |
 | `chirality` | Occupied Berry flux through an outward Cartesian sphere divided by `2*pi`. Radius is inverse angstroms, and angular quadrature must converge. |
 | `wilson_loop` | Unitarized products of occupied overlaps, with reciprocal-boundary sewing. Hybrid-center phases are modulo one; the determinant Berry phase is radians. |
 | `polarization` | Electronic Berry-phase polarization in C/m², modulo the returned lattice polarization quanta. Optional ionic charges are pseudopotential valences in units of e. |

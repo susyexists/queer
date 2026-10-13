@@ -10,8 +10,18 @@ from scipy.integrate import quad
 from .kubo import band_geometry
 
 
+def hall_chern(flux: float) -> float:
+    """Hall Chern number C=-flux for Berry flux normalized by 2π.
+
+    A finite-window flux alone does not certify a whole-Brillouin-zone Chern number.
+    """
+    return -flux
+
+
 def chern_radial(model, band: int, k_max: float = 20.0, breakpoints=(), epsabs: float = 1e-10) -> float:
-    """(1/2pi) Int Omega_band d^2k = Int_0^k_max Omega_band(k) k dk for an isotropic model (k along x).
+    """Berry flux (1/2pi) Int Omega_band d^2k for an isotropic model (k along x).
+
+    Convert to the Hall convention with hall_chern.
 
     band: 0-based band index. Use `breakpoints` for sharp features such as the regularization ring
     k_inv of Eq. 9.

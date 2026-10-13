@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
+from contextlib import contextmanager
+from copy import copy
 from itertools import islice
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,6 +26,9 @@ from ..io.wannier import (
     resolve_wannier_files,
 )
 
+_LINE_MIN_GAIN = 2
+_LINE_CACHE_BYTES = 128 * 1024**2
+
 
 class NumericalError(RuntimeError):
     """A scientific calculation could not produce validated numerical output."""
@@ -31,6 +37,10 @@ class NumericalError(RuntimeError):
 def _assemble(translations, hopping, points):
     phase = np.exp(2j * np.pi * (points @ translations.T))
     matrices = np.einsum("kr,rij->kij", phase, hopping, optimize=True)
+    return _validate_assembly(matrices, points)
+
+
+def _validate_assembly(matrices, points):
     if not np.isfinite(matrices).all():
         raise NumericalError("Hamiltonian assembly produced nonfinite values")
     adjoints = matrices.conj().transpose(0, 2, 1)
@@ -166,6 +176,162 @@ class WannierModel:
         self.atom_positions = np.empty((0, 3), float)
         self.interpolation = "standard"
         self.max_hermiticity_residual = 0.0
+        self._line_context = None
+        self._line_groups = {}
+        self._line_cache = OrderedDict()
+        self._line_cache_bytes = 0
+        self._line_cache_limit = None
+
+    @contextmanager
+    def on_line(self, direction, origin, *, cache_bytes=None):
+        """Internal Fourier context for Cartesian unit direction and fractional origin."""
+        direction, origin = np.asarray(direction, float), np.asarray(origin, float)
+        if (
+            direction.shape != (3,)
+            or origin.shape != (3,)
+            or not np.isfinite(direction).all()
+            or not np.isfinite(origin).all()
+            or not np.isclose(direction @ direction, 1.0, atol=1e-12, rtol=0)
+        ):
+            raise ValueError("line requires a Cartesian unit direction and finite fractional origin")
+        previous = self._line_context
+        previous_limit = self._line_cache_limit
+        self._line_context = (tuple(direction), tuple(origin))
+        if cache_bytes is not None:
+            self._line_cache_limit = max(0, int(cache_bytes))
+            while self._line_cache and self._line_cache_bytes > self._line_budget():
+                _, removed = self._line_cache.popitem(last=False)
+                self._line_cache_bytes -= removed.nbytes
+        try:
+            yield self
+        finally:
+            self._line_context = previous
+            self._line_cache_limit = previous_limit
+
+    def _line_budget(self):
+        budget = _LINE_CACHE_BYTES
+        if self._line_cache_limit is not None:
+            budget = min(budget, self._line_cache_limit)
+        if self.execution.memory_mb is not None:
+            budget = min(budget, int(self.execution.memory_mb * 1024**2 * 0.2))
+        return budget
+
+    def light_worker_view(self):
+        """Private calculation copy; joblib shares the immutable input arrays."""
+        model = copy(self)
+        model.raw_data = None
+        model._line_context = None
+        model._line_groups = dict(self._line_groups)
+        model._line_cache = OrderedDict()
+        model._line_cache_bytes = 0
+        model._line_cache_limit = None
+        options = self.execution.resolved()
+        model.execution = ExecutionOptions(
+            workers=1,
+            batch_size=options.batch_size,
+            native_threads=options.native_threads,
+            memory_mb=None if options.memory_mb is None else options.memory_mb / options.workers,
+        )
+        return model
+
+    def _line_projection_groups(self, direction):
+        if direction not in self._line_groups:
+            vectors = self.translations @ self.lattice
+            projection = vectors @ np.asarray(direction)
+            bins = np.rint(projection / 1e-6).astype(np.int64)
+            _, inverse = np.unique(bins, return_inverse=True)
+            members = [np.flatnonzero(inverse == index) for index in range(int(inverse.max()) + 1)]
+            representative = np.array([projection[index].mean() for index in members])
+            spread = max(
+                np.max(np.abs(projection[index] - value)) for index, value in zip(members, representative)
+            )
+            self._line_groups[direction] = (
+                (representative, members)
+                if len(members) * _LINE_MIN_GAIN <= len(projection) and spread < 1e-8
+                else None
+            )
+        return self._line_groups[direction]
+
+    def _fourier_values(self, points, operators, key, moments=()):
+        """Entire operator sum, optionally factorized on the active line."""
+        moments = tuple(
+            int(np.flatnonzero(axis)[0])
+            if isinstance(axis, tuple) and np.count_nonzero(axis) == 1 and max(axis) == 1
+            else axis
+            for axis in moments
+        )
+        vectors = self.translations @ self.lattice if moments else None
+        weights = np.ones(len(self.translations), complex)
+        for axis in moments:
+            weights *= 1j * (vectors @ np.asarray(axis) if isinstance(axis, tuple) else vectors[:, axis])
+        if moments and not np.any(weights):
+            return np.zeros((len(points),) + operators.shape[1:], complex)
+        if self._line_context is not None and self.g_vec is not None:
+            direction, origin = self._line_context
+            displacement = (points - np.asarray(origin)) @ self.g_vec
+            s = displacement @ np.asarray(direction)
+            residual = displacement - s[:, None] * np.asarray(direction)
+            tolerance = 1e-12 * max(1.0, float(np.max(np.abs(s), initial=0)))
+            groups = self._line_projection_groups(direction)
+            budget = self._line_budget()
+            if groups is not None and len(groups[0]) * operators[0].size * 16 > budget:
+                # Plain bounded Fourier batches need no complete coefficient
+                # table when even one table exceeds the reserved cache budget.
+                groups = None
+            if groups is not None and np.max(np.abs(residual), initial=0) <= tolerance:
+                projection, members = groups
+                cache_key = (direction, origin, key, moments)
+                terms = self._line_cache.get(cache_key)
+                if terms is None:
+                    phase = np.exp(2j * np.pi * (self.translations @ np.asarray(origin))) * weights
+                    flat = operators.reshape(len(self.translations), -1)
+                    terms = np.empty((len(members), flat.shape[1]), complex)
+                    for index, rows in enumerate(members):
+                        terms[index] = phase[rows] @ flat[rows]
+                    if terms.nbytes <= budget:
+                        while self._line_cache and self._line_cache_bytes + terms.nbytes > budget:
+                            _, removed = self._line_cache.popitem(last=False)
+                            self._line_cache_bytes -= removed.nbytes
+                        self._line_cache[cache_key] = terms
+                        self._line_cache_bytes += terms.nbytes
+                else:
+                    self._line_cache.move_to_end(cache_key)
+                result = np.exp(1j * np.multiply.outer(s, projection)) @ terms
+                return result.reshape((len(points),) + operators.shape[1:])
+        phase = np.exp(2j * np.pi * (points @ self.translations.T)) * weights
+        return np.einsum("kr,rij->kij", phase, operators, optimize=True)
+
+    def _assemble_points(self, points, operators=None, key="H"):
+        if operators is None:
+            operators = self.hopping_matrices
+        if self._line_context is None:
+            return _assemble(self.translations, operators, points)
+        return _validate_assembly(self._fourier_values(points, operators, key), points)
+
+    def slab_z(self):
+        """Make centres of a slab wrapped across the vacuum contiguous in z."""
+        if self.centres is None:
+            raise ValueError("slab_z needs the Wannier centres")
+        z = self.centres[:, 2].astype(float)
+        lattice = self.lattice
+        if lattice is None or np.any(np.abs(lattice[:2, 2]) > 1e-9) or abs(lattice[2, 2]) < 1e-9:
+            return z
+        period = abs(lattice[2, 2])
+        ordered = np.sort(np.mod(z, period))
+        gaps = np.diff(np.r_[ordered, ordered[0] + period])
+        gap = int(np.argmax(gaps))
+        if np.ptp(z) <= period - gaps[gap] + 1e-9:
+            return z
+        low = ordered[(gap + 1) % len(ordered)]
+        return np.mod(z - low, period) + low
+
+    def layer_projector(self, z_split=None):
+        z = self.slab_z()
+        if z_split is None:
+            if np.ptp(z) < 1e-6:
+                raise ValueError("all Wannier centres share one z; pass z_split explicitly")
+            z_split = 0.5 * (z.min() + z.max())
+        return np.diag((z > z_split).astype(complex))
 
     @property
     def fermi_energy(self) -> float:
@@ -301,9 +467,7 @@ class WannierModel:
 
     def hamiltonian(self, k) -> np.ndarray:
         point = self._point(k)
-        matrices, residual = _assemble(
-            self.translations, self.hopping_matrices, validated_points(point[None, :])
-        )
+        matrices, residual = self._assemble_points(validated_points(point[None, :]))
         self.max_hermiticity_residual = max(self.max_hermiticity_residual, residual)
         return matrices[0]
 
@@ -337,8 +501,11 @@ class WannierModel:
             points = points[None]
         if points.ndim != 2 or points.shape[1] != 3 or not np.isfinite(points).all():
             raise ValueError("analytic k must have finite shape (3,) or (Nk,3)")
-        phase = np.exp(2j * np.pi * (points @ self.translations.T))
-        matrices = np.einsum("kr,rij->kij", phase, self.hopping_matrices, optimize=True)
+        if self.lattice is None:
+            phase = np.exp(2j * np.pi * (points @ self.translations.T))
+            matrices = np.einsum("kr,rij->kij", phase, self.hopping_matrices, optimize=True)
+        else:
+            matrices = self._fourier_values(points, self.hopping_matrices, "H")
         if not np.isfinite(matrices).all():
             raise NumericalError("analytic Hamiltonian assembly produced nonfinite values")
         return matrices[0] if single else matrices
@@ -353,7 +520,7 @@ class WannierModel:
         if self.position_matrices is not None:
             return np.stack(
                 [
-                    _assemble(self.translations, self.position_matrices[..., axis], point[None])[0][0]
+                    self._assemble_points(point[None], self.position_matrices[..., axis], ("r", axis))[0][0]
                     for axis in range(3)
                 ]
             )
@@ -369,6 +536,28 @@ class WannierModel:
         point = self._point(k)
         if self.lattice is None:
             raise ValueError("Cartesian derivatives require lattice/reciprocal vectors")
+        if self._line_context is not None:
+            axes = [(a,) for a in range(3)] if order == 1 else [(a, b) for a in range(3) for b in range(3)]
+            shape = (3,) * order + (self.nbnd, self.nbnd)
+            h = np.stack(
+                [
+                    self._fourier_values(point[None], self.hopping_matrices, "H", moments)[0]
+                    for moments in axes
+                ]
+            ).reshape(shape)
+            r = np.zeros((3,) * (order + 1) + (self.nbnd, self.nbnd), complex)
+            if self.position_matrices is not None:
+                for moments in axes:
+                    for position_axis in range(3):
+                        r[moments + (position_axis,)] = self._fourier_values(
+                            point[None],
+                            self.position_matrices[..., position_axis],
+                            ("r", position_axis),
+                            moments,
+                        )[0]
+            if not np.isfinite(h).all() or not np.isfinite(r).all():
+                raise NumericalError("Cartesian operator derivatives produced nonfinite values")
+            return {"H": h, "S": np.zeros_like(h), "r": r}
         vectors = self.translations @ self.lattice
         phase = np.exp(2j * np.pi * (self.translations @ point))
         if order == 1:
@@ -430,12 +619,14 @@ class WannierModel:
 
             with threadpool_limits(limits=options.native_threads):
                 for start in starts:
-                    assign(
-                        start,
-                        _solve_state_batch(
-                            self.translations, self.hopping_matrices, points[start : start + size]
-                        ),
-                    )
+                    selected_points = points[start : start + size]
+                    if self._line_context is None:
+                        result = _solve_state_batch(self.translations, self.hopping_matrices, selected_points)
+                    else:
+                        matrices, residual = self._assemble_points(selected_points)
+                        values, vectors = np.linalg.eigh(matrices)
+                        result = values.T, vectors, residual
+                    assign(start, result)
         else:
             from joblib import delayed
 

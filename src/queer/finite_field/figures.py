@@ -22,7 +22,7 @@ def _result(figure, arrays, dims, units, **metadata):
                 "observable": "paper_figure",
                 "figure": figure,
                 "source_sha256": source_hash(),
-                "recipe_version": 1,
+                "recipe_version": 2,
                 "interpretation": "Explicit paper reproduction conventions",
                 **metadata,
             }
@@ -65,8 +65,10 @@ def fig4b(*, x=0.9, fields=None, model_parameters=None, options=None):
     )
 
 
-def fig4d(*, x=1.8, fields=None, definition="gap_minima", model_parameters=None, options=None):
+def fig4d(*, x=None, fields=None, definition="diabatic", model_parameters=None, options=None):
     """Two equal passages: 2P(1-P)[1+cos(2pi Lambda/E)] and its envelope."""
+    if x is None:
+        x = 1.6e-3 / FourBandParams(**(model_parameters or {})).vlc
     overrides = {**(options or {}), "crossings.definition": definition}
     scan, cfg = _line(x, "fig4d", model_parameters=model_parameters, options=overrides)
     if len(scan["position"]) != 2 or len(scan["Lambda"]) != 1:

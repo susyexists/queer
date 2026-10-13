@@ -96,7 +96,8 @@ Native [quantum geometry and finite-field Hall workflows](docs/finite_field.md)
 include pair-resolved metrics, Landau–Zener/DDP crossings, signed Hall currents,
 quasistatic harmonics, model families, critical analysis, and dynamics validation.
 Wannier HR/TB, centre XYZ, WOUT, and position operators share native interpolation;
-OpenMX uses overlap-aware geometry and the explicit `physical_eq8` response profile.
+OpenMX uses overlap-aware geometry; `physical_eq8` selects physical conventions
+with the metric approximation explicitly.
 Advanced OpenMX phases, precision patches, and character tracking remain gated.
 
 ```bash
@@ -105,8 +106,9 @@ queer hall_harmonics --config configs/examples/finite_field_harmonics.toml
 queer paper_figure --config configs/examples/finite_field_paper_fig4d.toml --render
 ```
 
-Physical conventions are the default. Named paper profiles record their separate
-normalizations. All workflows use checksummed run artifacts, resumable checkpoints,
+The finite-field default is HHH's `paper` profile. Select `physical` explicitly
+for corrected charge, DDP, and phase conventions. Named paper profiles record
+their separate normalizations; `fig5c` and `ext7a` use T2=∞. All workflows use checksummed run artifacts, resumable checkpoints,
 and artifact-only rendering; no HHH installation is required.
 
 The equilibrium implementation uses independently written NumPy/SciPy methods and retains

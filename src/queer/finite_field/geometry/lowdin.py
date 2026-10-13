@@ -271,8 +271,9 @@ class LowdinPatch:
         degree <= 3 in k with analytic derivatives (e.g. FourBandModel with warping). Otherwise ValueError.
     k_max: patch radius (1/A). The patch is exact beyond it too; k_max sets p_tol and the chunking only.
     snap_critical: snap |eps_g(Gamma)| <= snap_tol (16 eps sum_R max|H_R|) to exact degeneracy.
-    p_tol: bands within p_tol (eV) of the pair at Gamma join P (default 10 k_max ||dH(0)||, so that
-        |H~_QP| <= 0.1 |E - H~_QQ| inside the patch and the self-consistency contracts by <= 1e-2 per step).
+    p_tol: bands within p_tol (eV) of the pair at Gamma join P; v and c always do. By default each
+        band's coupling, drift and the pair's Dirac excursion set its inclusion threshold. Keeping
+        only the pair permits the exact Pauli-vector formula; larger P uses eigenvectors of H_eff.
     Energies (eps_v, eps_c) are returned relative to E_ref, the midgap at Gamma.
     """
 
@@ -298,8 +299,22 @@ class LowdinPatch:
         self.n, self.v, self.c = n, v, c
         self.Vt = np.conj(U0.T)[None] @ self.exp.V @ U0[None]  # (2, n, n) constant velocity, U0 frame
         self.vnorm = float(max(np.linalg.norm(self.Vt[0], 2), np.linalg.norm(self.Vt[1], 2)))
-        self.p_tol = float(10.0 * self.k_max * self.vnorm if p_tol is None else p_tol)
-        P = np.nonzero((D0 > D0[v] - self.p_tol) & (D0 < D0[c] + self.p_tol))[0]  # contiguous (D0 sorted)
+        if p_tol is None:
+            pair = np.array([v, c])
+            coup = np.max(np.abs(self.Vt[:, :, pair]), axis=(0, 2))
+            diag = np.real(np.einsum("dii->di", self.Vt))
+            drift = np.max(np.abs(diag[:, :, None] - diag[:, pair][:, None, :]), axis=(0, 2))
+            excursion = max(float(np.linalg.norm(self.Vt[d][np.ix_(pair, pair)], 2)) for d in range(2))
+            dist = np.min(np.abs(D0[:, None] - D0[pair][None, :]), axis=1)
+            join = 3.0 * self.k_max * (coup + drift + excursion) > dist
+            join[pair] = True
+            idx = np.nonzero(join)[0]
+            P = np.arange(min(idx.min(), v), max(idx.max(), c) + 1)
+            self.p_tol = float(np.max(dist[P]))
+        else:
+            self.p_tol = float(p_tol)
+            P = np.nonzero((D0 >= D0[v] - self.p_tol) & (D0 <= D0[c] + self.p_tol))[0]
+            P = np.arange(min(P.min(), v), max(P.max(), c) + 1) if P.size else np.array([v, c])
         self.P, self.Q = P, np.setdiff1d(np.arange(n), P)
         # P block at Gamma refined beyond eigh's eps ||H(Gamma)||: the Rayleigh matrix of U0_P with a correctly
         # rounded H0 U0_P (errors of U0_P enter at second order); the gap is then exact to ~eps eps_g(Gamma)

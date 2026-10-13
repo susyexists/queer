@@ -4,7 +4,7 @@ workflow = "houston_line"
 model = "fourband"
 
 [parameters]
-preset = "physical"
+preset = "paper"
 offset = 0.0
 fields = [10000.0, 20000.0]
 window = [-0.03, 0.03]

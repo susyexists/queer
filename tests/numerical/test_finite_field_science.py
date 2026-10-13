@@ -34,11 +34,11 @@ from queer.finite_field.transport.reference import naive_jh
 from queer.finite_field.transport.tables import LambdaGrid, build_table, eval_tables
 
 
-def test_default_physical_options_and_json_roundtrip():
+def test_default_paper_options_and_json_roundtrip():
     options = FiniteFieldOptions()
-    assert options.conventions.charge_sign == -1
-    assert options.conventions.ec_method == "ddp"
-    assert options.crossings.definition == "branch_point"
+    assert options.conventions.charge_sign == 1
+    assert options.conventions.ec_method == "eq8"
+    assert options.crossings.definition == "gap_minima"
     options = options.with_(**{"relaxation.T1": math.inf, "relaxation.T2": math.inf})
     text = json.dumps(options.to_dict(), allow_nan=False)
     restored = FiniteFieldOptions.from_json(text)
@@ -57,7 +57,9 @@ def test_lz_exact_transition_and_unitarity():
     assert np.allclose(result.T.sum(axis=2), 1, atol=1e-11)
     public = houston_line(model, 0.0, field, window=(-0.05, 0.05), dphi=0.05)
     reverse = reference_houston(model, 0.0, -field, -0.05, 0.05, dphi=0.05)
-    assert np.allclose(public["population"], reverse.P, atol=1e-12)
+    assert np.allclose(public["population"], result.P, atol=1e-12)
+    physical = houston_line(model, 0.0, field, window=(-0.05, 0.05), options=PHYSICAL, dphi=0.05)
+    assert np.allclose(physical["population"], reverse.P, atol=1e-12)
     assert np.max(public["remote_leakage"]) < 1e-11
 
 
@@ -140,15 +142,15 @@ def test_oscillatory_fourier_independent_period_reference_and_budget():
 
 def test_physical_ddp_source_and_missing_capabilities():
     model = FourBandModel(FourBandParams().at(0.5))
-    scan = crossing_scan(model, [0.0])
+    scan = crossing_scan(model, [0.0], options=PHYSICAL)
     assert scan.metadata["options"]["label"] == "physical"
     assert scan.metadata["ddp_source"] == ["exact"]
     assert scan["ddp_field"][0] == pytest.approx(16433.79366362, rel=1e-10)
     provider = GriddedGeometry.sample(
         ModelGeometry(model), kx=np.linspace(-0.03, 0.03, 7), ky=np.linspace(-0.03, 0.03, 7)
     )
-    with pytest.raises(CapabilityError, match="complex-k"):
-        PreparedHallResponse(provider=provider)
+    with pytest.raises(CapabilityError, match="wavefunction"):
+        PreparedHallResponse(provider=provider, options=PHYSICAL)
     # Explicitly selecting the available approximation is permitted.
     available = PreparedHallResponse(provider=provider, options="paper")
     assert available.options.conventions.ec_method == "eq8"
@@ -332,7 +334,9 @@ def test_critical_finite_harmonic_and_device_roundtrips():
     orders = np.array([1, 3, 5, 9])
     coefficient = critical_harmonics_analytic(amplitudes, orders, strength, velocity)
     assert np.allclose(
-        c_from_harmonic(orders[None, :], coefficient, amplitudes[:, None], velocity), strength, rtol=1e-12
+        c_from_harmonic(orders[None, :], coefficient, amplitudes[:, None], velocity, finite_N=True),
+        strength,
+        rtol=1e-12,
     )
     current = np.array([1e-7, 2e-7])
     length, width, resistance = 1e-5, 5e-6, 2e3

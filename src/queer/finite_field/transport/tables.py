@@ -30,7 +30,7 @@ class LambdaGrid:
     K: int
 
     @classmethod
-    def make(cls, lam_lo: float, lam_hi: float, per_decade: int = 12) -> "LambdaGrid":
+    def make(cls, lam_lo: float, lam_hi: float, per_decade: int = 8) -> "LambdaGrid":
         n_dec = math.log10(lam_hi / lam_lo)
         K = max(4, int(math.ceil(n_dec * per_decade)) + 1)
         x0 = math.log(lam_lo)

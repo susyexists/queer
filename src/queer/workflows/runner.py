@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from pathlib import Path
 from typing import Any, Mapping
@@ -13,6 +15,14 @@ from ..execution import execution_session
 from ..io.artifacts import RunStore, new_run_directory
 
 logger = logging.getLogger(__name__)
+
+
+def _finite_field_workflow_hash() -> str:
+    digest = hashlib.sha256()
+    for name in ("finite_field.py", "runner.py"):
+        digest.update(name.encode())
+        digest.update(Path(__file__).with_name(name).read_bytes())
+    return digest.hexdigest()
 
 
 def _input_files(config: WorkflowConfig) -> list[Path]:
@@ -308,7 +318,7 @@ def run_workflow(
         config = config_from_mapping(config)
     from dataclasses import replace
 
-    from .finite_field import FINITE_FIELD_NAMES, calculate_finite_field, load_finite_field_source
+    from .finite_field import FINITE_FIELD_NAMES, _options, calculate_finite_field, load_finite_field_source
     from .services import SERVICE_SPECS, calculate_service
 
     if force_provider is not None:
@@ -329,16 +339,42 @@ def run_workflow(
     missing = [str(file) for file in files if not file.is_file()]
     if missing:
         raise FileNotFoundError(f"Missing workflow inputs: {', '.join(missing)}")
+    finite_field_engine = None
+    finite_field_workflow = None
+    if config.workflow in FINITE_FIELD_NAMES:
+        from ..finite_field._storage import source_hash
+
+        finite_field_engine = source_hash()
+        finite_field_workflow = _finite_field_workflow_hash()
+        if resume and (root / "manifest.json").is_file():
+            previous = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+            if previous.get("cases") and (
+                previous.get("scientific_model", {}).get("source_sha256") != finite_field_engine
+                or previous.get("scientific_model", {}).get("workflow_sha256") != finite_field_workflow
+            ):
+                raise ValueError(
+                    "Resume rejected: finite-field engine changed, workflow implementation changed, "
+                    "or a fingerprint is unavailable; "
+                    "start a fresh run. Completed artifacts remain renderable."
+                )
     store = RunStore(root, config.as_dict(), files, resume=resume)
     logger.info("Run directory: %s", root)
     try:
         if config.workflow in FINITE_FIELD_NAMES:
+            from ..finite_field.config import resolve_options
+
             source = load_finite_field_source(config)
+            scientific_options = resolve_options(_options(config.parameters))
+            previous_science = store.manifest.get("scientific_model", {})
             store.manifest["scientific_model"] = {
+                **previous_science,
                 "model": config.inputs.get(
                     "model", "family" if "family_manifest" in config.inputs else "grid"
                 ),
-                "preset": config.parameters.get("preset", "physical"),
+                "preset": previous_science.get("preset", scientific_options.label),
+                "requested_options": scientific_options.to_dict(),
+                "source_sha256": finite_field_engine,
+                "workflow_sha256": finite_field_workflow,
                 "conventions": "Cartesian field plane; k in Angstrom^-1; eV; fields V/m; sheet current A/m",
             }
             store.save()

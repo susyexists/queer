@@ -1,4 +1,34 @@
-# QUEER 1.2 migration
+# Migration notes
+
+## Finite-field parity with current HHH
+
+Omitted finite-field options now select `paper`, matching HHH, instead of
+`physical`. This applies to library options, direct calculations, workflows,
+and canonical examples. Request `preset="physical"` explicitly to retain the
+corrected physical convention. `physical_eq8` remains available for the
+physical charge/curvature normalization with metric exponents.
+
+`fig5c` and `ext7a` now use T1=2 ps and T2=∞. `fig4d` defaults to V_L=1.6 meV
+and diabatic crossings. These corrections change interference fringes and
+some high-harmonic signs. The default Laplace-table density is eight per decade.
+Critical inversion uses the printed asymptotic constant by default; specify
+`finite_N=True` for the exact finite-order inversion. Physical inversion also
+undoes the conduction-minus-valence factor, and critical diagnostics include
+`C_paper=-C_s`.
+
+HHH's fitted DDP/Eq8 and unavailable-diabatic fallback paths now carry the same
+explicit source and validity flags. Missing wavefunctions and unsupported
+native operators still fail rather than supplying fabricated corrections.
+`vlc_reference="paper"` is rejected: construct
+`FourBandParams.paper_vlc_matched()` instead.
+
+New polar grids retain Γ anchors; old grids remain readable with core
+extrapolation diagnostics. Changed scientific settings and source fingerprints
+invalidate preparation caches. Completed older artifacts keep their resolved
+settings and remain renderable; start a fresh calculation to use these fixes.
+Split family jobs preserve each member's interpolation, plane, and band selection.
+
+## QUEER 1.2 migration
 
 Native OpenMX support adds `OpenMXModel`, `read_scfout`, `read_pao` and typed
 `ObservableResult` APIs, plus electronic, surface, unfolding, geometry, transport

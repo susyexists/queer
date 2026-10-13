@@ -1,9 +1,10 @@
 """Run configuration: every convention of Eqs. 7-13 is an explicit, recorded setting.
 
-`PHYSICAL` is the default and includes the corrections validated against the
-time-dependent Schroedinger equation. `PHYSICAL_EQ8` explicitly selects the
+`PAPER` is the default, matching HHH's printed reference equations. `PHYSICAL`
+explicitly includes corrections validated against the time-dependent
+Schroedinger equation. `PHYSICAL_EQ8` explicitly selects the
 metric approximation when complex continuation and wavefunction phases are
-unavailable. `PAPER` reproduces the printed reference equations;
+unavailable;
 `PAPER_FIGURES` adds the reference figures' 1/(4 pi) scale.
 """
 
@@ -93,7 +94,7 @@ class Conventions:
     prefactor: str = "e2_h"  # "e2_h" (as printed) | "e2_2pi_h" (Kubo normalization)
     figure_scale: float = 1.0  # 1/(4 pi) reproduces the paper's plotted J^{N w}
     charge_sign: int = 1  # +1: paper's hbar dk/dt = +eE; -1: physical electrons
-    vlc_reference: str = "computed"  # "computed" | "paper" (VLc = 0.9134 meV)
+    vlc_reference: str = "computed"
 
     def __post_init__(self):
         _coerce(self)
@@ -102,7 +103,11 @@ class Conventions:
         _check("ec_method", self.ec_method, ("eq8", "ddp"))
         _check("prefactor", self.prefactor, ("e2_h", "e2_2pi_h"))
         _check("charge_sign", self.charge_sign, (1, -1))
-        _check("vlc_reference", self.vlc_reference, ("computed", "paper"))
+        if self.vlc_reference != "computed":
+            raise ValueError(
+                "vlc_reference must be 'computed'; use FourBandParams.paper_vlc_matched() "
+                "(M=-1.0215e-3 eV) to reproduce the paper's critical field"
+            )
         _positive("figure_scale", self.figure_scale)
 
 
@@ -176,7 +181,7 @@ class Quadrature:
     dmin: float = 1e-12  # smallest node distance to a feature point, 1/A
     t_max: float | None = None  # transverse extent; None: where E_c(t) > p_cut * E_max
     p_cut: float = 40.0
-    lam_per_decade: int = 12  # density of the Laplace lambda-tables
+    lam_per_decade: int = 8  # density of the Laplace lambda-tables
     rtol: float = 1e-5  # unused (accuracy is set by du and dmin); kept so saved configurations reload
     k_patch: float = (
         1e-5  # below this |k| the near-Gamma precision patch is used, 1/A (FP64 is accurate above)
@@ -260,21 +265,25 @@ class RunConfig:
 
     def with_(self, **changes) -> "RunConfig":
         """Return a copy with changes; keys are top-level names or dotted "section.key"."""
-        cfg = self
+        sections = {}
+        top = {}
         for key, value in changes.items():
             if "." in key:
                 section, sub = key.split(".", 1)
-                if not hasattr(cfg, section):
+                if section not in _SECTIONS:
                     raise KeyError(key)
-                part = getattr(cfg, section)
+                part = getattr(self, section)
                 if not hasattr(part, sub):
                     raise KeyError(key)
-                cfg = dataclasses.replace(cfg, **{section: dataclasses.replace(part, **{sub: value})})
+                sections.setdefault(section, {})[sub] = value
             else:
-                if not hasattr(cfg, key):
+                if key not in {f.name for f in dataclasses.fields(self)}:
                     raise KeyError(key)
-                cfg = dataclasses.replace(cfg, **{key: value})
-        return cfg
+                top[key] = value
+        for section, updates in sections.items():
+            part = top.get(section, getattr(self, section))
+            top[section] = dataclasses.replace(part, **updates)
+        return dataclasses.replace(self, **top)
 
     def to_dict(self) -> dict:
         from ._storage import json_safe
@@ -331,10 +340,14 @@ _NO_RELAXATION = {"relaxation.T1": math.inf, "relaxation.T2": math.inf}
 
 FIGURE_PRESETS = {
     "fig4b": PAPER.with_(label="fig4b"),  # P_LZ on the k_y = 0 line at VL/VLc = 0.9
-    "fig4d": PAPER_FIGURES.with_(**_NO_RELAXATION, label="fig4d"),  # k_y = 0 line, VL/VLc ~ 1.8
+    "fig4d": PAPER_FIGURES.with_(**_NO_RELAXATION, **{"crossings.definition": "diabatic"}, label="fig4d"),
     # Fig. 5c / Ext. Data Fig. 7a: the pixel test (analysis/ext7a.py) favours diabatic crossings
-    "fig5c": PAPER_FIGURES.with_(**{"crossings.definition": "diabatic"}, label="fig5c"),
-    "ext7a": PAPER_FIGURES.with_(**{"crossings.definition": "diabatic"}, label="ext7a"),
+    "fig5c": PAPER_FIGURES.with_(
+        **{"crossings.definition": "diabatic", "relaxation.T2": math.inf}, label="fig5c"
+    ),
+    "ext7a": PAPER_FIGURES.with_(
+        **{"crossings.definition": "diabatic", "relaxation.T2": math.inf}, label="ext7a"
+    ),
     "ext7e_left": PAPER.with_(label="ext7e_left"),  # E_c at the gap minimum
     "ext7e_right": PAPER.with_(
         **{"crossings.definition": "diabatic"}, label="ext7e_right"
@@ -361,28 +374,16 @@ def preset(name: str) -> RunConfig:
 
 @dataclass(frozen=True)
 class FiniteFieldOptions(RunConfig):
-    """Native finite-field options; corrected physical conventions are the default.
+    """Native options with HHH's PAPER defaults; physical profiles are explicit.
 
-    Named paper presets reproduce the reference equations without silently
-    changing QUEER's physical geometry. Infinite relaxation serializes as "inf".
+    Infinite relaxation serializes as "inf".
     """
-
-    conventions: Conventions = field(
-        default_factory=lambda: Conventions(
-            berry="c_minus_v", ec_method="ddp", prefactor="e2_2pi_h", charge_sign=-1
-        )
-    )
-    crossings: CrossingPolicy = field(default_factory=lambda: CrossingPolicy(definition="branch_point"))
-    phase: PhaseModel = field(
-        default_factory=lambda: PhaseModel(geometric=True, stokes=True, twisted_lz=True)
-    )
-    label: str = "physical"
 
 
 def resolve_options(options=None, *, preset_name=None):
     """Resolve a preset plus explicit section overrides, rejecting unknown settings."""
     if options is None:
-        return preset(preset_name or "physical")
+        return preset(preset_name or "paper")
     if isinstance(options, RunConfig):
         return options
     if isinstance(options, str):
@@ -390,7 +391,7 @@ def resolve_options(options=None, *, preset_name=None):
     if not isinstance(options, dict):
         raise TypeError("options must be FiniteFieldOptions, a preset string, or a settings mapping")
     supplied = dict(options)
-    selected = supplied.pop("preset", preset_name or "physical")
+    selected = supplied.pop("preset", preset_name or "paper")
     base = preset(selected).to_dict()
     for key, value in supplied.items():
         if key in _SECTIONS:

@@ -9,9 +9,6 @@ from queer.finite_field.models import FourBandModel, FourBandParams
 from queer.finite_field.transport import critical as cr
 from queer.finite_field.transport.hall import HallCalculator
 
-pytest.importorskip("mpmath", reason="extended-precision reference extra")
-pytestmark = pytest.mark.precision
-
 P = FourBandParams()
 
 
@@ -66,8 +63,8 @@ def test_c_inversion_roundtrip():
     E0 = np.array([1e2, 1e3])
     N = np.array([3, 5, 9, 21])
     b = cr.critical_harmonics_analytic(E0, N, C, hv)
-    assert np.allclose(cr.c_from_harmonic(N[None, :], b, E0[:, None], hv), C, rtol=1e-12)
-    approx = cr.c_from_harmonic(N[None, :], b, E0[:, None], hv, finite_N=False)
+    assert np.allclose(cr.c_from_harmonic(N[None, :], b, E0[:, None], hv, finite_N=True), C, rtol=1e-12)
+    approx = cr.c_from_harmonic(N[None, :], b, E0[:, None], hv)  # default: the printed Methods 5 constant c_F
     assert approx[0, 0] / C == pytest.approx(1.3245, rel=1e-3)  # c_F underestimates N^{5/2}|b_3| by 32%
     assert approx[0, -1] / C == pytest.approx(1.0, abs=5e-3)
 
@@ -84,6 +81,17 @@ def test_c_from_device_consistency():
     assert np.allclose(cr.c_from_device(N, V_N, current, L, W, R, hv, finite_N=True), C, rtol=1e-10)
     # the paper's asymptotic c_F overestimates C from low harmonics (by 32% at N = 3)
     assert cr.c_from_device(N, V_N, current, L, W, R, hv)[0] / C == pytest.approx(1.3245, rel=1e-3)
+    # the slope of N V_N against (current/N)^{3/2} (Fig. 6a / Ext. Data Fig. 9c) with an intercept: c_from_slope ignores it,
+    # the point ratio of the printed formula does not
+    x = np.array([1e-12, 4e-12, 1e-11])
+    slope = 2.0e7
+    NV = slope * (x - 1.46e-12)  # the paper's ED9c fit has its x-intercept at 1.46e-12 A^{3/2}
+    c_slope = cr.c_from_slope(slope, L, W, R, hv)
+    c_point = cr.c_from_device(np.full(3, 17), NV / 17, 17 * x ** (2 / 3), L, W, R, hv)
+    assert c_point[-1] / c_slope == pytest.approx(
+        1 - 1.46e-12 / 1e-11, rel=1e-9
+    )  # 14.6% low on the fitted line
+    assert cr.c_from_slope(slope, L, W, None, hv, rho_xx=R * W / L) == pytest.approx(c_slope, rel=1e-12)
 
 
 def test_c_inversion_signs_normalization_and_orders():
@@ -97,12 +105,19 @@ def test_c_inversion_signs_normalization_and_orders():
     )  # the asymptotic factor keeps the sign of beta_N, also at N = 1
     assert approx[0, 0] / C == pytest.approx(0.9153117 / C_F, rel=1e-6)  # 24% low at N = 1
     bf = b * PAPER_FIGURES.conventions.figure_scale  # harmonics of PAPER_FIGURES-based presets
-    assert np.allclose(cr.c_from_harmonic(N[None, :], bf, E0[:, None], hv, cfg=PAPER_FIGURES), C, rtol=1e-12)
     assert np.allclose(
-        cr.c_from_harmonic(N[None, :], bf, E0[:, None], hv, figure_scale=1 / (4 * math.pi)), C, rtol=1e-12
+        cr.c_from_harmonic(N[None, :], bf, E0[:, None], hv, cfg=PAPER_FIGURES, finite_N=True), C, rtol=1e-12
     )
-    bp = cr.critical_harmonics_analytic(E0, N, C, hv, prefactor="e2_2pi_h")
-    assert np.allclose(cr.c_from_harmonic(N[None, :], bp, E0[:, None], hv, cfg=PHYSICAL), C, rtol=1e-12)
+    assert np.allclose(
+        cr.c_from_harmonic(N[None, :], bf, E0[:, None], hv, figure_scale=1 / (4 * math.pi), finite_N=True),
+        C,
+        rtol=1e-12,
+    )
+    # PHYSICAL output: e^2/(2 pi h) and Omega_c - Omega_v = 2 Omega_c for the particle-hole symmetric pair
+    bp = 2.0 * cr.critical_harmonics_analytic(E0, N, C, hv, prefactor="e2_2pi_h")
+    assert np.allclose(
+        cr.c_from_harmonic(N[None, :], bp, E0[:, None], hv, cfg=PHYSICAL, finite_N=True), C, rtol=1e-12
+    )
     with pytest.raises(ValueError, match="odd"):
         cr.c_from_harmonic([2], [1.0], [1e3], hv)
 
@@ -122,3 +137,20 @@ def test_c_from_device_with_sheet_resistance():
         cr.c_from_device(N, V_N, current, L, W, R, hv, rho_xx=rho)
     with pytest.raises(ValueError, match="odd"):
         cr.c_from_device([2], [1e-6], [1e-7], L, W, R, hv)
+
+
+@pytest.mark.slow
+def test_c_inversion_of_physical_run_matches_paper_run():
+    # same model, PAPER vs PHYSICAL harmonics: after undoing prefactor and Berry choice the C agree
+    from queer.finite_field.harmonics import harmonics
+
+    E0 = np.array([1.0, 10.0])
+    out = {}
+    for name, base in (("paper", PAPER), ("physical", PHYSICAL)):
+        cfg = base.with_(
+            **{"relaxation.T1": math.inf, "relaxation.T2": math.inf, "drive.E_max": 1e3, "drive.E_min": 1e-3}
+        )
+        hc = HallCalculator(FourBandModel(P.at(1.0)), cfg).prepare()
+        hr = harmonics(hc.J, E0, n_max=3)
+        out[name] = cr.c_from_harmonic(3, hr.b[:, 3], E0, P.at(1.0).hbar_v, cfg=cfg)
+    np.testing.assert_allclose(out["physical"], out["paper"], rtol=2e-2)

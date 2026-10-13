@@ -383,7 +383,7 @@ def _options(params):
     elif not isinstance(options, Mapping):
         raise ValueError("parameters.options must be a table or preset name")
     return {
-        "preset": params.get("preset", "physical"),
+        "preset": params.get("preset", "paper"),
         **options,
         **{
             key: params[key]
@@ -402,8 +402,8 @@ def _options(params):
     }
 
 
-def _kwargs(config):
-    return {
+def _kwargs(config, source=None):
+    kwargs = {
         "options": _options(config.parameters),
         "execution": config.execution,
         **{
@@ -417,6 +417,12 @@ def _kwargs(config):
             if key in config.parameters
         },
     }
+    if "family_manifest" in config.inputs and getattr(source, "native_band_geometry", False):
+        # The family loader already resolved global defaults and member
+        # overrides. Keep those selections while allowing a supplied projector.
+        for key in ("plane", "band_pair", "occupied_bands"):
+            kwargs.pop(key, None)
+    return kwargs
 
 
 def _read(store, case):
@@ -524,7 +530,7 @@ def _prepare(config, source, store, namespace="stages"):
         source,
         cache_dir=config.parameters.get("cache_dir"),
         acceleration=config.parameters.get("acceleration"),
-        **_kwargs(config),
+        **_kwargs(config, source),
     ).prepare(
         load_line=load_line,
         save_line=save_line,
@@ -946,7 +952,7 @@ def _crossing_map(config, source, store):
                 if family
                 else _analytical_member(config, params.get("model_parameter", "x"), value)
             )
-            row = crossing_scan(item, params.get("offsets", [0.0]), **_kwargs(config))
+            row = crossing_scan(item, params.get("offsets", [0.0]), **_kwargs(config, item))
             _commit_result(store, case, row)
         rows.append(row)
     arrays = {key: np.concatenate([row[key] for row in rows]) for key in rows[0].arrays}
@@ -1008,11 +1014,15 @@ def split_harmonic_map(config):
                 child_inputs = {"geometry_grid": member.files["grid"]}
             else:
                 loader = member.model_loader or member.loader
+                for key in ("ef", "band_pair", "occupied_bands", "lattice"):
+                    child_params.pop(key, None)
                 child_inputs = {
                     "model": "openmx" if "scfout" in member.files else "wannier",
                     "material_dir": str(Path(next(iter(member.files.values()))).parent),
-                    **member.files,
+                    **loader.files,
                 }
+                if child_inputs["model"] == "wannier":
+                    child_params["interpolation"] = "ws_distance" if "wsvec" in loader.files else "standard"
                 child_params["plane"] = {
                     key: getattr(loader.plane, key) for key in ("origin", "direction", "transverse")
                 }

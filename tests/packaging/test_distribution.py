@@ -93,7 +93,7 @@ from importlib.resources import files
 from pathlib import Path
 import queer
 from queer import WannierModel, EPWModel, OpenMXModel, ObservableResult
-assert queer.__version__ == "1.3.1"
+assert queer.__version__ == "1.4.0"
 assert Path(queer.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
 assert files("queer").joinpath("resources/neon.mplstyle").is_file()
 assert files("queer").joinpath("resources/symmetry/hpkot.json").is_file()

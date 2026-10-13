@@ -8,7 +8,7 @@ from numpy.testing import assert_allclose
 
 from queer.capabilities import CapabilityError
 from queer.execution import ExecutionOptions
-from queer.finite_field.family import FamilyMember, GridLoader, ModelFamily, match_orbitals
+from queer.finite_field.family import FamilyMember, GridLoader, ModelFamily, _find_roots, match_orbitals
 from queer.finite_field.models.fourband import FourBandParams
 from queer.finite_field.models.lattice_reg import lattice_regularized_fourband
 from queer.finite_field.native import NativePlaneModel
@@ -154,6 +154,30 @@ def test_first_closed_member_uses_gapped_reference():
     assert report["reference"] == "m1"
     assert "degenerate" in report["flags"][0]
     assert report["D_c"] == 0
+
+
+@pytest.mark.parametrize(
+    "gap,reason",
+    [
+        ([0.1, 0.2, -0.2, -0.1], "does not fall towards the bracket"),
+        ([1.0, 0.99, -0.5, -1.0], "more than one member spacing outside"),
+    ],
+)
+def test_clean_character_swap_still_requires_gross_closing_trend(gap, reason):
+    (root,) = _find_roots(np.arange(4.0), gap, 0.1, mixing=np.zeros(4))
+    assert not root["accepted"] and reason in root["reason"]
+    (curved,) = _find_roots(np.arange(4.0), [0.9, 0.5, -0.5, -0.9], 0.1, mixing=np.zeros(4))
+    assert curved["accepted"] and "outside the bracket" in curved["v_test"]
+
+
+def test_character_loss_reason_preserves_indices_of_grid_only_members():
+    (root,) = _find_roots(
+        np.arange(5.0),
+        [1.0, np.nan, 0.5, np.nan, -0.5],
+        0.1,
+        present=[True, False, True, True, True],
+    )
+    assert root["members"] == [2, 4] and "members [3]" in root["reason"]
 
 
 def test_grid_only_member_does_not_fabricate_lost_wavefunction_character():

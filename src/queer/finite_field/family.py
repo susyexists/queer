@@ -332,18 +332,24 @@ def _bracket(D, g, valid, i, tol, mixing=None, mix_tol: float = 1e-2) -> dict:
         "z_right": None,
         "mismatch": None,
     }
-    problems = []
+    problems, gross = [], []
     for side, a, b in (("left", i - 1, i), ("right", j, j + 1)):
         if status[side] != "ok":
             continue
         slope = (abs(g[b]) - abs(g[a])) / (D[b] - D[a])
         if (slope >= 0) if side == "left" else (slope <= 0):
             problems.append(f"|g| does not fall towards the bracket on the {side}")
+            gross.append(problems[-1])
             continue
         z = D[b] - abs(g[b]) / slope if side == "left" else D[a] - abs(g[a]) / slope
         rec["z_" + side] = float(z)
         if not lo <= z <= hi:
             problems.append(f"the {side} extrapolation of |g| vanishes at D = {z:.6g}, outside the bracket")
+        if not D[i] - S <= z <= D[j] + S:
+            gross.append(
+                f"the {side} extrapolation of |g| vanishes at D = {z:.6g}, "
+                "more than one member spacing outside the bracket"
+            )
     if rec["z_left"] is not None and rec["z_right"] is not None:
         rec["mismatch"] = float(abs(rec["z_left"] - rec["z_right"]) / S)
         if rec["mismatch"] > tol:
@@ -362,7 +368,13 @@ def _bracket(D, g, valid, i, tol, mixing=None, mix_tol: float = 1e-2) -> dict:
     mix = None if mixing is None else max(float(mixing[i]), float(mixing[j]))
     rec["mixing"] = mix
     if mix is not None and np.isfinite(mix) and mix <= mix_tol:
-        rec["reason"] = f"band inversion: v/c characters swap without mixing (max mixing {mix:.1e})"
+        if gross:
+            rec["accepted"] = False
+            rec["reason"] = f"v/c characters swap without mixing (max mixing {mix:.1e}), but " + "; ".join(
+                gross
+            )
+        else:
+            rec["reason"] = f"band inversion: v/c characters swap without mixing (max mixing {mix:.1e})"
         if problems:
             rec["v_test"] = "; ".join(problems)
     elif problems:
@@ -382,17 +394,20 @@ def _bracket(D, g, valid, i, tol, mixing=None, mix_tol: float = 1e-2) -> dict:
     return rec
 
 
-def _find_roots(D, g, tol, mixing=None, mix_tol: float = 1e-2, present=None) -> list[dict]:
-    """Gap-closing candidates; members with present[i] False (no Hamiltonian) are left out entirely."""
+def _find_roots(D, g, tol, mixing=None, mix_tol: float = 1e-2, present=None, _index=None) -> list[dict]:
+    """Gap-closing candidates; member indices also retain grid-only entries in diagnostics."""
     D, g = np.asarray(D, dtype=float), np.asarray(g, dtype=float)
     if present is not None and not np.all(present):
         keep = np.flatnonzero(present)
-        sub = _find_roots(
-            D[keep], g[keep], tol, None if mixing is None else np.asarray(mixing)[keep], mix_tol
+        return _find_roots(
+            D[keep],
+            g[keep],
+            tol,
+            None if mixing is None else np.asarray(mixing)[keep],
+            mix_tol,
+            _index=keep,
         )
-        for r in sub:
-            r["members"] = [int(keep[k]) for k in r["members"]]
-        return sub
+    idx = np.arange(len(D)) if _index is None else np.asarray(_index)
     valid = np.isfinite(g)
     n = len(D)
     roots = []
@@ -421,12 +436,16 @@ def _find_roots(D, g, tol, mixing=None, mix_tol: float = 1e-2, present=None) -> 
                     "kind": "sign_change",
                     "members": [int(a), int(b)],
                     "accepted": False,
-                    "reason": f"v/c character lost at members {list(range(a + 1, b))} inside the bracket",
+                    "reason": "v/c character lost at members "
+                    f"{[int(idx[k]) for k in range(a + 1, b)]} inside the bracket",
                 }
             )
             continue
         roots.append(_bracket(D, g, valid, int(a), tol, mixing, mix_tol))
-    return sorted(roots, key=lambda r: D[r["members"][0]])
+    roots.sort(key=lambda r: D[r["members"][0]])
+    for root in roots:
+        root["members"] = [int(idx[k]) for k in root["members"]]
+    return roots
 
 
 # ---- family -----------------------------------------------------------------------------------------
