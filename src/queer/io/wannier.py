@@ -14,7 +14,10 @@ import numpy as np
 from ..geometry.lattice import validated_lattice
 from ..physics.constants import WANNIER_BOHR_ANGSTROM as BOHR_ANGSTROM
 from .wannier_ws import ComputedWignerSeitzShifts, PackedWignerSeitzShifts
+from .wannier_ws import fold_vacuum_axes as fold_vacuum_axes
+from .wannier_ws import periodic_dirs_from_table as periodic_dirs_from_table
 from .wannier_ws import recompute_wsvec as recompute_wsvec
+from .wannier_ws import unfold_from_wsvec as unfold_from_wsvec
 
 _FLOAT_TOKEN = r"[+\-]?(?:(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+\-]?[0-9]+)?|inf(?:inity)?|nan)"
 _WIN_COMMENT = re.compile(r"[!#].*$")

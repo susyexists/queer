@@ -235,6 +235,16 @@ and `band_path_breaks` marks a path jump where a step exceeds three times the
 previous one. Unlike the validating `queer.io.bands.read_wannier_bands`, these
 readers follow the producer's semantics, so a replay sees the same rows it did.
 
+`periodic_dirs_from_table` reads the periodic axes from the table as Wannier90
+wrote it: Wigner-Seitz images move a hop between centres more than half a cell
+apart through the neighbouring cell, so a corrected slab table also carries
+translations across its vacuum. `fold_vacuum_axes` sums those components onto
+zero, which reproduces the corrected Fourier sum exactly at zero vacuum momentum.
+`unfold_from_wsvec` applies wsvec file images with the producer's file-mode rules:
+pairs absent from the file keep their hop at `R`, entries outside the table are
+ignored, and images already applied to the HR weights are refused. The strict
+`ws_distance` mode of `normalized_operators` requires a complete mapping instead.
+
 ### Replaying saved Generator PythTB calculations
 
 `scripts/validation/generator_replay.py` compares an already downloaded successful

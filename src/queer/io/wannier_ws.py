@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -370,3 +370,147 @@ def recompute_wsvec(
         translations.astype(np.int64, copy=True), nbnd, candidates, offsets, image_ids, pair_chunk
     )
     return WignerSeitzData(shifts, use_ws_distance=True, ndegen_applied=False)
+
+
+def _integer_translations(translations):
+    vectors = np.asarray(translations)
+    if vectors.ndim != 2 or vectors.shape[1] != 3:
+        raise ValueError("translations must be an (NR,3) integer array")
+    if vectors.dtype.kind not in "iu" and (
+        vectors.dtype.kind != "f"
+        or not np.isfinite(vectors).all()
+        or not np.equal(vectors, np.round(vectors)).all()
+    ):
+        raise ValueError("translations must be an (NR,3) integer array")
+    return vectors.astype(np.int64)
+
+
+def periodic_dirs_from_table(translations) -> list[int]:
+    """Axes along which any tabulated hop crosses a cell boundary.
+
+    Apply this to the table as written by Wannier90. A Wigner-Seitz image
+    correction moves a hop between centres more than half a cell apart through the
+    neighbouring cell, so a corrected slab table also has translations along its
+    vacuum axis although the model has no dispersion there.
+    """
+    vectors = _integer_translations(translations)
+    return [axis for axis in range(3) if np.any(vectors[:, axis] != 0)]
+
+
+def fold_vacuum_axes(translations, hopping, periodic_dirs: Sequence[int]):
+    """Sum translation components along the non-periodic axes onto zero.
+
+    ``hopping`` is ``(NR,NB,NB,...)`` on ``translations``; trailing axes such as
+    stacked position components fold identically. Because ``exp(2*pi*i*k.R)``
+    ignores a component whose momentum is zero, the folded table reproduces the
+    original Fourier sum exactly wherever ``k`` vanishes on the folded axes, which
+    is where a slab model is evaluated. Folded translations are returned in
+    lexicographic order; a table without components to fold is returned unchanged.
+    """
+    vectors = _integer_translations(translations)
+    matrices = np.asarray(hopping)
+    if matrices.ndim < 3 or matrices.shape[0] != len(vectors) or matrices.shape[1] != matrices.shape[2]:
+        raise ValueError("hopping must have shape (NR,NB,NB,...) matching translations")
+    periodic = [int(axis) for axis in periodic_dirs]
+    if any(axis not in {0, 1, 2} for axis in periodic) or len(set(periodic)) != len(periodic):
+        raise ValueError("periodic_dirs must contain distinct axes 0, 1 or 2")
+    axes = [axis for axis in range(3) if axis not in periodic]
+    if not axes or not np.any(vectors[:, axes]):
+        return vectors, matrices
+    folded = vectors.copy()
+    folded[:, axes] = 0
+    keys, inverse = np.unique(folded, axis=0, return_inverse=True)
+    output = np.zeros((len(keys),) + matrices.shape[1:], dtype=np.complex128)
+    np.add.at(output, np.asarray(inverse).reshape(-1), matrices)
+    return keys, output
+
+
+def _shift_arrays(shifts) -> tuple[np.ndarray, np.ndarray]:
+    """Entry rows ``(R1,R2,R3,m,n,count)`` and their images, entry by entry."""
+    if isinstance(shifts, PackedWignerSeitzShifts):
+        return shifts.entries, shifts.images
+    if isinstance(shifts, ComputedWignerSeitzShifts):
+        counts = np.diff(shifts.offsets)
+        pairs = np.arange(len(counts))
+        rows, orbitals = np.divmod(pairs, shifts.nbnd**2)
+        entries = np.column_stack(
+            (
+                shifts.translations[rows],
+                orbitals // shifts.nbnd + 1,
+                orbitals % shifts.nbnd + 1,
+                counts,
+            )
+        )
+        return entries.astype(np.int64), shifts.candidates[shifts.image_ids].astype(np.int64)
+    if not isinstance(shifts, Mapping):
+        raise ValueError("wsvec must be WignerSeitzData or a mapping of (R1,R2,R3,m,n) to image shifts")
+    records: list[list[int]] = []
+    blocks: list[np.ndarray] = []
+    for key, values in shifts.items():
+        if (
+            not isinstance(key, tuple)
+            or len(key) != 5
+            or any(isinstance(value, bool) or not isinstance(value, (int, np.integer)) for value in key)
+        ):
+            raise ValueError("wsvec keys must be (R1,R2,R3,m,n) integer tuples")
+        block = np.asarray(values)
+        if not block.size:
+            continue
+        if block.ndim != 2 or block.shape[1] != 3 or block.dtype.kind not in "iu":
+            raise ValueError("wsvec images must be (count,3) integer shifts")
+        records.append([*map(int, key), len(block)])
+        blocks.append(block.astype(np.int64))
+    return (
+        np.asarray(records, dtype=np.int64).reshape(-1, 6),
+        np.concatenate(blocks) if blocks else np.empty((0, 3), np.int64),
+    )
+
+
+def unfold_from_wsvec(data: WannierData, wsvec, operators=None):
+    """Spread HR hops over the supercell images listed by a wsvec mapping.
+
+    Each ``<m,0|H|n,R>/degeneracy(R)`` is shared evenly by its listed shifts ``T``
+    and added at ``R+T``. Unlike the strict ``ws_distance`` normalization, a
+    translation/orbital pair absent from the mapping keeps its hop at ``R``, and
+    entries for other translations or orbitals are ignored. The ``use_ws_distance``
+    flag is not consulted, since Wannier90 then lists only zero shifts; images
+    already applied to the HR weights are refused. ``wsvec`` is
+    :class:`~queer.io.wannier.WignerSeitzData` or a mapping with one-based orbital
+    keys. ``operators`` defaults to ``data.hopping`` and may carry trailing axes.
+    Returns lexicographically ordered translations and the image-summed operators.
+    """
+    from .wannier import WignerSeitzData
+
+    shifts = wsvec
+    if isinstance(wsvec, WignerSeitzData):
+        if wsvec.ndegen_applied:
+            raise ValueError("wsvec images were already applied to the HR weights")
+        shifts = wsvec.shifts
+    translations = _integer_translations(data.translations)
+    nbnd = data.nbnd
+    matrices = np.asarray(data.hopping if operators is None else operators)
+    if matrices.shape[:3] != (len(translations), nbnd, nbnd):
+        raise ValueError("operators must have shape (NR,NB,NB,...) on the Wannier translations")
+    lookup = {tuple(int(value) for value in row): index for index, row in enumerate(translations)}
+    if len(lookup) != len(translations):
+        raise ValueError("Wannier translations must be distinct")
+    entries, images = _shift_arrays(shifts)
+    source = np.full(len(entries), -1, dtype=np.int64)
+    if len(entries):
+        vectors, inverse = np.unique(entries[:, :3], axis=0, return_inverse=True)
+        found = [lookup.get(tuple(int(value) for value in row), -1) for row in vectors]
+        source = np.asarray(found, dtype=np.int64)[np.asarray(inverse).reshape(-1)]
+    m, n = entries[:, 3] - 1, entries[:, 4] - 1
+    keep = (source >= 0) & (m >= 0) & (m < nbnd) & (n >= 0) & (n < nbnd)
+    covered = np.zeros((len(translations), nbnd, nbnd), dtype=bool)
+    covered[source[keep], m[keep], n[keep]] = True
+    absent = np.argwhere(~covered)
+    fill = np.column_stack(
+        (translations[absent[:, 0]], absent[:, 1:] + 1, np.ones(len(absent), dtype=np.int64))
+    )
+    complete = PackedWignerSeitzShifts(
+        np.concatenate((entries[keep], fill.reshape(-1, 6))),
+        np.concatenate((images[np.repeat(keep, entries[:, 5])], np.zeros((len(absent), 3), np.int64))),
+    )
+    keys, outputs = complete.normalized_operator_arrays(data, (matrices,))
+    return keys, outputs[0]
