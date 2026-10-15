@@ -24,6 +24,7 @@ import numpy as np
 from ..execution import ExecutionOptions
 
 ALGORITHM_VERSION = "1.4.1-refactor-v1"
+RUNSTORE_LOCK_MODES = ("flock", "none")
 # The repository root when this module runs from a source checkout.
 _SOURCE_ROOT = Path(__file__).resolve().parents[3]
 
@@ -181,12 +182,37 @@ def environment_versions() -> dict[str, Any]:
     return versions
 
 
+def runstore_lock_mode() -> str:
+    """Run ownership from ``QUEER_RUNSTORE_LOCK``: ``flock`` (default) or ``none``."""
+    mode = os.environ.get("QUEER_RUNSTORE_LOCK", "flock").strip().lower() or "flock"
+    if mode not in RUNSTORE_LOCK_MODES:
+        raise ValueError(f"QUEER_RUNSTORE_LOCK must be one of {', '.join(RUNSTORE_LOCK_MODES)}, not {mode!r}")
+    return mode
+
+
 class RunStore:
-    """An exclusively owned run with validated incremental completion records."""
+    """An exclusively owned run with validated incremental completion records.
+
+    Ownership uses an advisory ``flock`` on ``.run.lock``; with
+    ``QUEER_RUNSTORE_LOCK=none`` the caller guarantees a single writer instead,
+    which each attempt records as its ``lock``. Case commits are durable when
+    they return, while the manifest listing them is rewritten in batches: after
+    ``manifest_batch_commits`` pending commits (or an eighth of the recorded
+    cases, whichever is larger), once ``manifest_batch_seconds`` have passed
+    since the last write, and on every explicit save, finish or release. A
+    killed process therefore loses at most the commits of its unsaved batch;
+    resuming recomputes them and atomically replaces their arrays.
+    """
+
+    manifest_batch_commits = 64
+    manifest_batch_seconds = 30.0
 
     def __init__(self, root: Path, config: dict[str, Any], input_files: list[Path], *, resume: bool = False):
+        self.lock_mode = runstore_lock_mode()
         self.started_at = time.monotonic()
         self.previous_checkpoint_at = self.started_at
+        self.saved_at = self.started_at
+        self.pending_commits = 0
         self.root = root
         self.lock = root / ".run.lock"
         self.owned = False
@@ -200,6 +226,7 @@ class RunStore:
             "versions": environment_versions(),
             "host": socket.gethostname(),
             "scheduler": scheduler_context(),
+            "lock": self.lock_mode,
         }
         inputs = [
             {"path": str(path.resolve()), "size": path.stat().st_size, "sha256": digest_file(path)}
@@ -250,6 +277,7 @@ class RunStore:
                 }
                 atomic_json(root / "config.json", config)
             self.manifest["status"] = "running"
+            self.manifest["lock"] = self.lock_mode
             self.manifest.pop("error", None)
             self.save()
         except BaseException:
@@ -257,6 +285,9 @@ class RunStore:
             raise
 
     def _acquire(self) -> None:
+        if self.lock_mode == "none":
+            self.owned = True
+            return
         stream = self.lock.open("a+")
         self.lock_stream = stream
         try:
@@ -268,7 +299,11 @@ class RunStore:
         except OSError as exc:
             stream.close()
             self.lock_stream = None
-            raise OSError("Run storage must support advisory file locking") from exc
+            raise OSError(
+                exc.errno,
+                f"Run storage at {self.root} does not support advisory file locking ({exc.strerror}); "
+                "set QUEER_RUNSTORE_LOCK=none if no other process writes this run",
+            ) from exc
         self.owned = True
         stream.seek(0)
         stream.truncate()
@@ -278,6 +313,13 @@ class RunStore:
     def save(self) -> None:
         self.manifest["updated_at"] = utc_now()
         atomic_json(self.root / "manifest.json", self.manifest)
+        self.pending_commits = 0
+        self.saved_at = time.monotonic()
+
+    def flush(self) -> None:
+        """Write the manifest if commits are pending."""
+        if self.pending_commits:
+            self.save()
 
     def completed(self, case: str) -> bool:
         record = self.manifest["cases"].get(case)
@@ -303,8 +345,11 @@ class RunStore:
             "completed_at": utc_now(),
             "elapsed_since_previous_checkpoint_seconds": checkpoint_at - self.previous_checkpoint_at,
         }
-        self.save()
         self.previous_checkpoint_at = checkpoint_at
+        self.pending_commits += 1
+        batch = max(self.manifest_batch_commits, len(self.manifest["cases"]) // 8)
+        if self.pending_commits >= batch or checkpoint_at - self.saved_at >= self.manifest_batch_seconds:
+            self.save()
 
     def finish(self, *, status: str = "completed", error: BaseException | None = None) -> None:
         self.manifest["status"] = status
@@ -319,10 +364,15 @@ class RunStore:
         self.save()
 
     def release(self) -> None:
-        if self.owned and self.lock_stream is not None:
-            fcntl.flock(self.lock_stream, fcntl.LOCK_UN)
-            self.lock_stream.close()
-            self.lock_stream = None
+        if not self.owned:
+            return
+        try:
+            self.flush()
+        finally:
+            if self.lock_stream is not None:
+                fcntl.flock(self.lock_stream, fcntl.LOCK_UN)
+                self.lock_stream.close()
+                self.lock_stream = None
             self.owned = False
 
 

@@ -117,8 +117,14 @@ queer momentum --config /path/to/submission/config.toml --v0 12 \
 Resume verifies scientific parameters, algorithm version, input checksums, and
 completed artifact checksums. Modified scientific inputs require a new run. Advisory
 locks exclude concurrent writers and release when a process exits or is killed;
-shared storage must support advisory file locking. SIGTERM records interruption;
+shared storage must support advisory file locking. Where it does not, the run fails
+with an error naming `QUEER_RUNSTORE_LOCK=none`; that setting skips the lock, so the
+caller must ensure a single writer per run directory, and each attempt records its
+`lock` mode. SIGTERM records interruption;
 SIGKILL can leave status `running`, but completed atomic checkpoints remain resumable.
+The manifest listing them is rewritten in batches (64 commits, an eighth of the
+recorded cases, or 30 s, and always on finish), so a killed process loses at most
+its unsaved batch, which a resume recomputes.
 Completed runs can be resumed idempotently. Rendering consumes completed artifacts.
 
 For generic arrays, recovery can also call the adapter with the original index:
