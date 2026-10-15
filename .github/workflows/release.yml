@@ -30,13 +30,60 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
       - run: uv sync --locked --extra plot --extra symmetry --extra animation --extra notebook --extra precision --group dev --python 3.13
+      - name: Record the tagged commit in queer._build
+        run: |
+          printf '"""Source revision of a release build; release builds overwrite this module."""\n\nBUILD_SHA: str | None = "%s"\n' "$GITHUB_SHA" > src/queer/_build.py
+          .venv/bin/python -c 'import os, queer._build as build; assert build.BUILD_SHA == os.environ["GITHUB_SHA"]'
       - run: .venv/bin/python -m pytest -m packaging
+        env:
+          QUEER_EXPECTED_BUILD_SHA: ${{ github.sha }}
       - run: .venv/bin/python -c 'import os,queer; assert os.environ["GITHUB_REF_NAME"] == "v" + queer.__version__'
       - run: .venv/bin/python -m build
       - run: .venv/bin/twine check dist/*
+      - name: Check that the wheel carries the tagged commit
+        run: |
+          .venv/bin/python - <<'PY'
+          import os, pathlib, zipfile
+          (wheel,) = pathlib.Path("dist").glob("queer-*.whl")
+          source = zipfile.ZipFile(wheel).read("queer/_build.py").decode()
+          assert f'BUILD_SHA: str | None = "{os.environ["GITHUB_SHA"]}"' in source, source
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: queer-${{ github.ref_name }}
           path: dist/*
+          if-no-files-found: error
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [acceptance, backend-acceptance, release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: queer-${{ github.ref_name }}
+          path: dist
+      - name: Checksum exactly the built wheel and sdist
+        working-directory: dist
+        run: |
+          shopt -s nullglob
+          wheels=(queer-*.whl)
+          sdists=(queer-*.tar.gz)
+          if [ "${#wheels[@]}" -ne 1 ] || [ "${#sdists[@]}" -ne 1 ]; then
+            echo "expected one wheel and one sdist, found: ${wheels[*]} ${sdists[*]}" >&2
+            exit 1
+          fi
+          sha256sum -- "${wheels[0]}" "${sdists[0]}" > SHA256SUMS
+          sha256sum --check SHA256SUMS
+          cat SHA256SUMS
+      - name: Publish the GitHub release with the CI-built assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/queer-*.whl dist/queer-*.tar.gz dist/SHA256SUMS \
+            --verify-tag --title "QUEER $GITHUB_REF_NAME" \
+            --notes "Wheel and sdist built by the release workflow from $GITHUB_SHA. Verify downloads against SHA256SUMS."
   backend-acceptance:
     uses: ./.github/workflows/backend-acceptance.yml

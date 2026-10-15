@@ -27,6 +27,14 @@ Build and inspect distributions with `python -m build` and `python -m twine chec
 The packaging test installs the wheel into a fresh environment outside the checkout
 and checks numerical execution with only core dependencies.
 
+Pushing a `v*` tag runs `.github/workflows/release.yml`. After the acceptance jobs,
+the release job writes the tagged commit into `src/queer/_build.py` (`BUILD_SHA`),
+runs the packaging tests and builds the wheel and sdist once. The publish job then
+creates the GitHub Release for the tag with exactly those two files and a
+`SHA256SUMS` computed from them; it fails rather than replace the assets of an
+existing release. Pin consumers to a release asset URL with its `#sha256=` fragment
+taken from `SHA256SUMS`.
+
 Storage configuration and Slurm submission are documented in
 [HPC operations](docs/hpc_usage.md). The historical relocation manifest records past
 moves; it is not a current-file integrity manifest.

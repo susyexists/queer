@@ -1,10 +1,13 @@
 """Verify the distribution in an isolated environment outside the source tree."""
 
+import ast
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tarfile
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -73,6 +76,29 @@ def test_source_distribution_contains_reproducible_native_validation(distributio
     assert "data/references/openmx/FeCl2.scfout" not in members
     assert "data/references/openmx/GaAs_soc.scfout" not in members
     assert not any(Path(name).suffix in {".pyc", ".pyo"} for name in members)
+
+
+def test_distributions_carry_the_build_identity_module(distributions):
+    with zipfile.ZipFile(distributions["wheel"]) as archive:
+        wheel_source = archive.read("queer/_build.py").decode()
+    with tarfile.open(distributions["sdist"]) as archive:
+        member = next(name for name in archive.getnames() if name.endswith("/src/queer/_build.py"))
+        stream = archive.extractfile(member)
+        assert stream is not None
+        sdist_source = stream.read().decode()
+    assert wheel_source == sdist_source == (ROOT / "src/queer/_build.py").read_text()
+    (value,) = [
+        node.value
+        for node in ast.parse(wheel_source).body
+        if isinstance(node, ast.AnnAssign) and getattr(node.target, "id", None) == "BUILD_SHA"
+    ]
+    build_sha = ast.literal_eval(value)
+    # Source builds carry None. The release job writes the tagged commit first and
+    # names it in QUEER_EXPECTED_BUILD_SHA; other jobs on the same tag do not.
+    assert build_sha is None or re.fullmatch(r"[0-9a-f]{40}", build_sha)
+    expected = os.environ.get("QUEER_EXPECTED_BUILD_SHA")
+    if expected:
+        assert build_sha == expected
 
 
 @pytest.mark.parametrize("artifact_kind", ["wheel", "sdist"])
