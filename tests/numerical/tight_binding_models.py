@@ -58,3 +58,38 @@ def kane_mele(onsite, interlayer=None, height=10.0):
     keys = sorted(table)
     reduced = np.repeat([[1 / 3, 1 / 3, 0], [2 / 3, 2 / 3, 0]], 2, axis=0)
     return WannierModel(keys, [table[key] for key in keys], lattice=lattice, centres=reduced @ lattice)
+
+
+def haldane(staggered=0.2, t=-1.0, t2=0.15, phase=np.pi / 2, height=10.0):
+    """Haldane model with PythTB's example hops; centres on the honeycomb A and B sites."""
+    lattice = np.array([[1.0, 0, 0], [0.5, np.sqrt(3) / 2, 0], [0, 0, height]])
+    second = t2 * np.exp(1j * phase)
+    table = {(0, 0, 0): np.diag([-staggered, staggered]).astype(complex)}
+
+    def hop(amplitude, i, j, translation):
+        reverse = tuple(-value for value in translation)
+        for key, a, b, value in ((tuple(translation), i, j, amplitude), (reverse, j, i, np.conj(amplitude))):
+            table.setdefault(key, np.zeros((2, 2), complex))[a, b] += value
+
+    hop(t, 0, 1, [0, 0, 0])
+    hop(t, 1, 0, [1, 0, 0])
+    hop(t, 1, 0, [0, 1, 0])
+    for translation, conjugate in (([1, 0, 0], False), ([1, -1, 0], True), ([0, 1, 0], True)):
+        hop(np.conj(second) if conjugate else second, 0, 0, translation)
+    for translation, conjugate in (([1, -1, 0], False), ([0, 1, 0], False), ([1, 0, 0], True)):
+        hop(np.conj(second) if conjugate else second, 1, 1, translation)
+    keys = sorted(table)
+    reduced = np.array([[1 / 3, 1 / 3, 0], [2 / 3, 2 / 3, 0]])
+    return WannierModel(keys, [table[key] for key in keys], lattice=lattice, centres=reduced @ lattice)
+
+
+def cell_periodic_operators(model, k):
+    """PythTB's convention-I H(k) and dH/dk_red at fractional k.
+
+    H_ij(k) = sum_R H_ij(R) exp(2 pi i k.(R + tau_j - tau_i)); the derivative along
+    each reduced axis is what pythtb's ``velocity(cartesian=False)`` returns.
+    """
+    tau = model.centres @ np.linalg.inv(model.lattice)
+    span = model.translations[:, None, None, :] + tau[None, None, :, :] - tau[None, :, None, :]
+    terms = np.exp(2j * np.pi * (span @ np.asarray(k, float))) * model.hopping_matrices
+    return terms.sum(axis=0), np.einsum("rija,rij->aij", 2j * np.pi * span, terms)

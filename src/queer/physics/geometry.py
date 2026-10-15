@@ -257,3 +257,70 @@ def interband_products(xs, xt, inverse_gap_squared):
     gst = cross.real * inverse_gap_squared
     gtt = np.abs(xt) ** 2 * inverse_gap_squared
     return omega, gss, gst, gtt
+
+
+def fermi_sea_curvature(v_a, v_b, energies, *, min_gap=1e-6):
+    """Berry curvature of every state below the energy zero, from eigenbasis velocities.
+
+    Omega_ab = -2 Im sum_(n: E_n<0, m: E_m>=0) v^a_nm v^b_mn / (E_n - E_m)^2, the
+    Kubo form with Omega = -2 Im Q and the occupation set by the energy zero at
+    each point rather than by a fixed band list; over an isolated set it equals
+    the occupied-manifold curvature. Pairs with |E_n - E_m| <= ``min_gap`` are
+    skipped, as an exact degeneracy at the Fermi level has no finite Kubo term.
+    Energies (..., N) are relative to the Fermi level; velocities (..., N, N)
+    are band matrices in any consistent unit, and leading axes broadcast.
+    """
+    e = np.asarray(energies, float)
+    occupied = e < 0.0
+    gap = e[..., :, None] - e[..., None, :]
+    pair = occupied[..., :, None] & ~occupied[..., None, :] & (np.abs(gap) > min_gap)
+    inverse_square = np.where(pair, 1.0 / np.where(pair, gap, 1.0) ** 2, 0.0)
+    term = v_a * np.swapaxes(v_b, -1, -2) * inverse_square
+    return -2.0 * np.imag(term.sum(axis=(-1, -2)))
+
+
+def rotate_velocity(v, eigvecs):
+    """Orbital-basis velocities (d, Nk, N, N) in the eigenbasis whose vectors are ROWS.
+
+    ``eigvecs`` (Nk, Nb, N) holds one eigenvector per row (PythTB's layout), so
+    the result is <n|v|m> with shape (d, Nk, Nb, Nb).
+    """
+    return np.matmul(eigvecs.conj()[None], np.matmul(v, np.swapaxes(eigvecs, -1, -2)[None]))
+
+
+def reduced_plane_curvature(curvature, reciprocal, plane):
+    """Omega_red = b_a . Omega . b_b of Cartesian (..., 3, 3) tensors on the plane (a, b).
+
+    ``reciprocal`` rows are b_i = 2 pi inv(A)^T rows in 1/Angstrom, so Omega in
+    Angstrom^2 becomes dimensionless and sum Omega_red / (n^2 2 pi) over an
+    n x n mesh of the fractional plane is its Chern number.
+    """
+    b = np.asarray(reciprocal, float)
+    first, second = plane
+    return np.einsum("...cd,c,d->...", np.asarray(curvature, float), b[first], b[second])
+
+
+def plane_normal(reciprocal, plane):
+    """Unit normal b_a x b_b / |b_a x b_b| and the plane-cell area |b_a x b_b| (1/Angstrom^2)."""
+    b = np.asarray(reciprocal, float)
+    first, second = plane
+    normal = np.cross(b[first], b[second])
+    area = float(np.linalg.norm(normal))
+    return normal / area, area
+
+
+def in_plane_trace(metric, normal):
+    """tr g - n.g.n of Cartesian (..., 3, 3) metrics: the trace within the plane normal to n."""
+    g = np.asarray(metric, float)
+    n = np.asarray(normal, float)
+    return np.einsum("...aa->...", g) - np.einsum("a,...ab,b->...", n, g, n)
+
+
+def plane_flux(reduced_curvature, mesh):
+    """sum Omega_red / (n^2 2 pi) over an n x n uniform mesh of the fractional plane."""
+    return float(np.sum(reduced_curvature) / (mesh * mesh * 2.0 * np.pi))
+
+
+def quantum_weight(metric_trace, area, mesh):
+    """K = sum tr g |b_a x b_b| / n^2 / 2 pi over an n x n mesh; K >= |C| for an isolated set."""
+    return float(np.sum(metric_trace) * area / (mesh * mesh) / (2.0 * np.pi))

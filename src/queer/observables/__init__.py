@@ -21,6 +21,7 @@ for _module, _names in {
     "unfolding": ("bandunfolding", "bandunfolding_spin_texture"),
     "geometry": (
         "berry_curvature",
+        "berry_plane",
         "quantum_metric",
         "band_pair_geometry",
         "chern_number",

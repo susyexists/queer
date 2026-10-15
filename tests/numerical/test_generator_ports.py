@@ -8,13 +8,13 @@ of the same code lives in the topology, Berry-plane, slab and estimator tests.
 import numpy as np
 import pytest
 from numpy.testing import assert_allclose, assert_array_equal
-from tight_binding_models import kane_mele, qwz
+from tight_binding_models import cell_periodic_operators, haldane, kane_mele, qwz
 
 from queer.models.evaluation import states
 from queer.models.wannier import WannierModel
-from queer.observables.geometry import wilson_loop
-from queer.observables.topology import plane_loops, wilson_plane
-from queer.physics import topology
+from queer.observables.geometry import berry_plane, wilson_loop
+from queer.observables.topology import plane_kpoints, plane_loops, wilson_plane
+from queer.physics import geometry, topology
 
 PLANE_2D = np.array([[a, b, 0] for a in (-1, 0, 1) for b in (-1, 0, 1)])
 
@@ -187,3 +187,53 @@ def test_wilson_plane_refinement_and_z2_follow_the_generator(generator_core, cas
             flow["ambiguous"],
         )
         assert_allclose(port["gap_midpoints"], flow["gap_midpoints"], atol=1e-10)
+
+
+def random_complex(rng, shape):
+    return rng.normal(size=shape) + 1j * rng.normal(size=shape)
+
+
+def test_fermi_sea_curvature_and_velocity_rotation_equal_the_generator(generator_core):
+    rng = np.random.default_rng(41)
+    for leading in ((), (3,), (2, 5)):
+        for bands in (1, 2, 4, 7):
+            energies = rng.normal(scale=0.5, size=leading + (bands,))
+            if bands >= 4:
+                # Pairs straddling E_F just inside and just outside the skip threshold, and a zero level.
+                energies[..., 0], energies[..., 1] = -0.4e-6, 0.4e-6
+                energies[..., 2], energies[..., 3] = -1.5e-6, 0.0
+            v_a = random_complex(rng, leading + (bands, bands))
+            v_b = random_complex(rng, leading + (bands, bands))
+            for gap in (0.0, 1e-6, 1e-3):
+                port = geometry.fermi_sea_curvature(v_a, v_b, energies, min_gap=gap)
+                original = generator_core.fermi_sea_curvature(v_a, v_b, energies, min_gap=gap)
+                assert_allclose(
+                    port, original, rtol=1e-12, atol=1e-12 * np.max(np.abs(original), initial=1.0)
+                )
+    velocity = random_complex(rng, (2, 4, 3, 3))
+    rows = np.linalg.qr(random_complex(rng, (4, 3, 3)))[0]
+    assert_array_equal(
+        geometry.rotate_velocity(velocity, rows), generator_core.rotate_velocity(velocity, rows)
+    )
+
+
+@pytest.mark.parametrize("case", ["haldane", "random"])
+def test_berry_plane_equals_the_generator_maps_on_pythtb_velocities(generator_core, case):
+    rng = np.random.default_rng(42)
+    model = haldane() if case == "haldane" else random_layer(rng, 3, 1)
+    occupied = 1
+    points = plane_kpoints(2, 0.0, 5)
+    sea = berry_plane(model, points, plane=(0, 1), fermi_energy=0.0)["omega_reduced"]
+    bands = berry_plane(model, points, plane=(0, 1), occupied_bands=occupied)["omega_reduced"]
+    original_sea, original_bands = [], []
+    for k in points:
+        hamiltonian, velocity = cell_periodic_operators(model, k)
+        energies, vectors = np.linalg.eigh(hamiltonian)
+        rotated = generator_core.rotate_velocity(velocity[:2, None], vectors.T[None])[:, 0]
+        original_sea.append(generator_core.fermi_sea_curvature(rotated[0], rotated[1], energies))
+        # PythTB's band-set Kubo curvature: the same sum with the zero placed inside the gap.
+        middle = 0.5 * (energies[occupied - 1] + energies[occupied])
+        original_bands.append(generator_core.fermi_sea_curvature(rotated[0], rotated[1], energies - middle))
+    scale = np.abs(original_bands).max()
+    assert_allclose(sea, original_sea, rtol=0, atol=1e-10 * scale)
+    assert_allclose(bands, original_bands, rtol=0, atol=1e-10 * scale)

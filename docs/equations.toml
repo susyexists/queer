@@ -372,3 +372,39 @@ canonical = "queer.physics.topology:z2_indices"
 specialized_backends = []
 source_references = ["docs/generator_services.md#numerical-ports-of-the-pythtb-engine", "https://doi.org/10.1103/PhysRevLett.98.106803"]
 independent_tests = ["tests/numerical/test_topology.py::test_stacked_kane_mele_is_a_weak_topological_insulator", "tests/numerical/test_topology.py::test_z2_indices_report_unknown_and_inconsistent_planes"]
+
+[[equations]]
+id = "geometry.fermi_sea_curvature"
+expression = "Omega_ab = -2*Im sum_(n: E_n<E_F, m: E_m>=E_F, |E_n-E_m|>min_gap) v_a,nm*v_b,mn/(E_n-E_m)^2"
+input_units = "v: eigenbasis dH/dk, eV*angstrom (Cartesian) or eV (reduced, v_red,a = b_a.v); E: eV relative to E_F"
+output_units = "angstrom^2 for Cartesian velocities; dimensionless for reduced velocities"
+assumptions = ["Complete retained eigenbasis at each k", "A pair closer than min_gap across E_F has no finite Kubo term and is skipped"]
+conventions = ["Omega = -2 Im Q, so in a gap it equals the occupied-manifold Kubo curvature", "Velocities include the i[H, tau] term of the centres (PythTB's cell-periodic convention)"]
+canonical = "queer.physics.geometry:fermi_sea_curvature"
+specialized_backends = []
+source_references = ["docs/generator_services.md#numerical-ports-of-the-pythtb-engine", "https://doi.org/10.1103/RevModPhys.82.1959"]
+independent_tests = ["tests/numerical/test_berry_plane.py::test_fermi_sea_and_kubo_maps_agree_in_a_gap_and_integrate_to_the_plaquette_chern", "tests/numerical/test_berry_plane.py::test_metal_fermi_sea_curvature_sums_the_occupied_band_curvatures", "tests/numerical/test_berry_plane.py::test_fermi_sea_uses_cell_periodic_velocities_with_the_centre_term"]
+
+[[equations]]
+id = "geometry.reduced_plane_flux"
+expression = "Omega_red = b_a.Omega.b_b; C = sum_k Omega_red/(n^2*2*pi) over an n x n fractional plane mesh"
+input_units = "Omega: angstrom^2; b: inverse angstrom including 2*pi"
+output_units = "dimensionless"
+assumptions = ["Uniform n x n mesh of the fractional plane spanned by b_a and b_b"]
+conventions = ["b = 2*pi*inv(A)^T rows; the Cartesian curvature along the plane normal is Omega_red/|b_a x b_b|", "(a, b) are the cyclic plane axes of the fixed axis"]
+canonical = "queer.physics.geometry:reduced_plane_curvature"
+specialized_backends = ["queer.physics.geometry:plane_flux"]
+source_references = ["docs/generator_services.md#numerical-ports-of-the-pythtb-engine"]
+independent_tests = ["tests/numerical/test_berry_plane.py::test_fermi_sea_and_kubo_maps_agree_in_a_gap_and_integrate_to_the_plaquette_chern", "tests/numerical/test_berry_plane.py::test_qwz_metric_trace_curvature_and_quantum_weight_match_the_bloch_sphere_forms"]
+
+[[equations]]
+id = "geometry.quantum_weight"
+expression = "K = sum_k (tr g - n.g.n)*|b_a x b_b|/(n^2*2*pi)"
+input_units = "g: angstrom^2; b: inverse angstrom including 2*pi"
+output_units = "dimensionless"
+assumptions = ["Finite-basis interband metric of an isolated occupied manifold, a lower bound to the full metric"]
+conventions = ["n is the unit plane normal b_a x b_b/|b_a x b_b|", "K >= |C| for an isolated set"]
+canonical = "queer.physics.geometry:quantum_weight"
+specialized_backends = ["queer.physics.geometry:in_plane_trace"]
+source_references = ["docs/generator_services.md#numerical-ports-of-the-pythtb-engine", "https://doi.org/10.1103/PhysRevX.14.011052"]
+independent_tests = ["tests/numerical/test_berry_plane.py::test_qwz_metric_trace_curvature_and_quantum_weight_match_the_bloch_sphere_forms"]

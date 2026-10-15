@@ -21,11 +21,19 @@ from ..models.evaluation import (
     reciprocal,
     spin_degeneracy,
     states,
+    velocities,
     volume,
 )
 from ..physics.constants import E_CHARGE
 from ..physics.eigensystems import centered_pair_gap
-from ..physics.geometry import band_curvatures, pair_metrics
+from ..physics.geometry import (
+    band_curvatures,
+    fermi_sea_curvature,
+    in_plane_trace,
+    pair_metrics,
+    plane_normal,
+    reduced_plane_curvature,
+)
 from ..physics.geometry import occupied_mask as _occupied
 from ._sampling import kmesh, map_points
 from .result import ObservableResult
@@ -297,6 +305,87 @@ def band_pair_geometry(
         energy_reference="absolute",
         completeness="retained-basis interband; excludes external orbital spread",
         validity="NaN geometry denotes unresolved selected-band degeneracy; inspect validity masks",
+    )
+
+
+def berry_plane(
+    model,
+    kpoints,
+    *,
+    plane,
+    occupied_bands=None,
+    fermi_energy=None,
+    metric=False,
+    min_gap=1e-6,
+    degeneracy_tol=None,
+    execution=None,
+):
+    """Reduced Berry curvature on the reciprocal plane (a, b), with an optional metric trace.
+
+    With ``occupied_bands`` the curvature is the Kubo curvature of that many
+    lowest bands, as ``berry_curvature(engine="kubo")``, and ``metric`` adds the
+    in-plane trace tr g - n.g.n of their finite-basis interband metric, as
+    ``quantum_metric``. Without it every state below ``fermi_energy`` counts,
+    through :func:`queer.physics.geometry.fermi_sea_curvature` with ``min_gap``
+    on the eigenbasis velocities, which include the i[H, r] term of the centres.
+    With b = 2 pi inv(A)^T, ``omega_reduced`` = b_a . Omega . b_b is
+    dimensionless and ``omega_cartesian`` = omega_reduced / |b_a x b_b| is in Å².
+    """
+    points = np.asarray(getattr(kpoints, "path", kpoints), dtype=float)
+    if points.ndim != 2 or points.shape[1] != 3 or not np.isfinite(points).all() or not len(points):
+        raise ValueError("kpoints must be a nonempty finite (Nk,3) array")
+    axes = tuple(plane)
+    if len(axes) != 2 or len(set(axes)) != 2 or any(axis not in (0, 1, 2) for axis in axes):
+        raise ValueError("plane must name two distinct reciprocal axes")
+    if occupied_bands is None and metric:
+        raise ValueError("the quantum metric needs an occupied band count")
+    gap = float(min_gap)
+    if not np.isfinite(gap) or gap < 0:
+        raise ValueError("min_gap must be finite and nonnegative")
+    mu = _fermi_energy(model, fermi_energy)
+    b = reciprocal(model)
+    normal, area = plane_normal(b, axes)
+
+    def at(k):
+        if occupied_bands is None:
+            energies, velocity = velocities(model, k, degeneracy_tol)
+            reduced = np.einsum("ac,cnm->anm", b[list(axes)], velocity)
+            return [fermi_sea_curvature(reduced[0], reduced[1], energies - mu, min_gap=gap), np.nan]
+        data = band_geometry(model, k, degeneracy_tol)
+        occupied = _occupied(data, occupied_bands, mu)
+        curvature = band_curvatures(data, "kubo")[occupied].sum(axis=0)
+        trace = np.nan
+        if metric:
+            links = data["connections"][:, occupied][:, :, ~occupied]
+            trace = in_plane_trace(np.einsum("anm,bnm->ab", links, links.conj()).real, normal)
+        return [reduced_plane_curvature(curvature, b, axes), trace]
+
+    values = np.asarray(map_points(model, points, at, execution), dtype=float)
+    arrays = {
+        "kpoints": points,
+        "omega_reduced": values[:, 0],
+        "omega_cartesian": values[:, 0] / area,
+    }
+    dims = {"kpoints": ("kpoint", "fractional"), "omega_reduced": ("kpoint",), "omega_cartesian": ("kpoint",)}
+    units = {"kpoints": "fractional", "omega_reduced": "1", "omega_cartesian": "Angstrom^2"}
+    if metric:
+        arrays["metric_trace"] = values[:, 1]
+        dims["metric_trace"] = ("kpoint",)
+        units["metric_trace"] = "Angstrom^2"
+    return _result(
+        arrays,
+        dims,
+        units,
+        "berry_plane",
+        plane=list(axes),
+        occupation="bands" if occupied_bands is not None else "fermi",
+        occupied_bands=None if occupied_bands is None else int(occupied_bands),
+        fermi_energy=mu,
+        min_gap_eV=None if occupied_bands is not None else gap,
+        plane_area_inverse_angstrom2=area,
+        plane_normal=normal.tolist(),
+        reduced_convention="omega_reduced = b_a.Omega.b_b with b = 2 pi inv(A)^T",
+        metric_definition="finite_basis_interband in-plane trace" if metric else None,
     )
 
 

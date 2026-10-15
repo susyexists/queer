@@ -285,6 +285,24 @@ n_t doubles, at most `max_refinements` times, reusing the loops already computed
 `topology_planes` and `trim_points` give the Generator's plane list (the layer
 plane in 2D; k_c = 0, ½ for c = 3, 1, 2 in 3D) and its TRIMs.
 
+`queer.observables.geometry.berry_plane` evaluates the Berry maps of the
+PYTHTB_BERRY step at fractional k on a reciprocal plane (a, b). With an occupied
+band count it gives that manifold's Kubo curvature, as
+`berry_curvature(engine="kubo")`, and optionally the in-plane trace
+tr g - n·g·n of its finite-basis interband metric, as `quantum_metric`. Without
+one it gives the Generator's Fermi-sea curvature
+Ω = -2 Im Σ v^a_nm v^b_mn/(E_n - E_m)² over n below and m at or above E_F, with
+pairs closer than 1e-6 eV skipped (`queer.physics.geometry.fermi_sea_curvature`).
+Its velocities come from `queer.models.evaluation.velocities`, which include the
+i[H, τ] term of the centres and equal PythTB's cell-periodic velocities; the bare
+`derivatives()["H"]` lacks that term and gives a different curvature. Reduced
+quantities use b = 2π inv(A)ᵀ. Ω_red = b_a·Ω·b_b is dimensionless, the plane's
+Chern number or Fermi-sea integral is Σ Ω_red/(n²·2π) over an n×n mesh
+(`plane_flux`), Ω_red/|b_a×b_b| is the Cartesian curvature in Å², and the
+quantum weight is Σ tr g·|b_a×b_b|/(n²·2π) (`quantum_weight`).
+`rotate_velocity` keeps the Generator's rotation of orbital-basis velocities into
+row eigenvectors.
+
 ### Replaying saved Generator PythTB calculations
 
 `scripts/validation/generator_replay.py` compares an already downloaded successful
