@@ -11,9 +11,9 @@ from typing import Any
 
 import numpy as np
 
-from ..io.artifacts import atomic_json, digest_file
-from ..physics.constants import ASE_FS as ASE_FS
-from ..physics.constants import BOHR_ANGSTROM, HARTREE_EV
+from ...io.artifacts import atomic_json, digest_file
+from ...physics.constants import ASE_FS as ASE_FS
+from ...physics.constants import BOHR_ANGSTROM, HARTREE_EV
 
 
 def translate_pyatb(step_type, parameters=None, *, input_parameters=None, fermi_energy=None, spin_mode=None):
@@ -269,9 +269,9 @@ def translate_ase(step_type, parameters=None):
 
 
 def structure_payload(structure, *, source_type="upload", source_format="poscar", content=""):
-    from ..elements import chemical_formula
-    from ..geometry.structures import lattice_parameters
-    from ..io.atomistic import poscar_text
+    from ...elements import chemical_formula
+    from ...geometry.structures import lattice_parameters
+    from ...io.atomistic import poscar_text
 
     rendered = poscar_text(structure, sort=True)
     text, order = rendered[:2]
@@ -303,14 +303,14 @@ def structure_payload(structure, *, source_type="upload", source_format="poscar"
 
 def transform_structures(structure, transforms):
     """Apply generator recipes with their historical layer-scaling convention."""
-    from ..geometry.structures import apply_transforms, expand_variants
+    from ...geometry.structures import apply_transforms, expand_variants
 
     return [apply_transforms(structure, recipe, legacy=True) for recipe in expand_variants(transforms)]
 
 
 def dataset_exports(items, **parameters):
     """Generator reference items use kbar; preserve their audited legacy sign."""
-    from ..atomistic.datasets import export_dataset_splits
+    from ...atomistic.datasets import export_dataset_splits
 
     return export_dataset_splits(items, **{"stress_unit": "kbar", "stress_sign": 1.0, **parameters})
 
@@ -321,7 +321,7 @@ def select_legacy_min_energy_frame(
     """Explicit legacy fallback: infer absent frame steps from a write interval."""
     from dataclasses import replace
 
-    from ..atomistic.selection import select_min_energy_frame
+    from ...atomistic.selection import select_min_energy_frame
 
     if isinstance(traj_interval, bool) or int(traj_interval) != traj_interval or traj_interval < 1:
         raise ValueError("Legacy trajectory fallback requires a positive integer traj_interval")
@@ -372,7 +372,7 @@ def calculation_payload(arrays, summary, *, engine):
     kbar stress. OpenMX's reported strain derivative uses its existing tensile
     kbar convention. The native energy and tensile tensor are retained too.
     """
-    from ..io.calculations import KBAR_EV_ANGSTROM3
+    from ...io.calculations import KBAR_EV_ANGSTROM3
 
     result = dict(summary)
     if "energy_eV" in arrays:
@@ -422,8 +422,8 @@ def _text_table(path, arrays, header):
 
 def export_run(run_dir, *, output_dir=None, profile="generator"):
     """Export checksummed native runs without recomputation or model loading."""
-    from ..io.artifacts import load_manifest
-    from ..io.records import frames_from_arrays, structure_from_arrays
+    from ...io.artifacts import load_manifest
+    from ...io.records import frames_from_arrays, structure_from_arrays
 
     if profile != "generator":
         raise ValueError("Only the generator export profile is supported")
@@ -542,7 +542,7 @@ def export_run(run_dir, *, output_dir=None, profile="generator"):
         )
         write_json("results.json", {"converged": True, "band_structure": payload})
     elif name in {"nvt", "relax", "select"}:
-        from ..io.atomistic import write_structure, write_trajectory
+        from ...io.atomistic import write_structure, write_trajectory
 
         frames = frames_from_arrays(arrays)
         if name != "select":
@@ -560,8 +560,8 @@ def export_run(run_dir, *, output_dir=None, profile="generator"):
             summary,
         )
     elif name == "postprocess" and "energies" not in arrays:
-        from ..io.atomistic import write_structure
-        from ..structures import Structure
+        from ...io.atomistic import write_structure
+        from ...structures import Structure
 
         if {"cell", "positions", "atomic_numbers"} <= set(arrays):
             write_structure(
@@ -570,7 +570,7 @@ def export_run(run_dir, *, output_dir=None, profile="generator"):
             products.append("CONTCAR")
         write_json("results.json", summary)
     elif name in {"bands", "postprocess", "hamiltonian_bands"}:
-        from ..io.bands import BandData
+        from ...io.bands import BandData
 
         energies = arrays["energies"]
         if energies.ndim == 2:
@@ -613,8 +613,8 @@ def export_run(run_dir, *, output_dir=None, profile="generator"):
     elif name == "band_compare":
         write_json("band_comparison.json", summary)
     elif name == "hamiltonian_pack":
-        from ..adapters.hamgnn import write_legacy_graphs
-        from ..io.hamiltonian import read_graphs
+        from ...adapters.hamgnn import write_legacy_graphs
+        from ...io.hamiltonian import read_graphs
 
         graph_path = root / metadata["graph_archive"]
         if digest_file(graph_path) != metadata["graph_archive_sha256"]:

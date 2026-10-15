@@ -119,5 +119,5 @@ files = [
   "src/queer/atomistic/metrics.py",
   "src/queer/adapters/mace.py",
   "src/queer/adapters/hamgnn.py",
-  "src/queer/compat/generator.py",
+  "src/queer/compat/generator",
 ]

@@ -38,7 +38,16 @@ def test_boot_imports_with_core_dependencies_blocked(monkeypatch):
     assert [gap.split(" ", 1)[0].split(">=")[0] for gap in gaps] == list(CORE)
 
 
-@pytest.mark.parametrize("relative", ["__init__.py", "__main__.py", "_generator_boot.py"])
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "__init__.py",
+        "__main__.py",
+        "_generator_boot.py",
+        "compat/__init__.py",
+        "compat/generator/__init__.py",
+    ],
+)
 def test_boot_path_imports_only_the_standard_library_at_module_level(relative):
     tree = ast.parse((ROOT / "src/queer" / relative).read_text())
     for node in tree.body:

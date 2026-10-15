@@ -1,5 +1,6 @@
 """Historical shift-current replay preserves coverage, axes and input provenance."""
 
+import importlib
 import importlib.util
 import json
 from pathlib import Path
@@ -65,6 +66,13 @@ def test_disabled_pair_sentinel_preserves_complete_scan_and_width(tmp_path):
     assert parameters["chemical_potential"] == -4.5
     np.testing.assert_array_equal(parameters["omega"], table[:, 0])
     np.testing.assert_array_equal(reference, table)
+
+
+def test_fingerprinted_native_sources_exist_and_cover_the_translation():
+    paths = {(ROOT / "src/queer" / name).resolve() for name in REPLAY.NATIVE_SOURCES}
+    assert all(path.is_file() for path in paths), sorted(str(p) for p in paths if not p.is_file())
+    defining = importlib.import_module(REPLAY.translate_pyatb.__module__).__file__
+    assert Path(defining).resolve() in paths
 
 
 def test_component_extraction_uses_producer_order_not_flat_tensor_order():

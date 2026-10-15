@@ -53,6 +53,18 @@ COMPONENTS = (
     "zzz",
 )
 BROKER_ROOT = Path("data/generator_replay_20261010/broker/openmx_ahc/pyatb")
+# QUEER sources whose bytes the replay report fingerprints, relative to src/queer.
+NATIVE_SOURCES = (
+    "models/openmx.py",
+    "io/openmx.py",
+    "observables/_tb.py",
+    "observables/nonlinear.py",
+    "observables/optical.py",
+    "observables/geometry.py",
+    "compat/generator/__init__.py",
+    "compat/generator/_legacy.py",
+    "execution.py",
+)
 
 
 def fingerprint(path):
@@ -434,19 +446,7 @@ def main(argv=None):
     if model_binding is None or not model_binding.get("verified_content_match"):
         raise ValueError("Download manifest lacks a verified historical SCFOUT content binding")
     repository = Path(__file__).resolve().parents[2]
-    native_source_paths = [
-        repository / "src/queer" / name
-        for name in (
-            "models/openmx.py",
-            "io/openmx.py",
-            "observables/_tb.py",
-            "observables/nonlinear.py",
-            "observables/optical.py",
-            "observables/geometry.py",
-            "compat/generator.py",
-            "execution.py",
-        )
-    ]
+    native_source_paths = [repository / "src/queer" / name for name in NATIVE_SOURCES]
     native_sources = {str(path): digest_file(path) for path in native_source_paths}
     execution = ExecutionOptions(
         workers=args.workers,
