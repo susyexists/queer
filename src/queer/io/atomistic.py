@@ -20,62 +20,37 @@ from typing import Any
 import numpy as np
 
 from ..elements import atomic_number
+from ..physics.constants import ASE_FS as ASE_FS
 from ..structures import Evaluation, Frame, Structure
+from ._poscar import parse_poscar_record
 
-ASE_FS = 0.09822694788464063
 ULM_ARRAYS_INFO_KEY = "_queer_atom_arrays"
 
 
 def parse_poscar(text, *, species=None):
     """Read rich VASP 4/5 geometry, including selective coordinate constraints."""
-    lines = str(text).splitlines()
     try:
-        scale = np.array(list(map(float, lines[1].split())))
-        cell = np.array([list(map(float, line.split()[:3])) for line in lines[2:5]])
-        if len(scale) == 1 and scale[0] != 0:
-            value = scale[0] if scale[0] > 0 else (-scale[0] / abs(np.linalg.det(cell))) ** (1 / 3)
-            scale = np.repeat(value, 3)
-        elif len(scale) != 3 or np.any(scale <= 0):
-            raise ValueError("scale must be nonzero scalar or three positive components")
-        cell = cell * scale
-        line = 5
-        tokens = lines[line].split()
-        if all(re.fullmatch(r"\d+", token) for token in tokens):
-            counts = list(map(int, tokens))
-            symbols = species or re.findall(r"[A-Z][a-z]?", lines[0])
-            if len(symbols) != len(counts):
+        record = parse_poscar_record(text)
+        symbols = record.symbols
+        if symbols is None:
+            symbols = tuple(species or re.findall(r"[A-Z][a-z]?", record.comment))
+            if len(symbols) != len(record.counts):
                 raise ValueError("VASP 4 POSCAR requires species= or element symbols in its comment")
-        else:
-            symbols = tokens
-            line += 1
-            counts = list(map(int, lines[line].split()))
-        if len(symbols) != len(counts) or not counts or min(counts) < 0:
-            raise ValueError("species and counts must match")
-        numbers = np.repeat([atomic_number(symbol) for symbol in symbols], counts)
-        line += 1
-        selective = lines[line].strip().lower().startswith("s")
-        if selective:
-            line += 1
-        mode = lines[line].strip().lower()
-        if not mode.startswith(("d", "c", "k")):
-            raise ValueError("coordinate mode must be Direct or Cartesian")
-        rows = [lines[line + 1 + index].split() for index in range(len(numbers))]
-        coordinates = np.array([list(map(float, row[:3])) for row in rows]).reshape(-1, 3)
-        positions = coordinates @ cell if mode.startswith("d") else coordinates * scale
+        numbers = np.repeat([atomic_number(symbol) for symbol in symbols], record.counts)
         fixed = (
-            np.array([[flag.lower().startswith("f") for flag in row[3:6]] for row in rows])
-            if selective
+            np.array([[flag.lower().startswith("f") for flag in row] for row in record.selective_flags])
+            if record.selective_flags is not None
             else None
         )
         return Structure(
-            cell,
-            positions,
+            record.cell,
+            record.positions,
             numbers,
             fixed_coordinates=fixed,
             metadata={
-                "comment": lines[0],
+                "comment": record.comment,
                 "source_format": "poscar",
-                **({"constraint_basis": "fractional"} if selective else {}),
+                **({"constraint_basis": "fractional"} if record.selective_flags is not None else {}),
             },
         )
     except (ValueError, IndexError, np.linalg.LinAlgError, ZeroDivisionError) as error:

@@ -12,13 +12,17 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
-from scipy.constants import atomic_mass, elementary_charge, physical_constants
 
+from ..geometry.structures import expand_diagonal as _expand
 from ..observables.result import ObservableResult
+from ..physics.constants import ACCELERATION as ACCELERATION
+from ..physics.constants import KB_EV_K as KB_EV_K
 from ..structures import Evaluation, Frame, Structure
+from ._common import evaluate as _evaluate
+from ._common import integer as _integer
+from ._common import kinetic_energy
+from ._common import positive as _positive
 
-ACCELERATION = elementary_charge / atomic_mass * 1e-10  # (Å/fs²)/(eV/Å/amu)
-KB_EV_K = physical_constants["Boltzmann constant in eV/K"][0]
 # Generator's 0.01 inverse ASE time converted using its CODATA-2014 time unit.
 DEFAULT_FRICTION_FS_INV = 0.0009822694788464063
 
@@ -33,57 +37,6 @@ class SimulationResult:
     @property
     def summary(self):
         return self.observable.metadata["summary"]
-
-
-def _integer(value, name, minimum=1):
-    if isinstance(value, (bool, np.bool_)) or int(value) != value or value < minimum:
-        raise ValueError(f"{name} must be an integer >= {minimum}")
-    return int(value)
-
-
-def _positive(value, name, *, zero=False):
-    value = float(value)
-    if not np.isfinite(value) or value < 0 or (value == 0 and not zero):
-        raise ValueError(f"{name} must be finite and {'nonnegative' if zero else 'positive'}")
-    return value
-
-
-def _expand(structure, supercell):
-    """Diagonal expansion with a documented cell-major, atom-minor ordering."""
-    sc = np.asarray(supercell)
-    if sc.shape != (3,) or not np.equal(sc, np.floor(sc)).all() or np.any(sc < 1):
-        raise ValueError("supercell must contain three positive integers")
-    sc = sc.astype(int)
-    shifts = np.asarray(list(np.ndindex(tuple(sc))))
-    count = len(shifts)
-    if count == 1:
-        return structure.copy(), shifts
-
-    def repeat(value):
-        return None if value is None else np.concatenate([value] * count, axis=0)
-
-    return structure.copy(
-        cell=np.diag(sc) @ structure.cell,
-        positions=np.concatenate([structure.positions + shift @ structure.cell for shift in shifts]),
-        atomic_numbers=repeat(structure.atomic_numbers),
-        masses=repeat(structure.masses),
-        magnetic_moments=repeat(structure.magnetic_moments),
-        fixed_coordinates=repeat(structure.fixed_coordinates),
-        arrays={key: repeat(value) for key, value in structure.arrays.items()},
-    ), shifts
-
-
-def _evaluate(provider, structure):
-    value = (
-        provider.evaluate(structure.copy()) if hasattr(provider, "evaluate") else provider(structure.copy())
-    )
-    if not isinstance(value, Evaluation):
-        raise TypeError("force provider must return Evaluation")
-    # Producers may mutate an Evaluation after construction; validate again.
-    value = Evaluation(value.energy_eV, value.forces_eV_A, value.stress_eV_A3)
-    if value.forces_eV_A.shape != (structure.natoms, 3):
-        raise ValueError("force provider changed the atom count or force shape")
-    return value
 
 
 def _free(structure):
@@ -160,7 +113,7 @@ def _ndof(structure, remove_com):
 
 def _sample(frame, remove_com):
     evaluation = frame.evaluation
-    kinetic = float(np.sum(frame.structure.masses[:, None] * frame.velocities**2) / (2 * ACCELERATION))
+    kinetic = kinetic_energy(frame.structure.masses, frame.velocities)
     dof = _ndof(frame.structure, remove_com)
     energy = evaluation.energy_eV
     return {

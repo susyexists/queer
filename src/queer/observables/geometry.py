@@ -12,21 +12,32 @@ from types import SimpleNamespace
 import numpy as np
 
 from ..execution import ExecutionOptions
-from ._tb import (
-    E_CHARGE,
+from ..models.evaluation import (
     band_geometry,
     basis_curvature,
     basis_overlap,
     cell,
     degeneracy_tolerance,
-    kmesh,
-    map_points,
     reciprocal,
     spin_degeneracy,
     states,
     volume,
 )
+from ..physics.constants import E_CHARGE
+from ..physics.eigensystems import centered_pair_gap
+from ..physics.geometry import band_curvatures, pair_metrics
+from ..physics.geometry import occupied_mask as _occupied
+from ._sampling import kmesh, map_points
 from .result import ObservableResult
+
+
+def _curvatures(model, k, data, engine="direct"):
+    projected = basis_curvature(model, k, data) if engine == "direct" else None
+    return band_curvatures(data, engine, projected)
+
+
+def _independent_pair_gap(model, k, data, pair):
+    return centered_pair_gap(model.hamiltonian(k), data, pair)
 
 
 def _result(arrays, dims, units, observable, **metadata):
@@ -36,46 +47,6 @@ def _result(arrays, dims, units, observable, **metadata):
         units,
         {"observable": observable, "berry_convention": "A=i<u|du>; Omega_ab=-2 Im Q_ab", **metadata},
     )
-
-
-def _curvatures(model, k, data, engine="direct"):
-    """Per-band curvature (band,Cartesian,Cartesian), with block gauge."""
-    if engine not in {"direct", "kubo"}:
-        raise ValueError("curvature engine must be 'direct' or 'kubo'")
-    a = data["connections"]
-    n = len(data["energies"])
-    result = np.zeros((n, 3, 3))
-    if engine == "kubo":
-        for i in range(3):
-            for j in range(i + 1, 3):
-                q = np.einsum("nm,mn->n", a[i], a[j])
-                result[:, i, j] = -2 * q.imag
-                result[:, j, i] = -result[:, i, j]
-        return result
-    f = basis_curvature(model, k, data)
-    for i in range(3):
-        for j in range(i + 1, 3):
-            curl = f[i, j] + 1j * (a[i] @ a[j] - a[j] @ a[i])
-            result[:, i, j] = curl.diagonal().real
-            result[:, j, i] = -result[:, i, j]
-    return result
-
-
-def _occupied(data, occupied_bands=None, fermi_energy=0.0):
-    energies = data["energies"]
-    if occupied_bands is None:
-        mask = energies < fermi_energy
-    else:
-        count = int(occupied_bands)
-        if count != occupied_bands or count < 0 or count > len(energies):
-            raise ValueError("occupied_bands must be an integer within the band count")
-        mask = np.zeros(len(energies), dtype=bool)
-        mask[np.argsort(energies, kind="stable")[:count]] = True
-    equal = np.abs(energies[:, None] - energies[None, :]) < data["degeneracy_tol"]
-    same = data["band_channels"][:, None] == data["band_channels"][None, :]
-    if np.any(equal & same & (mask[:, None] != mask[None, :])):
-        raise ValueError("occupied/unoccupied boundary splits a degenerate subspace")
-    return mask
 
 
 def _fermi_energy(model, value):
@@ -184,34 +155,6 @@ def quantum_metric(
     )
 
 
-def _independent_pair_gap(model, k, data, pair):
-    """Solve an energy-centred generalized problem instead of subtracting absolute levels."""
-    from scipy.linalg import eigvalsh
-
-    v, c = pair
-    reference = 0.5 * data["energies"][v] + 0.5 * data["energies"][c]
-    h = np.asarray(model.hamiltonian(k))
-    s = data["overlap"]
-    centred = h - reference * s
-    channels = data["band_channels"]
-    members = np.flatnonzero(channels == channels[v])
-    if len(members) != len(channels):
-        # Generalized eigenvectors are only projected with the physical metric;
-        # ordinary Euclidean overlaps are never used to compare channel states.
-        coefficients = data["coefficients"][:, members]
-        centred = coefficients.conj().T @ centred @ coefficients
-        s = coefficients.conj().T @ s @ coefficients
-    shifted = eigvalsh(centred, s)
-    rank_v = int(np.flatnonzero(members == v)[0])
-    rank_c = int(np.flatnonzero(members == c)[0])
-    floor = (
-        np.finfo(float).eps
-        * model.nbnd
-        * (np.linalg.norm(h, ord=np.inf) + abs(reference) * np.linalg.norm(data["overlap"], ord=np.inf))
-    )
-    return float(shifted[rank_c] - shifted[rank_v]), float(reference), float(floor)
-
-
 def band_pair_geometry(
     model,
     kpoints,
@@ -279,12 +222,7 @@ def band_pair_geometry(
             a[:, c, v] = -1j * velocity / gap
             a[:, v, c] = a[:, c, v].conj()
         transition = a[:, v, c]
-        pair_metric = np.outer(transition, transition.conj()).real
-        total_metric = np.empty((2, 3, 3))
-        for index, band in enumerate(selected):
-            other = (np.arange(model.nbnd) != band) & (channels == channels[band])
-            links = a[:, band, other]
-            total_metric[index] = np.einsum("am,bm->ab", links, links.conj()).real
+        pair_metric, total_metric = pair_metrics(a, selected, channels)
         updated = {**data, "connections": a}
         curvature = _curvatures(model, k, updated, engine)[list(selected)]
         total_metric[~band_valid] = np.nan
@@ -448,6 +386,7 @@ def chern_number(
     refinement=False,
     integration=None,
     execution=None,
+    checkpoint=None,
 ):
     """Chern number on a fractional reciprocal plane, without spin multiplicity.
 
@@ -487,11 +426,13 @@ def chern_number(
                 fermi_energy=fermi_energy,
                 engine=engine,
                 execution=execution,
+                checkpoint=checkpoint,
             ),
             mesh,
             controls,
             "chern_number",
             active_axes=list(plane),
+            checkpoint=checkpoint,
         )
     kpoints = kmesh(mesh, k_start=k_start, k_vectors=vectors)
     mu = _fermi_energy(model, fermi_energy)
@@ -508,6 +449,7 @@ def chern_number(
             namespace="chern_number",
             tag="occupied-rank-reference",
             value_units="eV",
+            checkpoint=checkpoint,
         ).T
     elif hasattr(model, "energies"):
         energy = model.energies(kpoints, execution=execution) + model.fermi_energy
@@ -586,6 +528,7 @@ def chern_number(
                 namespace="chern_number",
                 active_axes=[0, 1],
                 threshold_selector=lambda value: abs(value[selected]),
+                checkpoint=checkpoint,
             )
             numbers = integral.value
             diagnostics["integration"] = {
@@ -626,6 +569,7 @@ def chern_number(
             engine=engine,
             integration=integration,
             execution=execution,
+            checkpoint=checkpoint,
         )
         refined_number = float(refined["chern_number"])
         diagnostics["refinement"] = {

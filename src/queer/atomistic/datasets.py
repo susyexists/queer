@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import numpy as np
-from scipy.constants import elementary_charge
 
+from ..physics.constants import DATASET_KBAR_EV_ANGSTROM3 as KBAR_TO_EV_A3
 from ..structures import Frame
-
-KBAR_TO_EV_A3 = 1e8 / elementary_charge * 1e-30
 
 
 def split_dataset(items, *, train_ratio=0.8, val_ratio=0.1, test_ratio=0.1, seed=42):

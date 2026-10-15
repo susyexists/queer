@@ -14,11 +14,11 @@ from pathlib import Path
 from typing import BinaryIO
 
 import numpy as np
-from scipy.constants import physical_constants
 from scipy.sparse import coo_matrix, csr_matrix
 
-HARTREE_EV = physical_constants["Hartree energy in eV"][0]
-BOHR_ANGSTROM = physical_constants["Bohr radius"][0] * 1e10
+from ..physics.constants import BOHR_ANGSTROM as BOHR_ANGSTROM
+from ..physics.constants import HARTREE_EV as HARTREE_EV
+
 Blocks = dict[tuple[int, int, int], csr_matrix]
 _HARMONICS = {
     0: ("s",),

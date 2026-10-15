@@ -12,11 +12,11 @@ from queer.structures import Structure
 
 def test_untrained_mace_architecture_forces_stress_and_checkpoint_roundtrip(tmp_path):
     torch = pytest.importorskip("torch", reason="optional Torch producer environment")
-    o3 = pytest.importorskip("e3nn.o3", reason="optional MACE equivariant model classes")
     try:
         modules = importlib.import_module("mace.modules")
     except ImportError as error:
         pytest.skip(f"optional MACE model classes unavailable: {error}")
+    o3 = pytest.importorskip("e3nn.o3", reason="optional MACE equivariant model classes")
     required = ("MACE", "RealAgnosticInteractionBlock", "RealAgnosticResidualInteractionBlock")
     if not all(hasattr(modules, name) for name in required):
         pytest.skip("optional MACE architecture classes unavailable")

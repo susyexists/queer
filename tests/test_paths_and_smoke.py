@@ -108,7 +108,10 @@ def test_ag_primitive_model_smoke():
 
 def test_archive_files_match_recorded_original_hashes():
     root = project_root()
-    with (root / "docs" / "archive_dispositions.tsv").open(newline="") as stream:
+    ledger = root / "docs" / "archive_dispositions.tsv"
+    if not ledger.is_file():
+        pytest.skip("historical archive audit requires the source checkout")
+    with ledger.open(newline="") as stream:
         records = list(csv.DictReader(stream, delimiter="\t"))
     assert records
     for record in records:

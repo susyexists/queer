@@ -9,10 +9,9 @@ import math
 
 import numpy as np
 
+from ..physics.constants import EV_PER_A_TO_V_PER_M as EV_PER_A_TO_V_PER_M
+from ..physics.constants import V_PER_M_TO_EV_PER_A as V_PER_M_TO_EV_PER_A
 from .constants import E2_H, HBAR_EVS
-
-V_PER_M_TO_EV_PER_A = 1e-10  # e*E [eV/A] per E [V/m]
-EV_PER_A_TO_V_PER_M = 1e10
 
 
 def eE(E):

@@ -46,6 +46,7 @@ from .._multiplicity import validated_spin_degeneracy
 from ..config import PAPER, RunConfig
 from ..geometry.provider import ModelGeometry
 from ..lz.crossings import find_crossings
+from ..lz.propagation import propagate_crossings, two_crossing_population
 from ..units import hall_prefactor, kappa
 from .lines import LineSolution, solve_line
 from .quadrature import composite_nodes
@@ -130,24 +131,8 @@ class TransverseLayout:
 
 
 def _propagate(P, d, theta, k1, k2, coherence: str):
-    """rho_cc after each crossing for n crossings: P (n, nE), d/theta (n-1, ...), k1/k2 (nE,)."""
-    n = P.shape[0]
-    rho_cc = P[0].copy()
-    rho_cv = -np.sqrt(P[0] * (1.0 - P[0])) + 0j
-    out = [rho_cc.copy()]
-    for j in range(1, n):
-        decay_pop = np.exp(-d[j - 1] / k1)
-        decay_coh = np.exp(-d[j - 1] / k2) * (np.exp(-d[j - 1] / (2.0 * k1)) if coherence == "paper" else 1.0)
-        rho_cc = rho_cc * decay_pop
-        rho_cv = rho_cv * decay_coh * np.exp(-1j * theta[j - 1])
-        rho_vv = 1.0 - rho_cc
-        p = P[j]
-        sq = np.sqrt(p * (1.0 - p))
-        new_cc = (1.0 - p) * rho_cc + p * rho_vv - 2.0 * sq * rho_cv.real
-        new_cv = sq * (rho_cc - rho_vv) + (1.0 - p) * rho_cv - p * np.conj(rho_cv)
-        rho_cc, rho_cv = new_cc, new_cv
-        out.append(rho_cc.copy())
-    return np.stack(out)
+    """Compatibility entrypoint for canonical sequential crossing propagation."""
+    return propagate_crossings(P, d, theta, k1, k2, coherence=coherence)
 
 
 class HallCalculator:
@@ -634,11 +619,7 @@ class HallCalculator:
             coh = np.exp(-d / lam2[None, :]) * (
                 np.exp(-d / (2.0 * lam1[None, :])) if coherence == "paper" else 1.0
             )
-            rho2 = (
-                P2
-                + P1 * (1.0 - 2.0 * P2) * pop
-                + 2.0 * np.sqrt(P1 * P2 * (1.0 - P1) * (1.0 - P2)) * coh * np.cos(theta[:, 0])
-            )
+            rho2 = two_crossing_population(P1, P2, pop, coh, theta[:, 0])
             return np.stack([P1, rho2], axis=1)
         out = np.empty_like(P)
         for i in range(P.shape[0]):

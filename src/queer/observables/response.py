@@ -2,57 +2,12 @@
 
 import numpy as np
 
-from ..functions import fd
+from ..physics.electronic import green_function as green_function
+from ..physics.electronic import lindhard
+from ..physics.electronic import spectral_from_eig as spectral_from_eig
+from ..physics.electronic import spectral_from_green as spectral_from_green
+from ..physics.statistics import thermal_occupation as fd
 from ._common import model_energies, points_array, positive
-
-
-def green_function(H, omega, eta, overlap=None, *, fermi_energy=0.0):
-    """Retarded Green function; scalar or arbitrary frequency arrays broadcast."""
-    eta = positive(eta, "eta")
-    H = np.asarray(H, dtype=complex)
-    if H.ndim != 2 or H.shape[0] != H.shape[1] or not np.isfinite(H).all():
-        raise ValueError("H must be a finite square matrix")
-    omega = np.asarray(omega, dtype=float)
-    if not np.isfinite(omega).all():
-        raise ValueError("omega must be finite")
-    metric = np.eye(H.shape[0]) if overlap is None else np.asarray(overlap, dtype=complex)
-    if metric.shape != H.shape or not np.isfinite(metric).all():
-        raise ValueError("overlap must be finite and have the same shape as H")
-    if not np.allclose(metric, metric.conj().T, rtol=1e-10, atol=1e-10):
-        raise ValueError("overlap must be Hermitian")
-    try:
-        np.linalg.cholesky(metric)
-    except np.linalg.LinAlgError as error:
-        raise ValueError("overlap must be positive definite") from error
-    if not np.isfinite(fermi_energy):
-        raise ValueError("fermi_energy must be finite")
-    return np.linalg.inv((omega[..., None, None] + fermi_energy + 1j * eta) * metric - H)
-
-
-def spectral_from_green(H, omega_list, eta, overlap=None, *, fermi_energy=0.0):
-    green = green_function(H, omega_list, eta, overlap, fermi_energy=fermi_energy)
-    if overlap is not None:
-        green = np.asarray(overlap) @ green
-    return -np.trace(green, axis1=-2, axis2=-1).imag / np.pi
-
-
-def spectral_from_eig(evals, omega_list, eta):
-    """Sum Lorentzian bands; frequencies are leading axes, bands the last axis."""
-    eta = positive(eta, "eta")
-    eigenvalues = np.asarray(evals, dtype=float)
-    omega = np.asarray(omega_list, dtype=float)
-    if eigenvalues.ndim == 0:
-        eigenvalues = eigenvalues.reshape(1)
-    if not np.isfinite(omega).all():
-        raise ValueError("omega must be finite")
-    if np.isinf(eigenvalues).any():
-        raise ValueError("eigenvalues must not contain infinities; NaNs denote spectral gaps")
-    frequency = omega.reshape(omega.shape + (1,) * (eigenvalues.ndim - 1))
-    result = np.zeros(omega.shape + eigenvalues.shape[:-1])
-    for band in range(eigenvalues.shape[-1]):
-        difference = frequency - eigenvalues[..., band]
-        result += eta / np.pi / (difference**2 + eta**2)
-    return result
 
 
 def susceptibility(
@@ -94,12 +49,7 @@ def susceptibility(
     for i, point in enumerate(q_path):
         shifted = model_energies(model, k_mesh + point, execution)[indices]
         shifted_fd = fd(shifted, temperature)
-        # Sum band pairs without allocating an Nb*Nb*Nk tensor.
-        result[i] = -sum(
-            np.mean((occupations[m] - shifted_fd[n]) / (energies[m] - shifted[n] + 1j * broadening))
-            for m in range(len(indices))
-            for n in range(len(indices))
-        )
+        result[i] = lindhard(energies, shifted, occupations, shifted_fd, broadening)
     return result
 
 

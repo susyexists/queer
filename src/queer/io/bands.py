@@ -15,13 +15,12 @@ from pathlib import Path
 from typing import Any, Mapping
 
 import numpy as np
-from scipy.constants import physical_constants
 from scipy.optimize import linear_sum_assignment
 
 from ..capabilities import CapabilityError
+from ..physics.constants import BOHR_ANGSTROM as BOHR_ANGSTROM
+from ..physics.constants import HARTREE_EV as HARTREE_EV
 
-HARTREE_EV = physical_constants["Hartree energy in eV"][0]
-BOHR_ANGSTROM = physical_constants["Bohr radius"][0] * 1e10
 _NUMBER = r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eEdD][-+]?\d+)?"
 
 

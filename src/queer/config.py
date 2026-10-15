@@ -10,20 +10,11 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .execution import ExecutionOptions
-from .workflows.finite_field import FINITE_FIELD_INPUTS, FINITE_FIELD_NAMES, validate_finite_field
-from .workflows.registry import NAMES as OBSERVABLE_WORKFLOWS
-from .workflows.services import SERVICE_INPUTS, SERVICE_NAMES, validate_service
+from .workflows.catalog import NAMES as OBSERVABLE_WORKFLOWS
+from .workflows.catalog import WORKFLOWS
+from .workflows.finite_field_specs import FINITE_FIELD_INPUTS, FINITE_FIELD_NAMES, validate_finite_field
+from .workflows.service_specs import SERVICE_INPUTS, SERVICE_NAMES, validate_service
 
-WORKFLOWS = (
-    "bands",
-    "susceptibility",
-    "spectral",
-    "momentum",
-    "epw",
-    *OBSERVABLE_WORKFLOWS,
-    *SERVICE_NAMES,
-    *FINITE_FIELD_NAMES,
-)
 _PARAMETERS = {
     "bands": {"ef", "interpolation", "kpath", "n_points", "kpoints", "bands"},
     "susceptibility": {
@@ -247,7 +238,7 @@ def config_from_mapping(
     ):
         raise ValueError("inputs.pao_files must map PAO keys to nonempty filenames")
     if name in OBSERVABLE_WORKFLOWS:
-        from .workflows.registry import validate_parameters
+        from .workflows.catalog import validate_parameters
 
         validate_parameters(name, params)
     else:

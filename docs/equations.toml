@@ -1,0 +1,302 @@
+# Declarative ownership index. Units and adapter conventions are part of each equation.
+schema_version = 1
+
+[[equations]]
+id = "geometry.reciprocal"
+expression = "B = 2*pi*A^(-T); k_cart = k_frac*B"
+input_units = "A: angstrom; k_frac: dimensionless"
+output_units = "B and k_cart: inverse angstrom"
+assumptions = ["Nonsingular direct lattice with row vectors"]
+conventions = ["A*B^T = 2*pi*I; input reciprocal basis is retained"]
+canonical = "queer.geometry.lattice:reciprocal_lattice"
+specialized_backends = []
+source_references = ["docs/scientific_conventions.md#scientific-contracts"]
+independent_tests = ["tests/numerical/test_geometry.py::test_nonorthogonal_coordinate_convention_and_legacy_modern_pair"]
+
+[[equations]]
+id = "electronic.fourier_hamiltonian"
+expression = "H(k) = sum_R H_normalized(R)*exp(2*pi*i*k_frac.R)"
+input_units = "H_normalized: eV; R: integer lattice translations; k_frac: dimensionless"
+output_units = "eV"
+assumptions = ["HR degeneracies and pair-specific WS images are normalized before summation"]
+conventions = ["Positive Fourier phase; standard, ws_distance and ndegen_applied are explicit modes"]
+canonical = "queer.physics.operators:assemble"
+specialized_backends = ["queer.models.wannier:WannierModel._fourier_values", "queer.models.openmx:OpenMXModel._fourier"]
+source_references = ["docs/scientific_conventions.md#scientific-contracts", "https://wannier90.readthedocs.io/en/latest/user_guide/wannier90/files/"]
+independent_tests = ["tests/numerical/test_wannier.py::test_complex_chain_phase_degeneracy_and_fermi_reference", "tests/numerical/test_wannier_scaling.py::test_compact_ws_scatter_matches_independent_image_sum"]
+
+[[equations]]
+id = "electronic.centered_pair_gap"
+expression = "(H-E_ref*S)*C = S*C*epsilon; gap = epsilon_c-epsilon_v"
+input_units = "H and E_ref: eV; S: dimensionless"
+output_units = "gap, reference and numerical floor: eV"
+assumptions = ["Hermitian H and positive-definite S; selected pair belongs to one spin channel"]
+conventions = ["Energy centering limits cancellation; eigenvectors use C^dagger*S*C = I"]
+canonical = "queer.physics.eigensystems:centered_pair_gap"
+specialized_backends = ["queer.finite_field.geometry.lowdin:LowdinPatch.gap"]
+source_references = ["docs/scientific_conventions.md#native-openmx-model", "docs/finite_field.md"]
+independent_tests = ["tests/numerical/test_band_pair_geometry.py::test_independent_gap_survives_large_absolute_energy_offset", "tests/numerical/test_finite_field_covariance.py::test_collinear_independent_gap_keeps_small_generalized_splitting_with_offset"]
+
+[[equations]]
+id = "statistics.fermi_kelvin"
+expression = "f(E,mu,T) = 1/(1+exp((E-mu)/(k_B*T)))"
+input_units = "E and mu: absolute eV; T: kelvin"
+output_units = "dimensionless occupation"
+assumptions = ["Nonnegative temperature; explicit occupation capacity/spin factors are applied by callers"]
+conventions = ["T=0 gives 1 for E<mu and 0 otherwise; E=mu is unoccupied"]
+canonical = "queer.physics.statistics:occupations"
+specialized_backends = []
+source_references = ["docs/scientific_conventions.md#scientific-contracts"]
+independent_tests = ["tests/numerical/test_openmx_electronic.py::test_fermi_energy_absolute_reference_and_gaussian_jdos", "tests/numerical/test_optical_nonlinear.py::test_optical_spin_occupation_and_scissors_have_quantitative_effects"]
+
+[[equations]]
+id = "statistics.fermi_thermal_energy"
+expression = "f(E,T_eV) = 1/(1+exp(E/T_eV))"
+input_units = "E relative to chemical potential and T_eV=k_B*T: eV"
+output_units = "dimensionless occupation"
+assumptions = ["Finite energies and nonnegative thermal energy"]
+conventions = ["T_eV=0 gives 1/2 at E=0; legacy fd and EPW retain this boundary"]
+canonical = "queer.physics.statistics:thermal_occupation"
+specialized_backends = []
+source_references = ["docs/scientific_conventions.md#scientific-contracts"]
+independent_tests = ["tests/numerical/test_geometry.py::test_occupation_handles_extremes_and_zero_temperature", "tests/numerical/test_epw.py::test_self_energy_independent_reference_and_empty_indices"]
+
+[[equations]]
+id = "statistics.fermi_derivatives"
+expression = "-df/dE = f*(1-f)/(k_B*T); d2f/dE2 = f*(1-f)*(1-2*f)/(k_B*T)^2"
+input_units = "E and mu: eV; T: kelvin; zero-temperature width: eV"
+output_units = "first derivative: 1/eV; second derivative: 1/eV^2"
+assumptions = ["At T=0 a normalized Gaussian regularizes the distributional derivative"]
+conventions = ["fermi_derivative returns positive -df/dE; occupation_derivatives returns signed df/dE"]
+canonical = "queer.physics.statistics:fermi_derivative"
+specialized_backends = ["queer.physics.statistics:occupation_derivatives"]
+source_references = ["docs/scientific_conventions.md#optical-and-second-order-response-conventions"]
+independent_tests = ["tests/numerical/test_openmx_transport.py::test_crta_parabolic_conductivity_seebeck_and_lorenz_reference", "tests/numerical/test_optical_nonlinear.py::test_static_three_level_rayleigh_and_independent_finite_field_reference"]
+
+[[equations]]
+id = "broadening.gaussian"
+expression = "G(x,sigma) = exp(-x^2/(2*sigma^2))/(sqrt(2*pi)*sigma)"
+input_units = "x and sigma: eV"
+output_units = "1/eV"
+assumptions = ["Positive finite sigma; the full energy-axis integral is one"]
+conventions = ["Width is standard deviation"]
+canonical = "queer.physics.broadening:gaussian"
+specialized_backends = []
+source_references = ["docs/scientific_conventions.md#scientific-contracts"]
+independent_tests = ["tests/numerical/test_openmx_electronic.py::test_complex_nonorthogonal_mulliken_projection_and_dos_sum_rule"]
+
+[[equations]]
+id = "broadening.lorentzian"
+expression = "L(x,eta) = eta/(pi*(x^2+eta^2))"
+input_units = "x and eta: eV"
+output_units = "1/eV"
+assumptions = ["Positive finite eta; the full energy-axis integral is one"]
+conventions = ["Width is half width at half maximum"]
+canonical = "queer.physics.broadening:lorentzian"
+specialized_backends = []
+source_references = ["docs/scientific_conventions.md#scientific-contracts"]
+independent_tests = ["tests/numerical/test_observables.py::test_retarded_green_matches_analytic_lorentzian_and_integral"]
+
+[[equations]]
+id = "electronic.retarded_green"
+expression = "G(omega) = ((omega+E_F+i*eta)*S-H)^(-1)"
+input_units = "H, omega, E_F and eta: eV; S: dimensionless"
+output_units = "1/eV"
+assumptions = ["Positive-definite Hermitian overlap; eta>0"]
+conventions = ["omega is relative to E_F; positive imaginary retarded regulator"]
+canonical = "queer.physics.electronic:green_function"
+specialized_backends = []
+source_references = ["docs/scientific_conventions.md#native-openmx-model"]
+independent_tests = ["tests/numerical/test_openmx.py::test_nonorthogonal_green_sum_and_reference_shift"]
+
+[[equations]]
+id = "electronic.spectral_density"
+expression = "A(omega) = -Im Tr(S*G)/pi = sum_n L(omega-epsilon_n,eta)"
+input_units = "omega, epsilon and eta: eV with matching energy reference"
+output_units = "states/eV"
+assumptions = ["Complete retained eigenbasis; positive linewidth"]
+conventions = ["Frequencies are leading axes; missing spectral points may remain masked NaNs"]
+canonical = "queer.physics.electronic:spectral_from_eig"
+specialized_backends = ["queer.physics.electronic:spectral_from_green"]
+source_references = ["docs/scientific_conventions.md#scientific-contracts"]
+independent_tests = ["tests/numerical/test_observables.py::test_retarded_green_matches_analytic_lorentzian_and_integral", "tests/numerical/test_openmx.py::test_nonorthogonal_green_sum_and_reference_shift"]
+
+[[equations]]
+id = "electronic.lindhard"
+expression = "chi(q) = -sum_mn mean_k[(f_mk-f_n,k+q)/(epsilon_mk-epsilon_n,k+q+i*eta)]"
+input_units = "epsilon and eta: eV; f: dimensionless"
+output_units = "1/eV"
+assumptions = ["Uniform sampled k average; supplied bands and occupations align"]
+conventions = ["Complex susceptibility and Fermi-surface nesting are distinct results"]
+canonical = "queer.physics.electronic:lindhard"
+specialized_backends = []
+source_references = ["docs/scientific_conventions.md#scientific-contracts"]
+independent_tests = ["tests/numerical/test_observables.py::test_susceptibility_independent_one_band_reference_and_mesh_reuse"]
+
+[[equations]]
+id = "epw.reduced_coupling"
+expression = "g0 = g*sqrt(phonon_energy)"
+input_units = "g and phonon_energy: meV"
+output_units = "historical reduced coupling: meV^(3/2)"
+assumptions = ["Nonnegative phonon energy; negative unstable modes are rejected"]
+conventions = ["Historical EPW normalization; explicit meV-to-eV factors are retained downstream"]
+canonical = "queer.physics.electron_phonon:reduced_coupling"
+specialized_backends = []
+source_references = ["docs/scientific_conventions.md#scientific-contracts"]
+independent_tests = ["tests/numerical/test_epw.py::test_negative_phonon_reduction_rejected_and_zero_mode_valid"]
+
+[[equations]]
+id = "epw.reduced_coupling_self_energy"
+expression = "Pi = mean_k[abs(g0)^2*1e-6*(f_k-f_kq)/(E_k-E_kq-i*eta-phonon_energy*1e-3)]"
+input_units = "electrons, thermal energy and eta: eV; phonons and original coupling: meV"
+output_units = "historical reduced-coupling response normalization"
+assumptions = ["Mode/q/k arrays align; uniform k average; nonnegative phonon energies"]
+conventions = ["Negative imaginary regulator is intentional; this result is not relabeled a universal self-energy in eV"]
+canonical = "queer.physics.electron_phonon:self_energy"
+specialized_backends = []
+source_references = ["docs/scientific_conventions.md#scientific-contracts", "docs/migration.md#shared-kernel-and-workflow-refactor"]
+independent_tests = ["tests/numerical/test_epw.py::test_self_energy_independent_reference_and_empty_indices"]
+
+[[equations]]
+id = "geometry.covariant_connection"
+expression = "A_a = i*C^dagger*S*(partial_a C) + (C^dagger*r_a*C)^dagger"
+input_units = "H: eV; S: dimensionless; r and Cartesian k derivatives: angstrom"
+output_units = "connection: angstrom; hbar velocity: eV*angstrom"
+assumptions = ["r_a-r_a^dagger = -i*partial_a S; complete retained generalized basis"]
+conventions = ["Equal-energy blocks use normalization gauge; individual-band geometry is unresolved within a degeneracy"]
+canonical = "queer.physics.geometry:band_geometry_from_operators"
+specialized_backends = ["queer.finite_field.geometry.lowdin:LowdinPatch.evaluate"]
+source_references = ["docs/scientific_conventions.md#nonorthogonal-geometry-and-integrated-responses", "https://arxiv.org/abs/1805.08918"]
+independent_tests = ["tests/numerical/test_openmx_geometry_integrated.py::test_k_dependent_nonorthogonal_basis_covariance_with_dipoles", "tests/numerical/test_finite_field_covariance.py::test_native_lowdin_critical_geometry_matches_independent_mpmath"]
+
+[[equations]]
+id = "geometry.projected_coordinate_curvature"
+expression = "F_ab = partial_a A_b-partial_b A_a-i*[A_a,A_b]"
+input_units = "A: angstrom; its Cartesian k derivatives: angstrom^2"
+output_units = "angstrom^2"
+assumptions = ["Retained localized basis may have noncommuting projected coordinates"]
+conventions = ["F is a covariant matrix; its band diagonal accounts for direct-minus-Kubo curvature"]
+canonical = "queer.physics.geometry:projected_basis_curvature"
+specialized_backends = []
+source_references = ["docs/scientific_conventions.md#nonorthogonal-geometry-and-integrated-responses", "https://arxiv.org/abs/2105.14662"]
+independent_tests = ["tests/numerical/test_openmx_geometry_integrated.py::test_projected_coordinate_commutator_and_direct_kubo_difference"]
+
+[[equations]]
+id = "geometry.band_curvature"
+expression = "Omega_direct = diag(F_ab+i*[A_a,A_b]); Omega_kubo,n = -2*Im sum_m A_a,nm*A_b,mn"
+input_units = "A: angstrom; F: angstrom^2"
+output_units = "angstrom^2"
+assumptions = ["Individual bands are resolved or complete occupied blocks are traced"]
+conventions = ["Direct and projected Kubo definitions remain separately selected"]
+canonical = "queer.physics.geometry:band_curvatures"
+specialized_backends = ["queer.physics.geometry:interband_products", "queer.finite_field.geometry.patch:RadialPatch.evaluate"]
+source_references = ["docs/scientific_conventions.md#nonorthogonal-geometry-and-integrated-responses"]
+independent_tests = ["tests/numerical/test_openmx_geometry_integrated.py::test_qwz_cartesian_curvature_metric_and_integration", "tests/numerical/finite_field_reference/test_geometry.py::test_massive_dirac_closed_forms"]
+
+[[equations]]
+id = "geometry.band_pair_metric"
+expression = "g_pair,ab = Re(A_a,vc*conj(A_b,vc)); g_total,n,ab = Re sum_m!=n A_a,nm*conj(A_b,nm)"
+input_units = "A: angstrom"
+output_units = "angstrom^2"
+assumptions = ["Resolved same-channel pair; total metric sums retained same-channel partners"]
+conventions = ["Pair transition metric and each band's all-partner metric are distinct"]
+canonical = "queer.physics.geometry:pair_metrics"
+specialized_backends = ["queer.physics.geometry:interband_products", "queer.finite_field.geometry.lowdin:LowdinPatch.evaluate"]
+source_references = ["docs/scientific_conventions.md#nonorthogonal-geometry-and-integrated-responses"]
+independent_tests = ["tests/numerical/test_band_pair_geometry.py::test_pair_metric_is_distinct_from_all_band_total", "tests/numerical/test_band_pair_geometry.py::test_nonorthogonal_covariance_and_same_channel_selection"]
+
+[[equations]]
+id = "response.length_gauge_density"
+expression = "rho_a(z) = [A_a*(f_m-f_n) + intrablock i*(df/dE)*hbar*v_a]/[z-(E_n-E_m)]"
+input_units = "z and E: eV; A: angstrom; hbar*v: eV*angstrom; temperature: kelvin"
+output_units = "angstrom/eV before field/current prefactors"
+assumptions = ["Independent-electron retained basis; equal-energy block derivatives are matrices"]
+conventions = ["exp(-i*omega*t); z=omega+i*eta; callers apply charge, spin and volume factors"]
+canonical = "queer.physics.response:linear_density"
+specialized_backends = ["queer.physics.response:linear_density_and_derivative"]
+source_references = ["docs/scientific_conventions.md#optical-and-second-order-response-conventions", "https://arxiv.org/abs/1703.07796"]
+independent_tests = ["tests/numerical/test_optical_nonlinear.py::test_optical_two_level_closed_line_shape_dielectric_and_passivity", "tests/numerical/test_optical_nonlinear.py::test_shift_current_rice_mele_independent_wavefunction_derivatives_and_inversion"]
+
+[[equations]]
+id = "finite_field.critical_field_eq8"
+expression = "E_c = pi*gap/(4*sqrt(g))*1e10"
+input_units = "gap: eV; metric g: angstrom^2"
+output_units = "V/m"
+assumptions = ["Hyperbolic two-band gap for exactness; otherwise an explicit metric approximation"]
+conventions = ["Selected metric definition and paper/physical profile remain explicit"]
+canonical = "queer.finite_field.units:critical_field"
+specialized_backends = []
+source_references = ["docs/finite_field.md", "docs/scientific_conventions.md#nonorthogonal-geometry-and-integrated-responses"]
+independent_tests = ["tests/numerical/finite_field_reference/test_literal.py::test_critical_field_exact_for_linear_lz"]
+
+[[equations]]
+id = "finite_field.ddp_exponent"
+expression = "E_DDP = 2*Im integral_(Re k_c)^k_c gap(k) dk*1e10; P=exp(-E_DDP/abs(E))"
+input_units = "gap: eV; k: inverse angstrom; E: V/m"
+output_units = "critical exponent: V/m; probability: dimensionless"
+assumptions = ["Continuous gap branch along the selected complex path; fitted roots need validity diagnostics"]
+conventions = ["Exact, model, fit and Eq8 fallback sources are recorded separately"]
+canonical = "queer.finite_field.lz.landau_zener:ddp_exponent_from_poly"
+specialized_backends = ["queer.finite_field.lz.landau_zener:fourband_ddp_t"]
+source_references = ["docs/finite_field.md"]
+independent_tests = ["tests/numerical/test_finite_field_hhh_crossings.py::test_critical_ddp_exponent_is_the_dirac_value"]
+
+[[equations]]
+id = "finite_field.two_crossing_population"
+expression = "P2 + P1*(1-2*P2)*D_pop + 2*sqrt(P1*P2*(1-P1)*(1-P2))*D_coh*cos(theta)"
+input_units = "probabilities and decays: dimensionless; theta: radians"
+output_units = "conduction probability"
+assumptions = ["Two crossings in traversal order; decays and phase have already been selected"]
+conventions = ["Paper coherence includes amplitude damping; Bloch coherence uses total T2; phase corrections stay explicit"]
+canonical = "queer.finite_field.lz.propagation:two_crossing_population"
+specialized_backends = ["queer.finite_field.transport.kernels:_kernel_n2"]
+source_references = ["docs/finite_field.md"]
+independent_tests = ["tests/numerical/finite_field_reference/test_propagation.py::test_matches_explicit_density_matrix_products", "tests/numerical/test_finite_field_science.py::test_optional_compiled_response_matches_numpy"]
+
+[[equations]]
+id = "finite_field.harmonic_projection"
+expression = "a_N = (1/pi)*integral_0^(2*pi) J(E0*sin(theta))*cos(N*theta) dtheta; b_N analogously with sin"
+input_units = "E0: V/m; J: A/m"
+output_units = "a, b and dc current: A/m"
+assumptions = ["Real vectorized current; quadrature convergence is reported"]
+conventions = ["dc=c0=a_0/2; parity and literal complex Fourier normalizations remain explicit"]
+canonical = "queer.finite_field.harmonics:harmonics"
+specialized_backends = ["queer.finite_field.literal:jn_main_text", "queer.finite_field.literal:jn_methods"]
+source_references = ["docs/finite_field.md"]
+independent_tests = ["tests/numerical/test_finite_field_science.py::test_harmonic_polynomials_and_power_law", "tests/numerical/test_finite_field_science.py::test_oscillatory_fourier_independent_period_reference_and_budget"]
+
+[[equations]]
+id = "atomistic.kinetic_energy"
+expression = "E_kin = sum_i m_i*abs(v_i)^2/(2*ACCELERATION)"
+input_units = "m: amu; v: angstrom/fs"
+output_units = "eV"
+assumptions = ["Velocities match the atom/mass order"]
+conventions = ["Native physical velocities; FIRE optimizer velocities have separate meaning"]
+canonical = "queer.atomistic._common:kinetic_energy"
+specialized_backends = []
+source_references = ["docs/native_atomistics.md"]
+independent_tests = ["tests/numerical/test_native_atomistic.py::test_langevin_thermal_ensemble_has_requested_kinetic_temperature", "tests/numerical/test_native_atomistic.py::test_baoab_zero_friction_conserves_analytic_oscillator_energy"]
+
+[[equations]]
+id = "atomistic.central_force_constants"
+expression = "C[R,displaced,responding] = (F(-delta)-F(+delta))/(2*delta)"
+input_units = "forces: eV/angstrom; delta: angstrom"
+output_units = "eV/angstrom^2"
+assumptions = ["Central-displacement plan and force arrays retain image-major atom order"]
+conventions = ["Frederiksen net-force correction and acoustic projection are separate explicit options"]
+canonical = "queer.atomistic.phonons:assemble_force_constants"
+specialized_backends = []
+source_references = ["docs/native_atomistics.md"]
+independent_tests = ["tests/numerical/test_native_atomistic.py::test_central_force_constants_recover_analytic_chain_and_acoustic_modes", "tests/numerical/test_native_atomistic.py::test_frederiksen_corrects_displaced_atom_bias_and_diatomic_mass_weighting"]
+
+[[equations]]
+id = "atomistic.phonon_frequency"
+expression = "D(q) = sum_R C(R)*exp(-2*pi*i*R.q)/sqrt(m_i*m_j); nu=sign(lambda)*sqrt(abs(lambda)*ACCELERATION)*1000/(2*pi)"
+input_units = "C: eV/angstrom^2; m: amu; q: fractional reciprocal coordinates"
+output_units = "ordinary frequency: THz"
+assumptions = ["Finite-supercell Fourier interpolation; Hermitian residual is reported"]
+conventions = ["Negative frequencies denote imaginary modes; eigenvectors are mass-weighted"]
+canonical = "queer.atomistic.phonons:phonon_dispersion"
+specialized_backends = []
+source_references = ["docs/native_atomistics.md"]
+independent_tests = ["tests/numerical/test_native_atomistic.py::test_central_force_constants_recover_analytic_chain_and_acoustic_modes", "tests/numerical/test_native_atomistic.py::test_imaginary_modes_keep_negative_signed_frequencies_and_segment_distance"]

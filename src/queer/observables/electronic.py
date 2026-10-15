@@ -11,6 +11,8 @@ from scipy.optimize import brentq, minimize
 
 from ..execution import ExecutionOptions
 from ..geometry.lattice import validated_points
+from ..physics.broadening import gaussian, lorentzian
+from ..physics.constants import KB_EV
 from ._common import positive
 from ._tb import degeneracy_tolerance, kmesh, normalized_weights, occupations, states
 from .result import ObservableResult
@@ -114,9 +116,9 @@ def _mean_manifolds(values, blocks, band_axis):
 def _line_shape(difference, eta, smearing):
     eta = positive(eta, "eta")
     if smearing == "gaussian":
-        return np.exp(-0.5 * (difference / eta) ** 2) / (eta * np.sqrt(2 * np.pi))
+        return gaussian(difference, eta)
     if smearing == "lorentzian":
-        return eta / np.pi / (difference**2 + eta**2)
+        return lorentzian(difference, eta)
     raise ValueError("smearing must be gaussian or lorentzian")
 
 
@@ -358,7 +360,7 @@ def fermi_energy(
         def count(mu):
             return degeneracy * np.sum(occupations(energies, mu, temperature_kelvin) * integration_weights)
 
-        margin = max(1.0, temperature_kelvin * 8.617333262145e-5 * 50)
+        margin = max(1.0, temperature_kelvin * KB_EV * 50)
         if electron_num in (0, capacity):
             mu = low - margin if electron_num == 0 else high + margin
         else:

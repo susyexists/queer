@@ -24,7 +24,7 @@ jobs:
       - run: .venv/bin/mypy
       - run: .venv/bin/python -m pytest -m 'not packaging'
   release:
-    needs: acceptance
+    needs: [acceptance, backend-acceptance]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,3 +38,5 @@ jobs:
         with:
           name: queer-${{ github.ref_name }}
           path: dist/*
+  backend-acceptance:
+    uses: ./.github/workflows/backend-acceptance.yml

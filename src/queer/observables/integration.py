@@ -8,46 +8,45 @@ midpoint and tensor Gauss rules, and are not proofs of continuum convergence.
 from __future__ import annotations
 
 import hashlib
-from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from itertools import product
 
 import numpy as np
 
-_STORE = ContextVar("queer_quadrature_store", default=None)
+from .checkpoints import Checkpoint
+from .convergence import convergence_diagnostic, refined_grid
+
+_CHECKPOINT: ContextVar[Checkpoint | None] = ContextVar("queer_quadrature_checkpoint", default=None)
 
 
-@contextmanager
 def quadrature_checkpoint(store):
-    """Commit immutable cell evaluations through the enclosing run store."""
-    token = _STORE.set(store)
-    try:
-        yield
-    finally:
-        _STORE.reset(token)
+    """Forward the historical storage scope to its compatibility adapter."""
+    from ..compat.checkpoints import quadrature_checkpoint as scope
+
+    return scope(store)
 
 
-def checkpoint_samples(function, points, *, namespace, tag, value_units="integrand"):
+def checkpoint_samples(function, points, *, namespace, tag, value_units="integrand", checkpoint=None):
     """Evaluate one deterministic node group, restoring verified saved arrays."""
     points = np.asarray(points, float)
-    store = _STORE.get()
+    checkpoint = checkpoint if checkpoint is not None else _CHECKPOINT.get()
     identity = namespace.encode() + b"\0" + tag.encode() + b"\0" + points.astype("<f8").tobytes()
     case = "quadrature_" + hashlib.sha256(identity).hexdigest()[:24]
-    if store is not None and store.completed(case):
-        record = store.manifest["cases"][case]
-        with np.load(store.root / record["path"], allow_pickle=False) as saved:
-            if not np.array_equal(saved["points"], points):
-                raise ValueError("Quadrature checkpoint points changed")
-            return saved["values"]
+    saved = checkpoint.load(case) if checkpoint is not None else None
+    if saved is not None:
+        arrays, _ = saved
+        if not np.array_equal(arrays["points"], points):
+            raise ValueError("Quadrature checkpoint points changed")
+        return arrays["values"]
     values = np.asarray(function(points))
     if values.shape[:1] != (len(points),) or not np.isfinite(values).all():
         raise ValueError("Quadrature function must return finite arrays with a leading point axis")
-    if store is not None:
-        store.commit(
+    if checkpoint is not None:
+        checkpoint.save(
             case,
             {"points": points, "values": values},
-            metadata={
+            {
                 "quadrature_namespace": namespace,
                 "rule": tag,
                 "sample_count": len(points),
@@ -68,7 +67,7 @@ class QuadratureResult:
     metadata: dict
 
 
-def nested_observable(function, grid, options, key, *, active_axes=None):
+def nested_observable(function, grid, options, key, *, active_axes=None, checkpoint=None):
     """Nested uniform refinement for direct Python callers and whole-mesh cases."""
     from .result import ObservableResult
 
@@ -86,32 +85,24 @@ def nested_observable(function, grid, options, key, *, active_axes=None):
     if not active.any():
         active[:] = True
     previous = None
-    store = _STORE.get()
+    checkpoint = checkpoint if checkpoint is not None else _CHECKPOINT.get()
     for level in range(controls.get("max_levels", 4)):
-        mesh = base * np.where(active, 2**level, 1)
+        mesh = refined_grid(base, active, level)
         if int(np.prod(mesh)) > controls.get("max_points", 1_000_000):
             raise RuntimeError("Adaptive integration exhausted max_points before convergence")
         case = f"quadrature_{key}_level_{level:04d}"
-        if store is not None and store.completed(case):
-            record = store.manifest["cases"][case]
-            with np.load(store.root / record["path"], allow_pickle=False) as saved:
-                result = ObservableResult(
-                    {name: saved[name] for name in saved.files},
-                    record["metadata"]["dims"],
-                    record["metadata"]["units"],
-                    record["metadata"],
-                )
+        saved = checkpoint.load(case) if checkpoint is not None else None
+        if saved is not None:
+            arrays, metadata = saved
+            result = ObservableResult(arrays, metadata["dims"], metadata["units"], metadata)
         else:
             result = function(mesh)
-            if store is not None:
-                store.commit(case, result.arrays, metadata=result.artifact_metadata())
+            if checkpoint is not None:
+                checkpoint.save(case, result.arrays, result.artifact_metadata())
         value = result[key]
         if previous is not None:
-            error = float(np.max(np.abs(value - previous), initial=0))
-            scale = float(np.max(np.abs(value), initial=0))
-            threshold = (
-                controls.get("absolute_tolerance", 1e-6) + controls.get("relative_tolerance", 1e-4) * scale
-            )
+            diagnostic = convergence_diagnostic(value, previous, controls)
+            error, threshold = diagnostic["error_estimate"], diagnostic["threshold"]
             if error <= threshold:
                 return ObservableResult(
                     result.arrays,
@@ -174,7 +165,14 @@ def validate_integration(options):
 
 
 def integrate_unit_box(
-    function, grid, options, *, namespace="integral", active_axes=None, threshold_selector=None
+    function,
+    grid,
+    options,
+    *,
+    namespace="integral",
+    active_axes=None,
+    threshold_selector=None,
+    checkpoint=None,
 ):
     """Integrate array-valued ``function(points)`` over a normalized unit box.
 
@@ -215,7 +213,7 @@ def integrate_unit_box(
         if evaluations + len(points) > limit:
             raise RuntimeError("Local integration exhausted max_points before convergence")
         evaluations += len(points)
-        return checkpoint_samples(function, points, namespace=namespace, tag=tag)
+        return checkpoint_samples(function, points, namespace=namespace, tag=tag, checkpoint=checkpoint)
 
     cells = []
     for index in product(*(range(int(n)) for n in mesh)):

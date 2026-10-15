@@ -12,9 +12,8 @@ from typing import Any
 import numpy as np
 
 from ..io.artifacts import atomic_json, digest_file
-from ..io.openmx import BOHR_ANGSTROM, HARTREE_EV
-
-ASE_FS = 0.09822694788464063  # one fs expressed in the legacy atomistic time unit
+from ..physics.constants import ASE_FS as ASE_FS
+from ..physics.constants import BOHR_ANGSTROM, HARTREE_EV
 
 
 def translate_pyatb(step_type, parameters=None, *, input_parameters=None, fermi_energy=None, spin_mode=None):
@@ -23,6 +22,7 @@ def translate_pyatb(step_type, parameters=None, *, input_parameters=None, fermi_
     Return workflow/parameters/execution/export_metadata. ``fermi_energy`` supplies
     the authoritative SCF value for Auto; callers obtain it from native SCFOUT.
     """
+    integration: dict[str, Any]
     step = str(step_type).upper().removeprefix("PYATB_")
     names = {"AHC": "ahc", "SHIFT_CURRENT": "shift_current", "CHERN_NUMBER": "chern_number"}
     if step not in names:

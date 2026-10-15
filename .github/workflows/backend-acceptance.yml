@@ -1,0 +1,33 @@
+name: Optional backend acceptance
+on:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  acceleration:
+    runs-on: ubuntu-latest
+    env:
+      OMP_NUM_THREADS: '1'
+      OPENBLAS_NUM_THREADS: '1'
+      NUMBA_NUM_THREADS: '2'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --locked --extra acceleration --extra precision --group dev --python 3.13
+      - run: .venv/bin/python -c 'from queer.finite_field.transport.kernels import HAVE_NUMBA; assert HAVE_NUMBA'
+      - run: .venv/bin/python -m pytest tests/numerical/test_finite_field_science.py::test_optional_compiled_response_matches_numpy tests/numerical/test_finite_field_spin.py::test_optional_compiled_current_keeps_implicit_spin_normalization
+  producer-adapters:
+    runs-on: ubuntu-latest
+    env:
+      OMP_NUM_THREADS: '1'
+      OPENBLAS_NUM_THREADS: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --locked --extra mace --extra hamgnn --group dev --python 3.13
+      - run: .venv/bin/python -c 'import torch, torch_geometric; from mace import modules'
+      - run: .venv/bin/python -m pytest tests/unit/test_mace_force_adapter.py tests/unit/test_mace_model_smoke.py tests/unit/test_hamgnn_bridge.py

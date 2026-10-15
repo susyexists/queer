@@ -13,126 +13,32 @@ import numpy as np
 from scipy.constants import epsilon_0
 
 from ..execution import ExecutionOptions
-from ._tb import (
-    E_CHARGE,
-    HBAR,
+from ..models.evaluation import (
     band_geometry,
     basis_curvature,
     derivatives,
-    energy_blocks,
-    map_points,
     reciprocal,
     spin_degeneracy,
     volume,
 )
-from .optical import (
+from ..physics.broadening import gaussian, lorentzian
+from ..physics.constants import E_CHARGE, HBAR
+from ..physics.geometry import differentiated_geometry, energy_blocks
+from ..physics.response import linear_density_and_derivative as _linear_density_and_derivative
+from ..physics.statistics import occupation_derivatives as _occupation_derivatives
+from ._response_common import (
     _frequency_batch,
     _linear_response,
-    _occupation_derivatives,
     _occupied_manifold,
     _scissor_geometry,
     _settings,
-    _weighted_sum,
 )
+from ._sampling import _weighted_sum, map_points
 from .result import ObservableResult
 
 
 def _differentiated_geometry(model, k, data):
-    """Cartesian connection gradients in the local normalization gauge.
-
-    Differentiate the generalized eigenvalue perturbation identity analytically;
-    this avoids numerical eigenvector phases and k-space difference steps.
-    Complete degenerate blocks use the same normalization gauge as band_geometry.
-    """
-    coeff = data["coefficients"]
-    d = data["coefficient_derivatives"]
-    projected = data["projected_derivatives"]
-    first = derivatives(model, k)
-    second = derivatives(model, k, order=2)
-    energy = data["energies"]
-    gap = energy[None, :] - energy[:, None]
-    same_channel = data["band_channels"][:, None] == data["band_channels"][None, :]
-    block = (np.abs(gap) <= data["degeneracy_tol"]) & same_channel
-    separated = ~block & same_channel
-    # Within a degenerate manifold the energy derivative is a Hermitian
-    # matrix, rather than a list of diagonal band slopes. Retain it to avoid
-    # choosing arbitrary eigenvectors at Kramers/accidental crossings.
-    grad_energy = projected["H"] + np.einsum("anm,m->anm", d.conj().transpose(0, 2, 1), energy)
-    grad_energy += np.einsum("n,anm->anm", energy, d)
-    grad_energy[:, ~block] = 0
-    connection_gradient = np.empty((3, 3, len(energy), len(energy)), complex)
-    hessian = np.empty_like(connection_gradient)
-    for a in range(3):
-        for b in range(3):
-            ddh = (
-                d[a].conj().T @ projected["H"][b]
-                + projected["H"][b] @ d[a]
-                + coeff.conj().T @ second["H"][a, b] @ coeff
-            )
-            dds = (
-                d[a].conj().T @ projected["S"][b]
-                + projected["S"][b] @ d[a]
-                + coeff.conj().T @ second["S"][a, b] @ coeff
-            )
-            dr = (
-                d[a].conj().T @ projected["r"][b]
-                + projected["r"][b] @ d[a]
-                + coeff.conj().T @ first["r"][a, b] @ coeff
-            )
-            numerator = ddh - projected["S"][b] @ grad_energy[a]
-            numerator -= energy[None, :] * dds
-            numerator -= d[b] @ grad_energy[a] - grad_energy[a] @ d[b]
-            dd = -0.5 * dds
-            np.divide(numerator, gap, out=dd, where=separated)
-            dd[data["band_channels"][:, None] != data["band_channels"][None, :]] = 0
-            connection_gradient[a, b] = 1j * dd + dr.conj().T
-            hessian[a, b] = (
-                dd.conj().T * energy[None, :]
-                + d[b].conj().T @ grad_energy[a]
-                + ddh
-                + grad_energy[a] @ d[b]
-                + energy[:, None] * dd
-            )
-            hessian[a, b, ~block] = 0
-    return connection_gradient, grad_energy, hessian
-
-
-def _linear_density_and_derivative(data, gradient, energy_gradient, hessian, z, mu, temperature, eta):
-    energy = data["energies"]
-    connection = data["connections"]
-    f, fp, fpp = _occupation_derivatives(energy, mu, temperature, eta)
-    difference = f[None, :] - f[:, None]
-    first = 0.5 * (fp[:, None] + fp[None, :])
-    second = 0.5 * (fpp[:, None] + fpp[None, :])
-    df = first[None] * energy_gradient
-    ddf = (
-        0.5
-        * second[None, None]
-        * (
-            np.einsum("anl,blm->abnm", energy_gradient, energy_gradient, optimize=True)
-            + np.einsum("bnl,alm->abnm", energy_gradient, energy_gradient, optimize=True)
-        )
-        + first[None, None] * hessian
-    )
-    source = connection * difference[None]
-    dsource = gradient * difference[None, None]
-    dsource += np.einsum("bnl,alm->abnm", connection, df, optimize=True) - np.einsum(
-        "anl,blm->abnm", df, connection, optimize=True
-    )
-    source += 1j * df
-    dsource += 1j * ddf
-    delta = energy[:, None] - energy[None, :]
-    denominator = z[:, None, None, None] - delta[None, None]
-    rho = source[None] / denominator
-    drho = dsource[None] + np.einsum("anl,wblm->wabnm", energy_gradient, rho, optimize=True)
-    drho -= np.einsum("wbnl,alm->wabnm", rho, energy_gradient, optimize=True)
-    drho /= denominator[:, None]
-    # [i partial_a + A_a, rho_b]. This includes both intraband derivatives and
-    # interband commutators and is covariant under band-phase changes.
-    covariant = 1j * drho
-    covariant += np.einsum("anl,wblm->wabnm", connection, rho, optimize=True)
-    covariant -= np.einsum("wbnl,alm->wabnm", rho, connection, optimize=True)
-    return rho, covariant
+    return differentiated_geometry(data, derivatives(model, k), derivatives(model, k, order=2))
 
 
 def _second_order_response(
@@ -393,9 +299,9 @@ def second_order_static(
 
 def _delta(energy, eta, smearing):
     if smearing == "lorentzian":
-        return eta / (np.pi * (energy**2 + eta**2))
+        return lorentzian(energy, eta)
     if smearing == "gaussian":
-        return np.exp(-0.5 * (energy / eta) ** 2) / (np.sqrt(2 * np.pi) * eta)
+        return gaussian(energy, eta)
     raise ValueError("smearing must be 'lorentzian' or 'gaussian'")
 
 
@@ -494,6 +400,7 @@ def shift_current(
     adaptive_spacing=None,
     integration=None,
     execution=None,
+    checkpoint=None,
 ):
     """Resonant dc shift conductivity sigma_abc(0;w,-w), microA/V^2.
 
@@ -521,6 +428,7 @@ def shift_current(
             grid,
             controls,
             "shift_current",
+            checkpoint=checkpoint,
         )
     omega, mu, points, weight, metadata = _settings(
         model,
@@ -628,6 +536,7 @@ def shift_current(
             grid,
             controls,
             namespace="shift_current",
+            checkpoint=checkpoint,
         )
         tensor = integral.value.real
         metadata["integration"] = integral.metadata

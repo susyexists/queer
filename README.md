@@ -154,5 +154,6 @@ execution, scheduler adapters, and isolated wheel/sdist installation. Optional p
 material smoke checks may skip; numerical acceptance uses committed fixtures.
 
 See [repository boundaries](docs/repo_layout.md), [scientific conventions](docs/scientific_conventions.md),
+the [equation ownership registry](docs/equations.toml), [contributor guide](docs/development.md),
 and [reference benchmarks](benchmarks/README.md). Large inputs and generated results
 remain ignored; tracked dataset/run manifests provide provenance.

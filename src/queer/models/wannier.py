@@ -7,7 +7,6 @@ from contextlib import contextmanager
 from copy import copy
 from itertools import islice
 from pathlib import Path
-from types import SimpleNamespace
 
 import numpy as np
 
@@ -25,34 +24,13 @@ from ..io.wannier import (
     read_wsvec,
     resolve_wannier_files,
 )
+from ..physics.operators import assemble as _assemble
+from ..physics.operators import validate_assembly as _validate_assembly
+from ..physics.validation import NumericalError as NumericalError
+from .contracts import EigenstateBatch
 
 _LINE_MIN_GAIN = 2
 _LINE_CACHE_BYTES = 128 * 1024**2
-
-
-class NumericalError(RuntimeError):
-    """A scientific calculation could not produce validated numerical output."""
-
-
-def _assemble(translations, hopping, points):
-    phase = np.exp(2j * np.pi * (points @ translations.T))
-    matrices = np.einsum("kr,rij->kij", phase, hopping, optimize=True)
-    return _validate_assembly(matrices, points)
-
-
-def _validate_assembly(matrices, points):
-    if not np.isfinite(matrices).all():
-        raise NumericalError("Hamiltonian assembly produced nonfinite values")
-    adjoints = matrices.conj().transpose(0, 2, 1)
-    residuals = np.linalg.norm(matrices - adjoints, ord=np.inf, axis=(1, 2))
-    norms = np.linalg.norm(matrices, ord=np.inf, axis=(1, 2))
-    invalid = np.flatnonzero(residuals > 1e-10 + 1e-10 * norms)
-    if invalid.size:
-        index = int(invalid[0])
-        raise NumericalError(
-            f"Non-Hermitian Hamiltonian at k={points[index].tolist()}; residual={residuals[index]:.6g} eV"
-        )
-    return (matrices + adjoints) * 0.5, float(residuals.max(initial=0.0))
 
 
 def _solve_batch(translations, hopping, points):
@@ -641,9 +619,8 @@ class WannierModel:
                     )
                     for start, result in zip(window, results, strict=True):
                         assign(start, result)
-        return SimpleNamespace(
+        return EigenstateBatch(
             energies=energies,
-            absolute_energies=energies,
             coefficients=coefficients,
             overlaps=overlaps,
             band_channels=self.band_channels[selection],

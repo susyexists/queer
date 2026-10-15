@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from ...physics.geometry import interband_products
 from ..models.base import rotate_derivatives
 
 
@@ -169,11 +170,7 @@ def band_geometry(
         d = eps[:, sel][:, :, None] - eps[:, None, :]  # (m, 2, n)
         ok = (np.abs(d) > deg_tol) & ~self_mask
         inv_d2 = np.where(ok, 1.0 / np.where(ok, d, 1.0) ** 2, 0.0)
-        cross = Xs * np.conj(Xt)  # X^s_nm X^t_mn
-        omega = -2.0 * np.sum(cross.imag * inv_d2, axis=-1)  # (m, 2)
-        gss = (np.abs(Xs) ** 2) * inv_d2
-        gst = cross.real * inv_d2
-        gtt = (np.abs(Xt) ** 2) * inv_d2
+        omega, gss, gst, gtt = interband_products(Xs, Xt, inv_d2)
         out["eps_v"][sl] = eps[:, v]
         out["eps_c"][sl] = eps[:, c]
         out["omega_v"][sl] = omega[:, 0]

@@ -11,12 +11,11 @@ from ..capabilities import CapabilityError
 from ..execution import ExecutionOptions
 from ..geometry.lattice import reciprocal_lattice, validated_lattice, validated_points
 from ..io.pao import PAORadialData, read_pao, real_harmonics
+from ..physics.constants import KINETIC_EV_ANGSTROM2 as KINETIC_EV_ANGSTROM2
 from ._common import positive
 from ._tb import degeneracy_tolerance, states
 from .electronic import _mean_manifolds, _projection_manifolds, _selection
 from .result import ObservableResult
-
-KINETIC_EV_ANGSTROM2 = 3.80998211615486
 
 
 def _radial_basis(model, radial_data=None, pao_dir=None):

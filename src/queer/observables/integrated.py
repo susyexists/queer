@@ -12,28 +12,12 @@ from types import SimpleNamespace
 import numpy as np
 from scipy.special import entr
 
-from ._tb import (
-    E2_H,
-    E_CHARGE,
-    HBAR,
-    KB_EV,
-    band_geometry,
-    cell,
-    energy_blocks,
-    fermi_derivative,
-    kmesh,
-    map_points,
-    normalized_weights,
-    occupations,
-    reciprocal,
-    spin_degeneracy,
-    states,
-    velocity_products,
-    volume,
-)
-from ._tb import (
-    chemical_potentials as _mus,
-)
+from ..models.evaluation import band_geometry, cell, reciprocal, spin_degeneracy, states, volume
+from ..models.evaluation import chemical_potentials as _mus
+from ..physics.constants import E2_H, E_CHARGE, HBAR, KB_EV
+from ..physics.geometry import energy_blocks, velocity_products
+from ..physics.statistics import fermi_derivative, occupations
+from ._sampling import kmesh, map_points, normalized_weights
 from .geometry import _curvatures, _flux_diagnostics, _plaquette, _result
 
 
@@ -114,6 +98,7 @@ def ahc(
     plane=(0, 1),
     integration=None,
     execution=None,
+    checkpoint=None,
 ):
     """Intrinsic Hall tensor, in bulk S/cm or two-dimensional sheet Siemens.
 
@@ -141,11 +126,13 @@ def ahc(
                 dimension=dimension,
                 plane=plane,
                 execution=execution,
+                checkpoint=checkpoint,
             ),
             grid,
             controls,
             "ahc",
             active_axes=list(plane) if dimension == 2 else None,
+            checkpoint=checkpoint,
         )
     local = controls.get("method") in {"threshold", "cubature"}
     if local and (engine == "fhs" or kpoints is not None or weights is not None):
@@ -248,6 +235,7 @@ def ahc(
                 namespace="ahc",
                 active_axes=list(plane) if dimension == 2 else None,
                 threshold_selector=lambda value: np.max(np.linalg.norm(value, axis=(-2, -1))),
+                checkpoint=checkpoint,
             )
             values = integral.value
             diagnostics["integration"] = integral.metadata

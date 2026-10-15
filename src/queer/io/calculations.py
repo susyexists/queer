@@ -7,10 +7,10 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 
 import numpy as np
-from scipy.constants import elementary_charge
 
 from ..elements import ATOMIC_NUMBERS
 from ..observables.result import ObservableResult
+from ..physics.constants import KBAR_EV_ANGSTROM3 as KBAR_EV_ANGSTROM3
 from .bands import (
     _NUMBER,
     BOHR_ANGSTROM,
@@ -22,8 +22,6 @@ from .bands import (
     read_vasp_outcar,
     read_vasprun,
 )
-
-KBAR_EV_ANGSTROM3 = 1e8 * 1e-30 / elementary_charge
 
 
 @dataclass(frozen=True)

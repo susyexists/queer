@@ -27,6 +27,7 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 from . import units
+from ._harmonic_sampling import sample_current as _sample
 
 
 def p_lz(E_c: ArrayLike, E: ArrayLike) -> np.ndarray:
@@ -97,20 +98,6 @@ def p_int(
         interference = np.where(coeff == 0.0, 0.0, coeff * np.cos(Phi))
     out = P * (1.0 + (1.0 - 2.0 * P) * population + interference)
     return np.where(P == 0.0, 0.0, out)[()]
-
-
-def _sample(J: Callable, E: np.ndarray) -> np.ndarray:
-    """J at every entry of E with one vectorized call on the flattened array, reshaped to E.shape."""
-    flat = E.reshape(-1)
-    vals = np.asarray(J(flat))
-    if np.iscomplexobj(vals):
-        raise TypeError("J must be real-valued")
-    if vals.shape != flat.shape:
-        raise ValueError(f"J must be vectorized: returned shape {vals.shape} for input shape {flat.shape}")
-    vals = vals.astype(float, copy=False)
-    if not np.all(np.isfinite(vals)):
-        raise ValueError("J returned non-finite values")
-    return vals.reshape(E.shape)
 
 
 def _trapezoid_spectrum(

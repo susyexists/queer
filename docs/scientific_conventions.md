@@ -25,6 +25,15 @@ offset and workflow energy shifts are separate explicit parameters. Thermal ener
 is `k_B*T` in eV; zero temperature uses the occupation limit. Broadening and Gaussian
 widths must be positive. Binding-energy sweep intervals are half-open.
 
+The [equation registry](equations.toml) names each shared implementation, its
+inputs/units, assumptions, conventions, specialized backends and independent
+acceptance tests. It is an ownership index; the scientific definitions here remain
+authoritative. Shared kernels receive explicit array data and preserve conventions
+at their adapters. In particular, `thermal_occupation(E,T)` takes thermal energy
+in eV and gives one half at `E=0,T=0`; `occupations(E,mu,temperature)` takes Kelvin
+and gives zero at `E=mu,temperature=0`. Gaussian widths are standard deviations;
+Lorentzian widths are half widths at half maximum. Both line shapes have unit area.
+
 ARPES points outside the real hemisphere carry NaNs and valid-point masks; computations
 must not replace inaccessible points by `kz=0`. Named paths use SeekPath's original-cell
 basis. Static susceptibility and Fermi-surface nesting must retain separate names and

@@ -2,12 +2,7 @@
 
 import numpy as np
 
-
-def positive(value, name):
-    value = float(value)
-    if not np.isfinite(value) or value <= 0:
-        raise ValueError(f"{name} must be finite and positive")
-    return value
+from ..physics.validation import positive as positive
 
 
 def points_array(points):

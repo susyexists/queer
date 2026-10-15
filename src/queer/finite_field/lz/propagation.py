@@ -164,7 +164,7 @@ def propagate_crossings(
     coh = np.exp(-_coherence_rate(r1, r2, coherence) - 1j * theta)
 
     out = np.empty((n,) + tuple(shape))
-    out_cv = np.empty((n,) + tuple(shape), dtype=complex)
+    out_cv = np.empty((n,) + tuple(shape), dtype=complex) if return_coherence else None
     rcc = np.zeros(shape)
     rcv = np.zeros(shape, dtype=complex)
     for j in range(n):
@@ -178,11 +178,22 @@ def propagate_crossings(
             q * rcc + p * rvv - 2.0 * sq * np.real(ph * rcv),
             sq * ph * (rcc - rvv) + q * ph * ph * rcv - p * np.conj(rcv),
         )
-        out[j], out_cv[j] = rcc, rcv
+        out[j] = rcc
+        if out_cv is not None:
+            out_cv[j] = rcv
         if j < n - 1:
             rcc = rcc * pop[j]
             rcv = rcv * coh[j]
     return (out, out_cv) if return_coherence else out
+
+
+def two_crossing_population(P1, P2, population_decay, coherence_decay, theta):
+    """Array/scalar arithmetic shared by NumPy and the compiled response kernel."""
+    return (
+        P2
+        + P1 * (1.0 - 2.0 * P2) * population_decay
+        + 2.0 * np.sqrt(P1 * P2 * (1.0 - P1) * (1.0 - P2)) * coherence_decay * np.cos(theta)
+    )
 
 
 def p_int_two(P1, P2, d, kappa1, kappa2, theta, coherence: str = "paper"):
@@ -198,9 +209,10 @@ def p_int_two(P1, P2, d, kappa1, kappa2, theta, coherence: str = "paper"):
         raise ValueError("segment lengths must be >= 0")
     k1, k2 = _check_kappa(kappa1), _check_kappa(kappa2)
     r1, r2 = _ratio(d, k1), _ratio(d, k2)
-    amp = np.sqrt(P1 * P2 * (1.0 - P1) * (1.0 - P2))
-    return (
-        P2
-        + P1 * (1.0 - 2.0 * P2) * np.exp(-r1)
-        + 2.0 * amp * np.exp(-_coherence_rate(r1, r2, coherence)) * np.cos(np.asarray(theta, dtype=float))
+    return two_crossing_population(
+        P1,
+        P2,
+        np.exp(-r1),
+        np.exp(-_coherence_rate(r1, r2, coherence)),
+        np.asarray(theta, dtype=float),
     )

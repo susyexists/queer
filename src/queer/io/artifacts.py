@@ -12,6 +12,7 @@ import socket
 import subprocess
 import tempfile
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, TextIO, cast
@@ -21,7 +22,7 @@ import numpy as np
 
 from ..execution import ExecutionOptions
 
-ALGORITHM_VERSION = "1.2.1-native-finite-field-v1"
+ALGORITHM_VERSION = "1.4.1-refactor-v1"
 
 
 def scheduler_context() -> dict[str, str]:
@@ -286,3 +287,19 @@ def load_manifest(run_dir: str | Path) -> dict[str, Any]:
         if not artifact.is_file() or digest_file(artifact) != record["sha256"]:
             raise ValueError(f"Artifact was changed or removed: {case}")
     return manifest
+
+
+@contextmanager
+def owned_run(store):
+    """Finish and release one exclusively owned run on success or interruption."""
+    try:
+        yield store
+        store.finish()
+    except BaseException as error:
+        store.finish(
+            status="interrupted" if isinstance(error, (KeyboardInterrupt, SystemExit)) else "failed",
+            error=error,
+        )
+        raise
+    finally:
+        store.release()

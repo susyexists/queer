@@ -1,5 +1,33 @@
 # Migration notes
 
+## QUEER 1.4.1 shared-kernel and workflow refactor
+
+Repeated occupation, broadening, Green-function, Lindhard, EPW, covariant geometry
+and length-gauge response arithmetic now have native owners in `queer.physics`.
+Models and observable adapters retain their existing public signatures, shapes,
+defaults and scientific metadata. Legacy top-level imports remain available in 1.x.
+The [equation registry](equations.toml) records specialized backends separately.
+
+Thermal-energy occupations retain the half-filled zero-energy limit; native Kelvin
+occupations retain an unoccupied state exactly at the chemical potential. EPW keeps
+its negative imaginary regulator and documented reduced-coupling normalization.
+Paper/physical finite-field choices and historical conversion constants remain
+explicit. This reorganization does not select new scientific defaults.
+
+Structure readers share one POSCAR record parser. Tuple readers continue returning
+fractional coordinates and species group IDs, including VASP4 records without
+element labels; native structures still require chemical species. Simulation
+expansion preserves unwrapped positions, image-major atom order and restart metadata,
+while structure preprocessing wraps periodic coordinates and records provenance.
+
+Workflow registration, input discovery, domain handlers and result reduction now
+have separate owners. Execution and artifact APIs retain their existing contracts.
+Algorithm identity is `1.4.1-refactor-v1`: older partial runs require a fresh run;
+completed historical runs remain renderable from their saved artifacts. Preparation
+identities include shared numerical source owners. The packaged finite-field
+`SOURCE_MANIFEST.json` continues to record the original HHH donor snapshot; it is
+distinct from the current QUEER engine fingerprint.
+
 ## Finite-field parity with current HHH
 
 Omitted finite-field options now select `paper`, matching HHH, instead of

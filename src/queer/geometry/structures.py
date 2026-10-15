@@ -145,7 +145,7 @@ def min_neighbor_distance_per_species(structure: Structure, *, cutoff=6.0):
     return result
 
 
-def _take(structure, indices, **changes):
+def _take(structure, indices, *, provenance=True, **changes):
     indices = np.asarray(indices, int)
     return structure.copy(
         positions=structure.positions[indices],
@@ -161,7 +161,9 @@ def _take(structure, indices, **changes):
             "source_indices": np.asarray(
                 structure.metadata.get("source_indices", np.arange(structure.natoms))
             )[indices].tolist(),
-        },
+        }
+        if provenance
+        else structure.metadata,
         **changes,
     )
 
@@ -190,6 +192,47 @@ def _constraints_for_cell(structure: Structure, cell):
     return np.asarray(mapped, bool).reshape(-1, 3)
 
 
+def _replicate_images(structure, matrix, translations, *, wrap, provenance):
+    """Repeat all atom fields in image-major order with explicit coordinate policy."""
+    indices = np.tile(np.arange(structure.natoms), len(translations))
+    shifts = np.repeat(np.asarray(translations) @ structure.cell, structure.natoms, axis=0)
+    result = _take(structure, indices, provenance=provenance)
+    cell = matrix @ structure.cell
+    fixed = _constraints_for_cell(structure, cell)
+    positions = structure.positions[indices] + shifts
+    if wrap:
+        fractional = positions @ np.linalg.inv(cell)
+        for axis, periodic in enumerate(structure.pbc):
+            if periodic:
+                fractional[:, axis] %= 1
+        positions = fractional @ cell
+    return result.copy(
+        cell=cell,
+        positions=positions,
+        fixed_coordinates=None if fixed is None else fixed[indices],
+        metadata={**result.metadata, "supercell_matrix": matrix.tolist()}
+        if provenance
+        else structure.metadata,
+    )
+
+
+def expand_diagonal(structure: Structure, supercell):
+    """Return unwrapped images and their integer translations for simulation plans.
+
+    Atoms retain cell-major, primitive-atom-minor order. Unlike structure
+    preprocessing, simulation expansion preserves original metadata and leaves
+    coordinates unwrapped, so checkpoints and force-array ordering stay stable.
+    """
+    sc = np.asarray(supercell)
+    if sc.shape != (3,) or not np.equal(sc, np.floor(sc)).all() or np.any(sc < 1):
+        raise ValueError("supercell must contain three positive integers")
+    sc = sc.astype(int)
+    translations = np.asarray(list(np.ndindex(tuple(sc))))
+    if len(translations) == 1:
+        return structure.copy(), translations
+    return _replicate_images(structure, np.diag(sc), translations, wrap=False, provenance=False), translations
+
+
 def make_supercell(structure: Structure, matrix):
     matrix = np.asarray(matrix, float)
     if matrix.shape != (3, 3) or not np.isfinite(matrix).all() or not np.equal(matrix, np.rint(matrix)).all():
@@ -211,25 +254,7 @@ def make_supercell(structure: Structure, matrix):
             translations.append(translation)
     if len(translations) != abs(determinant):
         raise ValueError("Could not enumerate the integer supercell lattice")
-    indices = np.tile(np.arange(structure.natoms), len(translations))
-    shifts = np.repeat(np.asarray(translations) @ structure.cell, structure.natoms, axis=0)
-    result = _take(structure, indices)
-    cell = matrix @ structure.cell
-    fixed = _constraints_for_cell(structure, cell)
-    positions = structure.positions[indices] + shifts
-    fractional = positions @ np.linalg.inv(cell)
-    for axis, periodic in enumerate(structure.pbc):
-        if periodic:
-            fractional[:, axis] %= 1
-    return result.copy(
-        cell=cell,
-        positions=fractional @ cell,
-        fixed_coordinates=None if fixed is None else fixed[indices],
-        metadata={
-            **result.metadata,
-            "supercell_matrix": matrix.tolist(),
-        },
-    )
+    return _replicate_images(structure, matrix, translations, wrap=True, provenance=True)
 
 
 def lattice_parameters(cell):

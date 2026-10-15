@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from ..structures import Frame
+from ._common import kinetic_energy
 
 
 @dataclass
@@ -35,8 +36,6 @@ def select_min_energy_frame(
     the sample and geometry steps separately. With no samples, use stored frame
     energies (and kinetic energy when total energy is requested).
     """
-    from .dynamics import ACCELERATION
-
     frames = list(frames)
     if alignment not in ("exact", "previous"):
         raise ValueError("alignment must be exact or previous")
@@ -51,9 +50,7 @@ def select_min_energy_frame(
                 continue
             energy = frame.evaluation.energy_eV
             if energy_key == "etot_eV" and frame.velocities is not None:
-                energy += float(
-                    np.sum(frame.structure.masses[:, None] * frame.velocities**2) / (2 * ACCELERATION)
-                )
+                energy += kinetic_energy(frame.structure.masses, frame.velocities)
             if not np.isfinite(energy):
                 continue
             candidates.append((energy, index, frame.step))

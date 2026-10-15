@@ -7,7 +7,8 @@ from scipy.linalg import eigh, solve
 
 from ..execution import ExecutionOptions
 from ..geometry.lattice import validated_points
-from ..models.wannier import NumericalError
+from ..physics.broadening import lorentzian as lorentzian_shape
+from ..physics.validation import NumericalError
 from ._common import positive
 from ._tb import degeneracy_tolerance
 from .electronic import _mean_manifolds, _projection_manifolds
@@ -204,7 +205,7 @@ def surface_state(
             weights_top = mulliken[:dimension].sum(axis=0)
             weights_bottom = mulliken[-dimension:].sum(axis=0)
             for w, frequency in enumerate(omega):
-                lorentzian = eta / np.pi / ((frequency + model.fermi_energy - values) ** 2 + eta**2)
+                lorentzian = lorentzian_shape(frequency + model.fermi_energy - values, eta)
                 top[w, k] = weights_top @ lorentzian
                 bottom[w, k] = weights_bottom @ lorentzian
                 bulk[w, k] = lorentzian.sum() / int(slab_layers)

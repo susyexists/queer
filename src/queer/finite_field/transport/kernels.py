@@ -12,6 +12,8 @@ import math
 
 import numpy as np
 
+from ..lz.propagation import two_crossing_population
+
 try:
     import numba
     from numba import prange
@@ -92,11 +94,7 @@ def _kernel_n2(Ea, lam1, lam2, w, Ec, gaps, dseg, tab, finf, m1, x0, h, K, lam_l
             if paper_coh:
                 coh *= math.exp(-d / (2.0 * l1))
             theta = gaps[line, 0] * 1e10 / E
-            rho2 = (
-                P2
-                + P1 * (1.0 - 2.0 * P2) * pop
-                + 2.0 * math.sqrt(P1 * P2 * (1.0 - P1) * (1.0 - P2)) * coh * math.cos(theta)
-            )
+            rho2 = _population_j(P1, P2, pop, coh, theta)
             F1 = _interp_j(tab[line, 0], finf[line, 0], m1[line, 0], x0, h, K, lam_lo, lam_hi, l1)
             F2 = _interp_j(tab[line, 1], finf[line, 1], m1[line, 1], x0, h, K, lam_lo, lam_hi, l1)
             acc += w[line] * (P1 * F1 + rho2 * F2)
@@ -105,10 +103,12 @@ def _kernel_n2(Ea, lam1, lam2, w, Ec, gaps, dseg, tab, finf, m1, x0, h, K, lam_l
 
 if _HAVE_NUMBA:
     _interp_j = numba.njit(cache=True, fastmath=False)(_interp)
+    _population_j = numba.njit(cache=True, fastmath=False)(two_crossing_population)
     kernel_n1 = numba.njit(cache=True, parallel=True, fastmath=False)(_kernel_n1)
     kernel_n2 = numba.njit(cache=True, parallel=True, fastmath=False)(_kernel_n2)
 else:  # pragma: no cover
     _interp_j = _interp
+    _population_j = two_crossing_population
     kernel_n1 = _kernel_n1
     kernel_n2 = _kernel_n2
 

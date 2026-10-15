@@ -9,6 +9,11 @@ import numpy as np
 from ..capabilities import CapabilityError
 from ..execution import ExecutionOptions
 from ..geometry.lattice import validated_lattice, validated_points
+from ..physics.broadening import gaussian
+from ..physics.constants import E_CHARGE as ELECTRON_CHARGE
+from ..physics.constants import HBAR as HBAR_J_SECOND
+from ..physics.constants import HBAR_EVS as HBAR_EV_SECOND
+from ..physics.constants import KB_J_KELVIN
 from ._common import positive
 from ._tb import (
     band_geometry,
@@ -20,11 +25,6 @@ from ._tb import (
     velocity_products,
 )
 from .result import ObservableResult
-
-ELECTRON_CHARGE = 1.602176634e-19
-HBAR_J_SECOND = 6.62607015e-34 / (2 * np.pi)
-HBAR_EV_SECOND = HBAR_J_SECOND / ELECTRON_CHARGE
-KB_J_KELVIN = 1.380649e-23
 
 
 def finalize_transport(arrays):
@@ -200,9 +200,7 @@ def boltz_transport(
                     difference = energies[:, start:stop] - energies[band, k]
                     weighted = degeneracy * integration_weights[None, start:stop]
                     density_at_energy[band, k] += (
-                        np.sum(weighted * np.exp(-0.5 * (difference / eta) ** 2) / (eta * np.sqrt(2 * np.pi)))
-                        / volume
-                        / ELECTRON_CHARGE
+                        np.sum(weighted * gaussian(difference, eta)) / volume / ELECTRON_CHARGE
                     )
     for t, temperature in enumerate(temperatures):
         tau = relaxation[t]

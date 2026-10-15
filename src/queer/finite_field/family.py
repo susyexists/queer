@@ -982,21 +982,18 @@ class ModelFamily:
 
             with execution_session(options) as session:
                 rows = list(session.parallel()(delayed(calculate)(i) for i in range(len(self))))
-        first = rows[0]
-        arrays = {"parameter": params, "D": self.D, "labels": np.asarray(self.labels)}
-        dims = {"parameter": ("member",), "D": ("member",), "labels": ("member",)}
-        units = {
-            "parameter": "D/Dc" if Dc is not None else "D",
-            "D": self.meta.get("D_unit", "D"),
-            "labels": "label",
-        }
-        for key, value in first.arrays.items():
-            if key in {"E0", "orders", "N", "amplitudes"}:
-                arrays[key], dims[key], units[key] = value, first.dims[key], first.units.get(key, "1")
-            else:
-                arrays[key] = np.stack([r.arrays[key] for r in rows])
-                dims[key] = ("member", *first.dims[key])
-                units[key] = first.units.get(key, "1")
+        from .assembly import stack_member_results
+
+        arrays, dims, units = stack_member_results(rows, shared={"E0", "orders", "N", "amplitudes"})
+        arrays.update(parameter=params, D=self.D, labels=np.asarray(self.labels))
+        dims.update(parameter=("member",), D=("member",), labels=("member",))
+        units.update(
+            parameter="D/Dc" if Dc is not None else "D",
+            D=self.meta.get("D_unit", "D"),
+            labels="label",
+        )
+        for key in arrays:
+            units.setdefault(key, "1")
         return ObservableResult(
             arrays,
             dims,

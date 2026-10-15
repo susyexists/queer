@@ -37,6 +37,10 @@ def test_source_distribution_contains_reproducible_native_validation(distributio
     assert {
         "docs/openmx_workflows.md",
         "docs/scientific_conventions.md",
+        "docs/equations.toml",
+        "docs/development.md",
+        "src/queer/physics/geometry.py",
+        "src/queer/models/contracts.py",
         "configs/examples/openmx_bands.toml",
         "configs/examples/openmx_dos.toml",
         "examples/openmx.py",
@@ -93,7 +97,15 @@ from importlib.resources import files
 from pathlib import Path
 import queer
 from queer import WannierModel, EPWModel, OpenMXModel, ObservableResult
-assert queer.__version__ == "1.4.0"
+from queer.models.contracts import EigenstateBatch
+from queer.physics.broadening import gaussian, lorentzian
+from queer.physics.statistics import occupations, thermal_occupation
+from queer.io.numerical import stable_hash
+assert thermal_occupation(0., 0.) == .5
+assert occupations(0., 0., 0.) == 0.
+assert gaussian(0., .1) > 0 and lorentzian(0., .1) > 0
+assert len(stable_hash({'probe': 1})) == 64
+assert queer.__version__ == "1.4.1"
 assert Path(queer.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
 assert files("queer").joinpath("resources/neon.mplstyle").is_file()
 assert files("queer").joinpath("resources/symmetry/hpkot.json").is_file()

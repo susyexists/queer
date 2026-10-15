@@ -6,9 +6,8 @@ from ..geometry.lattice import cartesian_to_fractional as angstrom2reciprocal
 from ..geometry.lattice import fractional_to_cartesian as reciprocal2angstrom
 from ..geometry.mesh import cartesian_mesh as mesh_cartesian
 from ..geometry.rotations import rotation_matrix as get_rotation_matrix
+from ..physics.constants import ARPES_FACTOR as ARPES_FACTOR
 from ._common import points_array, positive
-
-ARPES_FACTOR = 0.2625  # 2m/hbar^2, eV^-1 Angstrom^-2
 
 
 def arpes_equation(Ek, V0, k_xy):

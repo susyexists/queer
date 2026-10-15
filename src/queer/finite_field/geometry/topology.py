@@ -70,7 +70,7 @@ def fhs_flux(model, bands, kx_edges, ky_edges) -> float:
     KX, KY = np.meshgrid(*axes, indexing="ij")
 
     if getattr(model, "native_band_geometry", False):
-        from ...observables._tb import basis_overlap, states
+        from ...models.evaluation import basis_overlap, states
 
         source = model.source_model
         points = model.plane.fractional(source, KX, KY).reshape(-1, 3)

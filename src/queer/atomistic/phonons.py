@@ -7,9 +7,12 @@ from typing import Any
 
 import numpy as np
 
+from ..geometry.lattice import reciprocal_lattice
+from ..geometry.structures import expand_diagonal
 from ..observables.result import ObservableResult
+from ..physics.constants import ACCELERATION
 from ..structures import Structure
-from .dynamics import ACCELERATION, _evaluate, _expand, _integer, _positive
+from ._common import evaluate, integer, positive
 
 
 @dataclass
@@ -55,12 +58,12 @@ def plan_displacements(structure: Structure, *, supercell=(2, 2, 2), delta_A=0.0
     retain that order. The supplied-forces interface permits any force producer
     and independent distributed scheduling of these configurations.
     """
-    delta_A = _positive(delta_A, "delta_A")
+    delta_A = positive(delta_A, "delta_A")
     if structure.natoms < 1:
         raise ValueError("phonons require at least one atom")
     if structure.fixed_coordinates is not None and structure.fixed_coordinates.any():
         raise ValueError("periodic phonons require unconstrained displacement coordinates")
-    reference, indices = _expand(structure, supercell)
+    reference, indices = expand_diagonal(structure, supercell)
     configurations, entries = [], []
     for atom in range(structure.natoms):
         for axis in range(3):
@@ -99,7 +102,7 @@ def assemble_force_constants(
     n, nc = plan.primitive.natoms, len(plan.cell_indices)
     if forces.shape != (len(plan.entries), plan.reference.natoms, 3) or not np.isfinite(forces).all():
         raise ValueError("forces must be finite (n_displacements,n_supercell_atoms,3) in plan order")
-    symmetrize_iterations = _integer(symmetrize_iterations, "symmetrize_iterations", 0)
+    symmetrize_iterations = integer(symmetrize_iterations, "symmetrize_iterations", 0)
     pair_forces = forces.copy().reshape(n, 3, 2, nc * n, 3)
     if frederiksen:
         for atom in range(n):
@@ -188,7 +191,7 @@ def _qpath(structure, band_path, npoints):
         from ..geometry.symmetry import compute_band_path
 
         segments = compute_band_path(structure, points_per_segment=npoints)["segments"]
-    reciprocal = 2 * np.pi * np.linalg.inv(structure.cell).T
+    reciprocal = reciprocal_lattice(structure.cell)
     qs: list[np.ndarray] = []
     distances: list[float] = []
     metadata: list[dict[str, Any]] = []
@@ -239,18 +242,18 @@ def phonon_bands(
     plan = plan_displacements(structure, supercell=supercell, delta_A=delta_A)
     if forces is None:
         forces = np.asarray(
-            [_evaluate(provider, configuration).forces_eV_A for configuration in plan.configurations]
+            [evaluate(provider, configuration).forces_eV_A for configuration in plan.configurations]
         )
     constants = assemble_force_constants(
         plan, forces, frederiksen=frederiksen, acoustic=acoustic, symmetrize_iterations=symmetrize_iterations
     )
-    npoints = _integer(n_qpoints_per_segment, "n_qpoints_per_segment", 2)
+    npoints = integer(n_qpoints_per_segment, "n_qpoints_per_segment", 2)
     segments = []
     if qpoints is None:
         qpoints, distances, segments = _qpath(structure, band_path, npoints)
     else:
         qpoints = np.asarray(qpoints, float)
-        reciprocal = 2 * np.pi * np.linalg.inv(structure.cell).T
+        reciprocal = reciprocal_lattice(structure.cell)
         distances = np.concatenate(
             ([0.0], np.cumsum(np.linalg.norm(np.diff(qpoints, axis=0) @ reciprocal, axis=1)))
         )

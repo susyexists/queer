@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "queer"
-version = "1.4.0"
+version = "1.4.1"
 description = "Native electronic responses, crystal, atomistic and Hamiltonian workflows"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -71,6 +71,16 @@ python_version = "3.11"
 ignore_missing_imports = true
 check_untyped_defs = true
 files = [
+  "src/queer/physics",
+  "src/queer/workflows",
+  "src/queer/models/contracts.py",
+  "src/queer/models/evaluation.py",
+  "src/queer/io/numerical.py",
+  "src/queer/io/results.py",
+  "src/queer/observables/checkpoints.py",
+  "src/queer/observables/convergence.py",
+  "src/queer/observables/_sampling.py",
+  "src/queer/observables/_response_common.py",
   "src/queer/capabilities.py",
   "src/queer/config.py",
   "src/queer/execution.py",
@@ -88,10 +98,6 @@ files = [
   "src/queer/observables/surface.py",
   "src/queer/observables/transport.py",
   "src/queer/observables/unfolding.py",
-  "src/queer/workflows/registry.py",
-  "src/queer/workflows/runner.py",
-  "src/queer/workflows/finite_field.py",
-  "src/queer/workflows/render.py",
   "src/queer/plotting/finite_field.py",
   "src/queer/structures.py",
   "src/queer/elements.py",
@@ -112,5 +118,4 @@ files = [
   "src/queer/adapters/mace.py",
   "src/queer/adapters/hamgnn.py",
   "src/queer/compat/generator.py",
-  "src/queer/workflows/services.py",
 ]

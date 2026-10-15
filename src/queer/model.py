@@ -6,12 +6,14 @@ from pathlib import Path
 import numpy as np
 
 from .execution import cpu_budget
-from .functions import fd
 from .geometry.mesh import cartesian_mesh
 from .geometry.paths import KPath as KPath
 from .io.structure import read_fermi_energy, read_qe_reciprocal
 from .io.wannier import read_hr as _read_hr
 from .models.wannier import WannierModel
+from .physics.broadening import lorentzian
+from .physics.electronic import lindhard
+from .physics.statistics import thermal_occupation as fd
 
 
 class model(WannierModel):
@@ -84,15 +86,12 @@ class model(WannierModel):
         if fermi_shift:
             occupations = fd(cached, T)
         shifted_occupations = fd(shifted, T)
-        real = 0j
+        response = lindhard(cached, shifted, occupations, shifted_occupations, delta)
         joint_density = 0.0
         for i in range(len(indices)):
             for j in range(len(indices)):
-                real += np.mean(
-                    (occupations[i] - shifted_occupations[j]) / (cached[i] - shifted[j] + 1j * delta)
-                )
                 joint_density += np.mean(delta_function(cached[i]) * delta_function(shifted[j]))
-        return [-real.real, joint_density]
+        return [np.real(response), joint_density]
 
     def suscep_path(self, q_path, k_mesh, band_index, T=1):
         energies = self.energies(k_mesh)
@@ -140,7 +139,7 @@ def delta_function(x, epsilon=0.00001):
     if not np.isfinite(epsilon) or epsilon <= 0:
         raise ValueError("epsilon must be positive and finite")
     values = np.asarray(x)
-    return epsilon / (np.pi * (values**2 + epsilon**2))
+    return lorentzian(values, epsilon)
 
 
 def density_of_states(energy, band_index=False, dE=1e-2):

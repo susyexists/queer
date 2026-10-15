@@ -39,6 +39,8 @@ import numpy as np
 from numpy.typing import ArrayLike
 from scipy import special as sp
 
+from ._harmonic_sampling import sample_current as _sample
+
 C_F = 3.0 / math.sqrt(2.0 * math.pi)  # lim N^{5/2}|b_N| for sgn(E)|E|^{3/2}; Methods 5 quotes c_F = 1.1968
 
 
@@ -141,20 +143,6 @@ def theta_nodes(n: int) -> tuple[np.ndarray, np.ndarray]:
 # ---------------------------------------------------------------------------------------------------
 # projector
 # ---------------------------------------------------------------------------------------------------
-
-
-def _sample(J: Callable, E: np.ndarray) -> np.ndarray:
-    """J at every entry of E with one vectorized call on the flattened array, reshaped to E.shape."""
-    flat = E.reshape(-1)
-    vals = np.asarray(J(flat))
-    if np.iscomplexobj(vals):
-        raise TypeError("J must be real-valued")
-    if vals.shape != flat.shape:
-        raise ValueError(f"J must be vectorized: returned shape {vals.shape} for input shape {flat.shape}")
-    vals = vals.astype(float, copy=False)
-    if not np.all(np.isfinite(vals)):
-        raise ValueError("J returned non-finite values")
-    return vals.reshape(E.shape)
 
 
 def harmonics(

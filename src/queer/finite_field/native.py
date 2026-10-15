@@ -14,8 +14,8 @@ import numpy as np
 from scipy.linalg import eigh
 
 from ..capabilities import CapabilityError
-from ..observables._tb import band_geometry, cell, degeneracy_tolerance, reciprocal
-from ..observables.geometry import _curvatures
+from ..models.evaluation import band_geometry, basis_curvature, cell, degeneracy_tolerance, reciprocal
+from ..physics.geometry import band_curvatures, interband_products, pair_metrics
 
 
 @dataclass(frozen=True)
@@ -223,7 +223,7 @@ class NativePlaneModel:
         return np.asarray(values).reshape(shape + (self.nbnd, self.nbnd))
 
     def dhamiltonian(self, kx, ky):
-        from ..observables._tb import derivatives
+        from ..models.evaluation import derivatives
 
         points, shape = self._points(kx, ky)
         values = [
@@ -255,9 +255,9 @@ class NativePlaneModel:
                 if hasattr(self.source_model, "_assemble_points"):
                     matrices, _ = self.source_model._assemble_points(chunk)
                 else:
-                    from ..models.wannier import _assemble
+                    from ..physics.operators import assemble
 
-                    matrices, _ = _assemble(
+                    matrices, _ = assemble(
                         self.source_model.translations, self.source_model.hopping_matrices, chunk
                     )
                 reference = np.trace(matrices, axis1=-2, axis2=-1).real / self.nbnd
@@ -297,18 +297,17 @@ class NativePlaneModel:
             data = band_geometry(self.source_model, k, self.degeneracy_tol)
             e, connections = data["energies"], data["connections"]
             a = np.einsum("ba,anm->bnm", axes, connections)
-            g = np.outer(a[:, v, c], a[:, v, c].conj()).real
-            totals = []
+            g, totals = pair_metrics(a, self._pair, data["band_channels"])
+            totals = list(totals)
             valid = True
             for band in (v, c):
                 same = data["band_channels"] == data["band_channels"][band]
                 unresolved = (np.abs(e - e[band]) <= self.degeneracy_tol) & same
                 unresolved[band] = False
                 valid &= not np.any(unresolved)
-                ac = a[:, band].copy()
-                ac[:, band] = 0
-                totals.append((ac @ ac.conj().T).real)
-            curvature = _curvatures(self.source_model, k, data, kwargs.get("engine", "direct"))
+            engine = kwargs.get("engine", "direct")
+            projected = basis_curvature(self.source_model, k, data) if engine == "direct" else None
+            curvature = band_curvatures(data, engine, projected)
             omega = np.einsum("a,nab,b->n", axes[0], curvature, axes[1])
             velocity = np.einsum("ba,a->b", axes, data["velocities"][:, c, v])
 
@@ -411,8 +410,7 @@ class NativePlaneModel:
             separated = (np.abs(delta) > self.degeneracy_tol) & ~self_mask
             inverse = np.zeros_like(delta)
             np.divide(1.0, delta**2, out=inverse, where=separated)
-            cross = covariant[0] * covariant[1].conj()
-            omega = -2.0 * np.sum(cross.imag * inverse, axis=-1)
+            omega, gss, gst, gtt = interband_products(covariant[0], covariant[1], inverse)
             if engine == "direct":
                 omega += 2.0 * np.sum((connections[0] * connections[1].conj()).imag, axis=-1)
                 if model.position_matrices is not None:
@@ -424,9 +422,6 @@ class NativePlaneModel:
                         )
                     omega += np.einsum("kbi,kib->kb", UsH @ curl, Usel).real
             values[2][sl], values[3][sl] = omega[:, 0], omega[:, 1]
-            gss = np.abs(covariant[0]) ** 2 * inverse
-            gst = cross.real * inverse
-            gtt = np.abs(covariant[1]) ** 2 * inverse
             metrics[0][sl] = np.stack([gss[:, 0, c], gst[:, 0, c], gtt[:, 0, c]], axis=-1)
             totals = np.stack([gss.sum(-1), gst.sum(-1), gtt.sum(-1)], axis=-1)
             metrics[1][sl], metrics[2][sl] = totals[:, 0], totals[:, 1]
@@ -446,7 +441,7 @@ class NativePlaneModel:
         return result
 
     def position_connection(self, kx, ky):
-        from ..observables._tb import derivatives, position_matrix
+        from ..models.evaluation import derivatives, position_matrix
 
         points, shape = self._points(kx, ky)
         values = []
@@ -475,7 +470,7 @@ class NativePlaneModel:
         return uc, uv, velocity
 
     def phase_links(self, s, t, angle, bands=None, uc=None, uv=None):
-        from ..observables._tb import basis_overlap, states
+        from ..models.evaluation import basis_overlap, states
 
         s, t = np.broadcast_arrays(s, t)
         points = self.plane.fractional(self.source_model, s, t, angle).reshape(-1, 3)

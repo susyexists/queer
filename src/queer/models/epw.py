@@ -4,8 +4,9 @@ from pathlib import Path
 
 import numpy as np
 
-from ..functions import fd
 from ..io.epw import read_epw_directory
+from ..physics.electron_phonon import electron_hole_response, reduced_coupling
+from ..physics.electron_phonon import self_energy as epw_self_energy
 
 
 class EPWModel:
@@ -69,9 +70,7 @@ class EPWModel:
 
     def reduce_g(self):
         """Compute g0 = g*sqrt(phonon energy); unstable negative modes raise."""
-        if np.any(self.ph < 0):
-            raise ValueError("reduced coupling requires nonnegative phonon frequencies")
-        self.g0 = self.g_complex * np.sqrt(self.ph)[..., None]
+        self.g0 = reduced_coupling(self.ph, self.g_complex)
         return self.g0
 
     def self_energy(self, q, temperature=0.025, broadening=1e-7):
@@ -88,17 +87,15 @@ class EPWModel:
             raise ValueError("q index is outside the model")
         if not hasattr(self, "g0"):
             self.reduce_g()
-        numerator = fd(self.e_k[indices] - self.ef, temperature) - fd(
-            self.e_kq[indices] - self.ef, temperature
+        result = epw_self_energy(
+            self.ph[:, indices],
+            self.g0[:, indices],
+            self.e_k[indices],
+            self.e_kq[indices],
+            self.ef,
+            temperature,
+            broadening,
         )
-        denominator = (
-            (self.e_k[indices] - self.e_kq[indices])[None, ...]
-            - 1j * broadening
-            - self.ph[:, indices, None] * 1e-3
-        )
-        result = np.mean(
-            np.abs(self.g0[:, indices]) ** 2 * 1e-6 * numerator[None, ...] / denominator, axis=2
-        ).T
         return result[0] if scalar else result
 
     def calculate_self_energy(self, q):
@@ -112,12 +109,13 @@ class EPWModel:
     def calculate_suscep(self, n, q, k, delta=1e-7, temperature=0.025):
         if not np.isfinite(delta) or delta <= 0:
             raise ValueError("delta must be finite and positive")
-        numerator = fd(self.e_k[q, k] - self.ef, temperature) - fd(self.e_kq[q, k] - self.ef, temperature)
-        return numerator / (self.e_k[q, k] - self.e_kq[q, k] - 1j * delta - self.ph[n, q] * 1e-3)
+        return electron_hole_response(
+            self.e_k[q, k], self.e_kq[q, k], self.ph[n, q], self.ef, temperature, delta
+        )
 
     def fix_model(self, ph_tolerance=0.15, g1_tolerance=30, g2_tolerance=10, offset=50):
         """Apply the existing crossing heuristic while keeping all modes aligned."""
-        from ..utils import g_cross, ph_cross
+        from ._epw_tracking import g_cross, ph_cross
 
         self._apply_crossings(ph_cross(self.ph, tolerance=ph_tolerance, offset=offset))
         for tolerance in (g1_tolerance, g2_tolerance):
@@ -125,7 +123,7 @@ class EPWModel:
         return self
 
     def _apply_crossings(self, crossings):
-        from ..utils import untangle
+        from ._epw_tracking import untangle
 
         self.ph = untangle(self.ph, crossings)
         self.g_complex = untangle(self.g_complex, crossings)

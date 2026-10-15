@@ -11,10 +11,10 @@ from pathlib import Path
 import numpy as np
 
 from ..geometry.lattice import validated_lattice
+from ..physics.constants import WANNIER_BOHR_ANGSTROM as BOHR_ANGSTROM
 from .wannier_ws import ComputedWignerSeitzShifts, PackedWignerSeitzShifts
 from .wannier_ws import recompute_wsvec as recompute_wsvec
 
-BOHR_ANGSTROM = 0.529177210903
 _FLOAT_TOKEN = r"[+\-]?(?:(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+\-]?[0-9]+)?|inf(?:inity)?|nan)"
 
 

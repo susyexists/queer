@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from itertools import islice
 from pathlib import Path
 from typing import Any
@@ -16,19 +15,8 @@ from ..execution import ExecutionOptions, execution_session
 from ..geometry.lattice import reciprocal_lattice, validated_lattice, validated_points
 from ..geometry.paths import KPath, interpolate_path, parse_point_names
 from ..io.openmx import OpenMXData, read_scfout
-from .wannier import NumericalError
-
-
-@dataclass(frozen=True)
-class EigenstateBatch:
-    energies: np.ndarray
-    coefficients: np.ndarray
-    overlaps: np.ndarray
-    band_channels: np.ndarray
-
-    @property
-    def absolute_energies(self):
-        return self.energies
+from ..physics.validation import NumericalError as NumericalError
+from .contracts import FrozenEigenstateBatch as EigenstateBatch
 
 
 def _blocks(translations, matrices, name):
