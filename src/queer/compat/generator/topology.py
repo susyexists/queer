@@ -19,7 +19,7 @@ model of :class:`~queer.compat.generator.wannier_steps.WannierStepContext`:
   unambiguous. Its links are exact diagonal-embedding overlaps that close on
   the first point's states at k + G, which equals the driver's closing phase;
 - a 3D model with Z2 reports the strong and weak indices; a 2D model reports
-  ``nu``, the plane's Z2 as computed even when its flow is ambiguous.
+  ``nu``, the first plane's Z2 as computed even when its flow is ambiguous.
 
 Each plane writes ``Out/wcc_k{c}_{v}.json`` (``t``, ``berry_phase``, ``wcc``,
 ``gap_midpoints``) and its WCC-flow figure. A Wilson loop QUEER refuses (a

@@ -49,7 +49,7 @@ def tick_marks(path: Mapping[str, Any], distance: Sequence[float]) -> tuple[list
 
     A tick index past the end sits on the last point; G, Gamma and \\Gamma read
     as the Greek letter; ticks at the same position merge as ``A|B`` (a path
-    jump) and identical neighbours collapse to one.
+    jump), except a label equal to the merged label before it.
     """
     positions: list[float] = []
     labels: list[str] = []

@@ -149,7 +149,9 @@ def run_bands(context: WannierStepContext) -> None:
     record = context.record
     model = context.model.light_worker_view()
     species = np.asarray(context.species_index, dtype=int)
-    n_species = int(species.max()) + 1 if len(species) else 1
+    # Every species of the structure gets a PDOS row, an empty one when no
+    # Wannier centre lies nearest to its atoms.
+    n_species = max(len(context.species_names), int(species.max()) + 1 if len(species) else 1)
 
     path = context.band_path()
     kpoints = np.asarray(path["kpoints"], dtype=float)

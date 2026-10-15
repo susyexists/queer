@@ -16,6 +16,7 @@ from wannier90_files import Wannier90Job, exact, line_path, write_band_files
 
 from queer.compat.generator.bands import FERMI_SURFACE_UNITS, dos_divisions
 from queer.compat.generator.estimators import dos_at_fermi
+from queer.compat.generator.plots import tick_marks
 from queer.compat.generator.results import EXIT_OK, RESULTS_FILENAME
 from queer.compat.generator.runner import run
 
@@ -340,3 +341,32 @@ def test_without_matplotlib_the_plots_are_skipped_and_the_contours_empty(tmp_pat
     surface = json.loads((tmp_path / "Out" / "fermi_surface.json").read_text())
     assert surface["contours_cart"] == {} and surface["bands"] == [0]
     assert document["fermi_surface"]["bands_crossing"] == [0]
+
+
+def test_a_species_without_orbitals_gets_an_empty_pdos(generator_core, tmp_path):
+    _, _, structure = layer_job(tmp_path, generator_core)
+    # A hydrogen atom in the middle of the vacuum is nearest to no Wannier centre.
+    structure = {"species": [*structure["species"], "H"], "cart": [*structure["cart"], [0.0, 0.0, 5.0]]}
+    code, document = run_step(
+        tmp_path, step_type="QUEER_BANDS", fermi_energy=0.0, dos_mesh=12, structure=structure
+    )
+    assert code == EXIT_OK, document.get("error")
+    assert document["model"]["species"] == ["B", "N", "H"]
+    assert document["dos"]["species"] == ["B", "N", "H"]
+    data = json.loads((tmp_path / "Out" / "dos.json").read_text())
+    assert list(data["pdos_per_eV"]) == ["B", "N", "H"] and not np.any(data["pdos_per_eV"]["H"])
+    assert_allclose(
+        np.add(data["pdos_per_eV"]["B"], data["pdos_per_eV"]["N"]), data["dos_per_eV"], rtol=0, atol=1e-9
+    )
+
+
+def test_tick_marks_are_the_drivers(generator_core):
+    path = {
+        "tick_indices": [0, 3, 3, 4, 4, 6, 12],
+        "tick_labels": ["G", "X", "Y", "\\Gamma", "GAMMA", "M", "K"],
+    }
+    distance = np.array([0.0, 1.0, 2.0, 3.0, 3.0, 4.0, 5.0, 6.0])
+    expected = generator_core.Context._ticks(None, path, distance)
+    assert tick_marks(path, distance) == expected
+    # A label is compared with the merged label before it: Gamma after "X|Y|Γ" is appended again.
+    assert expected == ([0.0, 3.0, 5.0, 6.0], ["Γ", "X|Y|Γ|Γ", "M", "K"])
