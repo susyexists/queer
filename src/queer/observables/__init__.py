@@ -17,6 +17,7 @@ for _module, _names in {
         "reduce_basis",
     ),
     "surface": ("surface_state",),
+    "topology": ("wilson_plane",),
     "unfolding": ("bandunfolding", "bandunfolding_spin_texture"),
     "geometry": (
         "berry_curvature",

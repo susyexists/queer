@@ -260,6 +260,31 @@ pairs absent from the file keep their hop at `R`, entries outside the table are
 ignored, and images already applied to the HR weights are refused. The strict
 `ws_distance` mode of `normalized_operators` requires a complete mapping instead.
 
+### Numerical ports of the PythTB engine
+
+The Generator's PythTB engine computes most of its results with its own NumPy
+code around a few PythTB calls. QUEER carries those algorithms. Each port is
+tested against the original function, vendored verbatim in `tests/oracles`, on
+randomized and structured inputs, and independently against analytic models.
+
+`queer.observables.topology.wilson_plane` evaluates the Wilson loops of the plane
+k_c = value: loops along k_a = i/n (endpoint excluded) at transverse points
+k_b = j/n_t, with (a, b, c) cyclic so the plane's Chern number is the component
+C_c. Its links are those of `queer.observables.geometry.wilson_loop`: occupied
+overlaps through the exact diagonal basis overlap of the Wannier centres, closed
+on the first point's eigenvectors at k + G without any extra phase. These equal
+the Generator's links on PythTB's cell-periodic eigenvectors, whose closing link
+carries exp(-2πiτ_a). Applying that phase to QUEER's periodic-gauge eigenvectors
+instead would be wrong: for a two-orbital chain with τ = (0, ½) the closing link
+becomes singular. `queer.physics.topology` holds the phase-winding Chern number
+C = -(1/2π) Σ wrap(Δφ), the Soluyanov-Vanderbilt largest-gap Z2 over t in [0, ½]
+with its ambiguity flag, the Kramers pairing check at the TRIMs and the strong and
+weak indices of a 3D model. A plane is resolved when every Berry-phase step is
+below π/2 and C lies within 0.05 of an integer, and Z2 is unambiguous; otherwise
+n_t doubles, at most `max_refinements` times, reusing the loops already computed.
+`topology_planes` and `trim_points` give the Generator's plane list (the layer
+plane in 2D; k_c = 0, ½ for c = 3, 1, 2 in 3D) and its TRIMs.
+
 ### Replaying saved Generator PythTB calculations
 
 `scripts/validation/generator_replay.py` compares an already downloaded successful

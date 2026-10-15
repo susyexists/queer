@@ -336,3 +336,39 @@ canonical = "queer.atomistic.phonons:phonon_dispersion"
 specialized_backends = []
 source_references = ["docs/native_atomistics.md"]
 independent_tests = ["tests/numerical/test_native_atomistic.py::test_central_force_constants_recover_analytic_chain_and_acoustic_modes", "tests/numerical/test_native_atomistic.py::test_imaginary_modes_keep_negative_signed_frequencies_and_segment_distance"]
+
+[[equations]]
+id = "topology.wilson_loop_chern"
+expression = "phi(t) = -Im ln det prod_i U(k_i, k_(i+1)); C = -(1/(2*pi))*sum_j wrap(phi(t_(j+1)) - phi(t_j)), the last step closing on t_0"
+input_units = "phi: radian; k and t: fractional reciprocal coordinates"
+output_units = "C: dimensionless; largest step: radian"
+assumptions = ["The occupied manifold is gapped on every loop", "The winding is resolved only while every transverse step stays below pi"]
+conventions = ["The plane k_c = const loops along a = (c+1) mod 3 at transverse b = (c+2) mod 3, so C is the Chern-vector component C_c", "U are SVD-unitarized occupied overlaps through the exact diagonal basis overlap, closed at the lifted first point without an extra phase", "WCC = sorted -arg(eig W)/(2*pi) mod 1; resolved when every step < pi/2 and |C - round C| < 0.05, otherwise n_t doubles"]
+canonical = "queer.physics.topology:chern_from_phases"
+specialized_backends = []
+source_references = ["docs/generator_services.md#numerical-ports-of-the-pythtb-engine", "https://doi.org/10.1103/PhysRevB.84.075119"]
+independent_tests = ["tests/numerical/test_topology.py::test_qwz_phase_diagram_from_wilson_loop_winding", "tests/numerical/test_topology.py::test_tau_half_chain_has_unitary_links_where_the_misapplied_closing_phase_is_singular", "tests/numerical/test_topology.py::test_rice_mele_wcc_equals_an_independent_cell_periodic_loop"]
+
+[[equations]]
+id = "topology.z2_largest_gap"
+expression = "z_j = midpoint of the largest gap between the WCCs at t_j; Z2 = (sum_j #{x in WCC(t_(j+1)): min(z_j, z_(j+1)) <= x < max(z_j, z_(j+1))}) mod 2 over t in [0, 1/2]"
+input_units = "WCCs and midpoints: fractions of the loop lattice vector"
+output_units = "dimensionless"
+assumptions = ["Time-reversal-invariant plane k_c = 0 or 1/2 with Kramers-degenerate TRIMs", "The flow is sampled finely enough that the largest-gap midpoint moves continuously"]
+conventions = ["A step is ambiguous when a centre lies within pos_tol (circular distance) of either midpoint; an ambiguous plane refines like an unresolved winding", "The Kramers check pairs sorted levels (0,1), (2,3), ... and requires every split below its tolerance"]
+canonical = "queer.physics.topology:z2_from_wcc"
+specialized_backends = []
+source_references = ["docs/generator_services.md#numerical-ports-of-the-pythtb-engine", "https://doi.org/10.1103/PhysRevB.83.235401"]
+independent_tests = ["tests/numerical/test_topology.py::test_kane_mele_z2_from_the_largest_gap_flow", "tests/numerical/test_topology.py::test_largest_gap_rule_counts_jumps_and_flags_centres_at_a_midpoint"]
+
+[[equations]]
+id = "topology.z2_indices"
+expression = "nu_c = Z2(k_c = 1/2); nu_0 = (Z2(k_c = 0) + Z2(k_c = 1/2)) mod 2, equal for every axis c with both planes known"
+input_units = "per-plane Z2 indices"
+output_units = "dimensionless"
+assumptions = ["Three periodic axes and time-reversal symmetry"]
+conventions = ["Unknown planes give None; axes that disagree give nu_0 = None and consistent = false", "nu1, nu2 and nu3 follow the reciprocal axes b1, b2 and b3"]
+canonical = "queer.physics.topology:z2_indices"
+specialized_backends = []
+source_references = ["docs/generator_services.md#numerical-ports-of-the-pythtb-engine", "https://doi.org/10.1103/PhysRevLett.98.106803"]
+independent_tests = ["tests/numerical/test_topology.py::test_stacked_kane_mele_is_a_weak_topological_insulator", "tests/numerical/test_topology.py::test_z2_indices_report_unknown_and_inconsistent_planes"]
