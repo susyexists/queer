@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+_WANNIER_FILES = ("tb", "centres", "wout", "poscar", "wsvec", "win")
+
 
 def model_input_files(inputs, parameters):
     directory = Path(inputs["material_dir"])
@@ -18,7 +20,8 @@ def model_input_files(inputs, parameters):
             directory,
             hr=inputs.get("hr", "wannier90_hr.dat"),
             interpolation=parameters.get("interpolation", "standard"),
-            **{key: inputs[key] for key in ("tb", "centres", "wout", "poscar", "wsvec") if key in inputs},
+            position=parameters.get("position", "auto"),
+            **{key: inputs[key] for key in _WANNIER_FILES if key in inputs},
         ).values()
     )
 
@@ -45,5 +48,6 @@ def load_electronic_model(config, *, default_fermi=False):
         hr=inputs.get("hr", "wannier90_hr.dat"),
         ef=parameters.get("ef", 0.0) if default_fermi else parameters["ef"],
         interpolation=parameters.get("interpolation", "standard"),
-        **{key: inputs[key] for key in ("tb", "centres", "wout", "poscar", "wsvec") if key in inputs},
+        position=parameters.get("position", "auto"),
+        **{key: inputs[key] for key in _WANNIER_FILES if key in inputs},
     )

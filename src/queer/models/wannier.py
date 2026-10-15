@@ -21,6 +21,7 @@ from ..io.wannier import (
     read_centres_xyz,
     read_hr,
     read_tb,
+    read_win,
     read_wout_lattice,
     read_wsvec,
     resolve_wannier_files,
@@ -519,6 +520,7 @@ class WannierModel:
         centres=None,
         wout=None,
         position="auto",
+        win=None,
     ):
         """Load HR and optional native position/centre/lattice sidecars.
 
@@ -528,7 +530,9 @@ class WannierModel:
         ``position="auto"`` uses position matrices when a TB file supplies them,
         ``"full"`` requires them, and ``"diagonal"`` keeps the centres only: no
         companion ``_tb.dat`` is discovered, and a TB file that is the Hamiltonian
-        source is read for its Hamiltonian alone.
+        source is read for its Hamiltonian alone. A named ``win`` file supplies
+        the ``unit_cell_cart`` lattice, checked against a TB lattice; an explicit
+        WOUT or POSCAR lattice must then agree with it.
         """
         if position not in _POSITION_MODES:
             raise ValueError("position must be auto, full or diagonal")
@@ -543,6 +547,7 @@ class WannierModel:
             wsvec=wsvec,
             interpolation=interpolation,
             position=position,
+            win=win,
         )
         if hr is None:
             if tb is None:
@@ -606,6 +611,15 @@ class WannierModel:
         translations, hopping, position_matrices = normalized_operators(raw, interpolation, mapping)
         poscar_path = None if poscar is None else root / poscar
         lattice = raw.lattice
+        if win is not None:
+            win_path = root / win
+            win_lattice = read_win(win_path).lattice
+            if win_lattice is None:
+                raise ValueError(f"{win_path}: no complete unit_cell_cart block")
+            if lattice is not None and not np.allclose(lattice, win_lattice, atol=1e-6, rtol=1e-8):
+                raise ValueError("TB and WIN lattice vectors do not match")
+            lattice = validated_lattice(win_lattice).copy()
+            source_files["win"] = str(win_path)
         wout_path = root / wout if wout is not None else root / f"{seed}.wout"
         if wout is not None or (lattice is None and poscar_path is None and wout_path.exists()):
             wout_lattice = read_wout_lattice(wout_path)

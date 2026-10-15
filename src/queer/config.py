@@ -16,10 +16,11 @@ from .workflows.finite_field_specs import FINITE_FIELD_INPUTS, FINITE_FIELD_NAME
 from .workflows.service_specs import SERVICE_INPUTS, SERVICE_NAMES, validate_service
 
 _PARAMETERS = {
-    "bands": {"ef", "interpolation", "kpath", "n_points", "kpoints", "bands"},
+    "bands": {"ef", "interpolation", "position", "kpath", "n_points", "kpoints", "bands"},
     "susceptibility": {
         "ef",
         "interpolation",
+        "position",
         "q_path",
         "k_mesh",
         "band_indices",
@@ -29,6 +30,7 @@ _PARAMETERS = {
     "spectral": {
         "ef",
         "interpolation",
+        "position",
         "kpoints",
         "omega",
         "eta",
@@ -39,6 +41,7 @@ _PARAMETERS = {
     "momentum": {
         "ef",
         "interpolation",
+        "position",
         "photon_energy",
         "fermi_energy",
         "binding_min",
@@ -71,6 +74,10 @@ _REQUIRED = {
     },
     "epw": {"q_indices", "temperature", "broadening"},
 }
+# Sidecar files and modes a Wannier model directory may name explicitly.
+WANNIER_INPUTS = frozenset({"win", "tb", "centres", "wout"})
+INTERPOLATION_MODES = ("standard", "ws_distance", "ndegen_applied", "auto")
+POSITION_MODES = ("auto", "full", "diagonal")
 
 
 def _finite(value: Any, key: str, *, positive: bool = False, nonnegative: bool = False) -> None:
@@ -179,6 +186,7 @@ def config_from_mapping(
         }
         | (SERVICE_INPUTS if name in SERVICE_NAMES else {"export_metadata"})
         | (FINITE_FIELD_INPUTS if name in FINITE_FIELD_NAMES else set())
+        | (WANNIER_INPUTS if name in OBSERVABLE_WORKFLOWS or name in _PARAMETERS.keys() - {"epw"} else set())
     )
     if unknown_inputs or set(output) - {"results_dir"}:
         raise ValueError(
@@ -225,9 +233,12 @@ def config_from_mapping(
         raise ValueError("inputs.model must be wannier or openmx")
     if name == "epw" and model_kind == "openmx":
         raise ValueError("EPW workflows require EPW inputs, not OpenMX")
-    for key in ("hr", "poscar", "wsvec", "scfout", "openmx_input", "pao_dir"):
+    for key in ("hr", "poscar", "wsvec", "scfout", "openmx_input", "pao_dir", *sorted(WANNIER_INPUTS)):
         if key in inputs and (not isinstance(inputs[key], str) or not inputs[key]):
             raise ValueError(f"inputs.{key} must be a nonempty filename")
+    if model_kind == "openmx" and WANNIER_INPUTS & set(inputs):
+        names = ", ".join(sorted(WANNIER_INPUTS & set(inputs)))
+        raise ValueError(f"OpenMX models do not read Wannier inputs: {names}")
     if "pao_files" in inputs and (
         not isinstance(inputs["pao_files"], dict)
         or not inputs["pao_files"]
@@ -290,14 +301,14 @@ def config_from_mapping(
                 or any(isinstance(i, bool) or not isinstance(i, int) or i < 0 for i in values)
             ):
                 raise ValueError(f"parameters.{key} must be a nonempty list of nonnegative integer indices")
-    if "interpolation" in params and params["interpolation"] not in {
-        "standard",
-        "ws_distance",
-        "ndegen_applied",
-    }:
-        raise ValueError("parameters.interpolation must be standard, ws_distance or ndegen_applied")
+    if "interpolation" in params and params["interpolation"] not in INTERPOLATION_MODES:
+        raise ValueError("parameters.interpolation must be standard, ws_distance, ndegen_applied or auto")
     if model_kind == "openmx" and "interpolation" in params:
         raise ValueError("OpenMX matrices do not use Wannier interpolation")
+    if "position" in params and params["position"] not in POSITION_MODES:
+        raise ValueError("parameters.position must be auto, full or diagonal")
+    if model_kind == "openmx" and "position" in params:
+        raise ValueError("OpenMX matrices do not use Wannier position modes")
     if name == "bands":
         if "spin" in params and (model_kind != "openmx" or params["spin"] not in {"up", "down"}):
             raise ValueError("parameters.spin must be up/down for a collinear OpenMX model")

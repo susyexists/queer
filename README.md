@@ -55,6 +55,10 @@ CLI path overrides resolve against the working directory. Explicit configuration
 roots override `QUEER_DATA_DIR` and `QUEER_RESULTS_DIR`; defaults are working-directory
 `data/` and `results/`. Runtime storage never depends on the installation location.
 Use `inputs.material` to select `data/materials/<name>` through `QUEER_DATA_DIR`.
+Wannier workflows also accept `inputs.win`, `inputs.tb`, `inputs.centres` and
+`inputs.wout`, `parameters.interpolation="auto"` (chosen from the wsvec header) and
+`parameters.position` (`auto`, `full` from a TB file, or the centres-only `diagonal`).
+Every consumed file is checksummed with the run.
 
 ## Library and compatibility
 

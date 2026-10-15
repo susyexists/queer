@@ -21,7 +21,8 @@ _TILE_SIZE = 128
 
 def _arguments(config, model):
     signature = inspect.signature(REGISTRY[config.workflow].calculator())
-    params = {key: value for key, value in config.parameters.items() if key not in {"ef", "integration"}}
+    loading = {"ef", "integration", "interpolation", "position"}
+    params = {key: value for key, value in config.parameters.items() if key not in loading}
     if "kpoints" in signature.parameters and "kpoints" not in params and params.get("engine") != "fhs":
         from ..observables._tb import kmesh
 

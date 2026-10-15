@@ -58,6 +58,7 @@ def resolve_wannier_files(
     wsvec=None,
     interpolation="standard",
     position="auto",
+    win=None,
 ) -> dict[str, Path]:
     """Inventory effective native inputs without parsing large operator files.
 
@@ -65,7 +66,8 @@ def resolve_wannier_files(
     every consumed file, including companions absent from a family manifest.
     Explicit missing paths are retained to produce actionable file errors.
     With ``position="diagonal"`` a TB file is consumed only as the Hamiltonian
-    source, so a companion ``_tb.dat`` is neither discovered nor accepted.
+    source, so a companion ``_tb.dat`` is neither discovered nor accepted. A
+    ``.win`` file is consumed only when named and then supplies the lattice.
     """
     if position not in {"auto", "full", "diagonal"}:
         raise ValueError("position must be auto, full or diagonal")
@@ -97,8 +99,10 @@ def resolve_wannier_files(
         files["hr"] = hr_path
     if poscar is not None:
         files["poscar"] = (root / poscar).resolve()
+    if win is not None:
+        files["win"] = (root / win).resolve()
     wout_path = (root / wout).resolve() if wout is not None else root / f"{seed}.wout"
-    if wout is not None or ("tb" not in files and poscar is None and wout_path.exists()):
+    if wout is not None or ("tb" not in files and win is None and poscar is None and wout_path.exists()):
         files["wout"] = wout_path.resolve()
     centres_path = (root / centres).resolve() if centres is not None else root / f"{seed}_centres.xyz"
     if centres is not None or centres_path.exists():

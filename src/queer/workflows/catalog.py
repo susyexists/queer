@@ -25,7 +25,9 @@ class WorkflowSpec:
 
     def parameter_names(self):
         names = set(inspect.signature(self.calculator()).parameters) - {"model", "execution", "checkpoint"}
-        return (names - {"radial_data", "pao_dir"}) | {"ef", "grid", "kpoints", "integration"}
+        # Model loading consumes ef, interpolation and position; the runner consumes the rest.
+        model = {"ef", "interpolation", "position"}
+        return (names - {"radial_data", "pao_dir"}) | model | {"grid", "kpoints", "integration"}
 
 
 REGISTRY: dict[str, WorkflowSpec] = {}
