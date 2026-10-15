@@ -38,6 +38,18 @@ source_references = ["docs/generator_services.md#wannier90-inputs-of-the-pythtb-
 independent_tests = ["tests/numerical/test_wannier_ws_images.py::test_ws_images_match_independent_search_for_oblique_cell_with_off_centre_orbitals", "tests/numerical/test_wannier_ws_recompute.py::test_generic_k_hamiltonian_against_independent_exhaustive_image_sum"]
 
 [[equations]]
+id = "electronic.table_hermitization"
+expression = "H_avg(R) = (H(R) + H(-R)^dagger)/2; |E_n[H_avg](k) - E_n[H_pair](k)| <= sum_(R = 0 or R > 0) ||H(-R)^dagger - H(R)||_F"
+input_units = "H: eV; R: integer lattice translations"
+output_units = "eV"
+assumptions = ["Weyl's inequality for Hermitian matrices bounds every eigenvalue shift", "H_pair keeps the lexicographically positive half and the upper R = 0 triangle with their conjugates and a real diagonal"]
+conventions = ["H(R)_ij = <i,0|H|j,R>; a block without its partner adds its adjoint and counts its norm, twice in the negative half; cutoffs act after averaging"]
+canonical = "queer.physics.operators:hermitize_table"
+specialized_backends = ["queer.physics.operators:table_hermiticity", "queer.models.wannier:WannierModel.from_table"]
+source_references = ["docs/scientific_conventions.md#scientific-contracts"]
+independent_tests = ["tests/numerical/test_wannier_table.py::test_weyl_bound_covers_averaged_against_one_of_each_pair_eigenvalues", "tests/numerical/test_wannier_table.py::test_averaging_hermitizes_a_non_hermitian_table"]
+
+[[equations]]
 id = "electronic.vacuum_fold"
 expression = "H_fold(R_p) = sum_(R_v) H(R_p, R_v); H_fold(k_p) = H(k_p, k_v = 0)"
 input_units = "H: eV; R: integer lattice translations"

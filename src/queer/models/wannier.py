@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from copy import copy
 from itertools import islice
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -25,12 +26,70 @@ from ..io.wannier import (
     resolve_wannier_files,
 )
 from ..physics.operators import assemble as _assemble
+from ..physics.operators import hermitize_table, positive_translation, table_hermiticity
 from ..physics.operators import validate_assembly as _validate_assembly
 from ..physics.validation import NumericalError as NumericalError
 from .contracts import EigenstateBatch
 
 _LINE_MIN_GAIN = 2
 _LINE_CACHE_BYTES = 128 * 1024**2
+_POSITION_MODES = ("auto", "full", "diagonal")
+
+
+def _optional_nonnegative(value, name, *, positive=False):
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float, np.integer, np.floating)):
+        raise ValueError(f"{name} must be a finite number")
+    number = float(value)
+    if not np.isfinite(number) or number < 0 or (positive and number == 0):
+        raise ValueError(f"{name} must be finite and {'positive' if positive else 'nonnegative'}")
+    return number
+
+
+def _hopping_cutoffs(translations, hopping, lattice, centres, min_hopping_norm, max_distance):
+    """Hop mask with PythTB's W90 cutoff rules and the independent-hop counts.
+
+    Each hop of the positive half and of the upper ``R = 0`` triangle is kept
+    when its centre distance ``|R.A + tau_j - tau_i|`` is at most ``max_distance``
+    and ``|t| >= min_hopping_norm``; its conjugate partner follows. On-site
+    energies are never cut. A block without its partner is judged on its own.
+    The mask is ``None`` when neither cutoff is set.
+    """
+    nbnd = hopping.shape[1]
+    lookup = {tuple(int(value) for value in row): index for index, row in enumerate(translations)}
+    counts = {"hops": 0, "dropped_by_distance": 0, "dropped_by_norm": 0}
+    keep = None
+    if min_hopping_norm is not None or max_distance is not None:
+        keep = np.ones(hopping.shape, dtype=bool)
+    upper = np.triu(np.ones((nbnd, nbnd), dtype=bool), k=1)
+    every = np.ones((nbnd, nbnd), dtype=bool)
+    for key, index in lookup.items():
+        partner = lookup.get(tuple(-value for value in key))
+        zero = not any(key)
+        if partner is not None and not zero and not positive_translation(key):
+            continue
+        counts["hops"] += nbnd * (nbnd - 1) // 2 if zero else nbnd**2
+        if keep is None:
+            continue
+        independent = upper if zero else every
+        far = np.zeros((nbnd, nbnd), dtype=bool)
+        if max_distance is not None:
+            vectors = centres[None, :, :] - centres[:, None, :] + np.asarray(key) @ lattice
+            far = independent & (np.sqrt(np.einsum("ija,ija->ij", vectors, vectors)) > max_distance)
+        weak = np.zeros((nbnd, nbnd), dtype=bool)
+        if min_hopping_norm is not None:
+            weak = independent & ~far & (np.abs(hopping[index]) < min_hopping_norm)
+        counts["dropped_by_distance"] += int(far.sum())
+        counts["dropped_by_norm"] += int(weak.sum())
+        block = ~(far | weak)
+        if zero:
+            block &= block.T
+        keep[index] = block
+        if partner is not None and partner != index:
+            keep[partner] = block.T
+    counts["kept_hops"] = counts["hops"] - counts["dropped_by_distance"] - counts["dropped_by_norm"]
+    return keep, counts
 
 
 def _solve_batch(translations, hopping, points):
@@ -136,7 +195,7 @@ class WannierModel:
             "basis_overlap",
             "analytic_hamiltonian",
         }
-        self.metadata = {
+        self.metadata: dict[str, Any] = {
             "embedding": "full_position"
             if position is not None
             else ("centres" if centres is not None else "fixed_origin"),
@@ -322,6 +381,131 @@ class WannierModel:
         self._fermi_energy = float(value)
 
     @classmethod
+    def from_table(
+        cls,
+        translations,
+        hopping,
+        *,
+        lattice,
+        centres=None,
+        position=None,
+        fermi_energy=0.0,
+        hermitize="none",
+        imag_onsite_tol=1e-6,
+        min_hopping_norm=None,
+        max_distance=None,
+        execution: ExecutionOptions | None = None,
+    ):
+        """Build a model from a normalized ``(R, H(R))`` table with an explicit Hermitian policy.
+
+        ``hopping`` is (NR,NB,NB) eV with degeneracy and image weights applied,
+        ``lattice`` holds Cartesian rows in Å, and ``centres`` are the Cartesian
+        Wannier centres in Å as written, neither wrapped nor unwrapped. Without
+        ``position`` the basis links are the exact diagonal embedding.
+
+        ``hermitize="average"`` replaces each pair by ``(H(R) + H(-R)^dagger)/2``
+        and its adjoint (``position`` likewise) and inserts the full adjoint of a
+        block whose partner is missing; ``"none"`` keeps the table, which must then
+        be Hermitian. Before any change, an on-site imaginary part above
+        ``imag_onsite_tol`` eV is refused, and ``metadata`` records
+        ``hermiticity_error`` (largest ``|H(-R) - H(R)^dagger|`` element, a missing
+        partner counting fully) and ``hermiticity_weyl_bound`` (see
+        :func:`queer.physics.operators.table_hermiticity`).
+
+        ``min_hopping_norm`` (eV) and ``max_distance`` (Å) remove hops from the
+        model with PythTB's W90 rules: on-site energies are kept, each hop of the
+        positive half and of the upper ``R = 0`` triangle is judged by
+        ``|t| >= min_hopping_norm`` and ``|R.A + tau_j - tau_i| <= max_distance``,
+        and its conjugate follows. ``metadata["cutoffs"]`` counts the independent
+        hops, those dropped by distance and then by norm, and those kept. The
+        diagnostics describe the table before cutoffs. Cutoffs require
+        ``position=None``, and ``max_distance`` requires ``centres``.
+        """
+        if hermitize not in {"none", "average"}:
+            raise ValueError("hermitize must be none or average")
+        tolerance = _optional_nonnegative(imag_onsite_tol, "imag_onsite_tol")
+        norm_cutoff = _optional_nonnegative(min_hopping_norm, "min_hopping_norm")
+        distance_cutoff = _optional_nonnegative(max_distance, "max_distance", positive=True)
+        vectors = np.asarray(translations)
+        matrices = np.asarray(hopping)
+        if (
+            vectors.ndim != 2
+            or vectors.shape[1] != 3
+            or not len(vectors)
+            or (vectors.dtype.kind not in "iu" and not np.isfinite(vectors).all())
+            or not np.equal(vectors, np.round(vectors)).all()
+        ):
+            raise ValueError("translations must be a nonempty (NR,3) integer array")
+        vectors = vectors.astype(np.int64)
+        if (
+            matrices.ndim != 3
+            or matrices.shape[0] != len(vectors)
+            or matrices.shape[1] != matrices.shape[2]
+            or matrices.shape[1] < 1
+        ):
+            raise ValueError("hopping must have shape (NR,NB,NB)")
+        matrices = matrices.astype(np.complex128)
+        if not np.isfinite(matrices).all():
+            raise ValueError("hopping must be finite")
+        if position is not None and (norm_cutoff is not None or distance_cutoff is not None):
+            raise ValueError("hopping cutoffs apply to models without position matrices")
+        cell = validated_lattice(lattice).copy()
+        centre_values = None if centres is None else np.asarray(centres, float)
+        if centre_values is not None and (
+            centre_values.shape != (matrices.shape[1], 3) or not np.isfinite(centre_values).all()
+        ):
+            raise ValueError("centres must be a finite (NB,3) Cartesian Angstrom array")
+        if distance_cutoff is not None and centre_values is None:
+            raise ValueError("max_distance requires the Wannier centres")
+        error, bound = table_hermiticity(vectors, matrices)
+        home = np.flatnonzero(~vectors.any(axis=1))
+        onsite_imaginary = float(np.abs(np.diagonal(matrices[home[0]]).imag).max()) if len(home) else 0.0
+        if tolerance is not None and onsite_imaginary > tolerance:
+            raise ValueError(
+                f"on-site energies have imaginary parts up to {onsite_imaginary:.3g} eV, "
+                f"above imag_onsite_tol={tolerance:g} eV"
+            )
+        operators = None if position is None else np.asarray(position, complex)
+        if operators is not None and operators.shape != matrices.shape + (3,):
+            raise ValueError("position must be a finite (NR,NB,NB,3) Angstrom array")
+        added: list[tuple[int, ...]] = []
+        if hermitize == "average":
+            joined = matrices if operators is None else np.concatenate((matrices[..., None], operators), -1)
+            vectors, joined, added = hermitize_table(vectors, joined)
+            if operators is None:
+                matrices = joined
+            else:
+                matrices, operators = joined[..., 0], joined[..., 1:]
+        keep, counts = _hopping_cutoffs(vectors, matrices, cell, centre_values, norm_cutoff, distance_cutoff)
+        if keep is not None:
+            retained = keep.any(axis=(1, 2)) | ~vectors.any(axis=1)
+            vectors, matrices = vectors[retained], np.where(keep, matrices, 0)[retained]
+        model = cls(
+            vectors,
+            matrices,
+            lattice=cell,
+            centres=centre_values,
+            position=operators,
+            fermi_energy=fermi_energy,
+            execution=execution,
+        )
+        model.metadata.update(
+            {
+                "hermitization": hermitize,
+                "hermiticity_error": error,
+                "hermiticity_weyl_bound": bound,
+                "hermitization_added_partners": [list(key) for key in added],
+                "onsite_imaginary_max": onsite_imaginary,
+                "cutoffs": {
+                    "min_hopping_norm": norm_cutoff,
+                    "max_distance": distance_cutoff,
+                    **counts,
+                },
+            }
+        )
+        return model
+
+    @classmethod
     def from_directory(
         cls,
         directory,
@@ -334,13 +518,20 @@ class WannierModel:
         tb=None,
         centres=None,
         wout=None,
+        position="auto",
     ):
         """Load HR and optional native position/centre/lattice sidecars.
 
         A companion ``_tb.dat`` supplies full position operators while HR remains
         authoritative for its Hamiltonian. TB-only directories are also supported.
         Sidecars are discovered by seed; explicit missing filenames are errors.
+        ``position="auto"`` uses position matrices when a TB file supplies them,
+        ``"full"`` requires them, and ``"diagonal"`` keeps the centres only: no
+        companion ``_tb.dat`` is discovered, and a TB file that is the Hamiltonian
+        source is read for its Hamiltonian alone.
         """
+        if position not in _POSITION_MODES:
+            raise ValueError("position must be auto, full or diagonal")
         root = Path(directory).expanduser().resolve()
         source_inventory = resolve_wannier_files(
             root,
@@ -351,6 +542,7 @@ class WannierModel:
             poscar=poscar,
             wsvec=wsvec,
             interpolation=interpolation,
+            position=position,
         )
         if hr is None:
             if tb is None:
@@ -363,7 +555,11 @@ class WannierModel:
             seed = tb_path.name.removesuffix("_tb.dat")
         if hr_path.name.endswith("_tb.dat"):
             tb_path = hr_path
-        tb_data = read_tb(tb_path) if tb is not None or tb_path.exists() else None
+        if position == "diagonal":
+            read_companion = hr_path.name.endswith("_tb.dat") or (tb is not None and not hr_path.exists())
+        else:
+            read_companion = tb is not None or tb_path.exists()
+        tb_data = read_tb(tb_path) if read_companion else None
         source_files = {}
         if hr_path.exists() and not hr_path.name.endswith("_tb.dat"):
             raw = read_hr(hr_path)
@@ -386,9 +582,11 @@ class WannierModel:
                 raw.translations,
                 raw.hopping,
                 raw.degeneracies,
-                None if tb_data.position is None else tb_data.position[order],
+                None if tb_data.position is None or position == "diagonal" else tb_data.position[order],
                 tb_data.lattice,
             )
+        if position == "full" and raw.position is None:
+            raise ValueError("position='full' requires a _tb.dat with position matrices")
         ws_path = root / wsvec if wsvec is not None else root / f"{seed}_wsvec.dat"
         mapping = None
         if interpolation in {"ws_distance", "auto"}:
@@ -405,7 +603,7 @@ class WannierModel:
                 if mapping.ndegen_applied
                 else ("ws_distance" if mapping.use_ws_distance else "standard")
             )
-        translations, hopping, position = normalized_operators(raw, interpolation, mapping)
+        translations, hopping, position_matrices = normalized_operators(raw, interpolation, mapping)
         poscar_path = None if poscar is None else root / poscar
         lattice = raw.lattice
         wout_path = root / wout if wout is not None else root / f"{seed}.wout"
@@ -427,12 +625,17 @@ class WannierModel:
         if centres is not None or centres_path.exists():
             centre_values, atoms = read_centres_xyz(centres_path)
             source_files["centres"] = str(centres_path)
-        elif position is not None:
+        elif position_matrices is not None:
             zero = np.flatnonzero(np.all(translations == 0, axis=1))
             if len(zero):
-                centre_values = np.diagonal(position[zero].sum(axis=0), axis1=0, axis2=1).real.T
+                centre_values = np.diagonal(position_matrices[zero].sum(axis=0), axis1=0, axis2=1).real.T
         instance = cls(
-            translations, hopping, lattice=lattice, centres=centre_values, position=position, fermi_energy=ef
+            translations,
+            hopping,
+            lattice=lattice,
+            centres=centre_values,
+            position=position_matrices,
+            fermi_energy=ef,
         )
         instance.path = root
         instance.hr = Path(hr)

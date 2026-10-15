@@ -20,6 +20,17 @@ Only within-tolerance noise may be symmetrized; otherwise evaluation fails with
 k-point context. Synthetic references use `atol=rtol=1e-12`; serial/parallel energies
 use `1e-10`. Degenerate eigenvectors should be compared through subspace projectors.
 
+`WannierModel.from_table(..., hermitize="average")` is the explicit real-space
+alternative: before evaluation it replaces each translation pair by
+`(H(R)+H(-R)†)/2` and its adjoint and inserts the adjoint of an unpaired block.
+The model records the largest element of `|H(-R)-H(R)†|` (`hermiticity_error`)
+and `sum ||H(-R)†-H(R)||_F` over `R = 0` and the positive half
+(`hermiticity_weyl_bound`), which bounds every eigenvalue difference to the
+one-of-each-pair table that PythTB builds. On-site imaginary parts above
+`imag_onsite_tol` (1e-6 eV) are refused, and the optional hopping cutoffs follow
+PythTB's W90 rules. `from_directory(position=...)` selects TB position matrices
+(`auto`, `full`) or the centres-only diagonal embedding (`diagonal`).
+
 The model Fermi energy defines the zero of returned bands. Photoemission's kinetic
 offset and workflow energy shifts are separate explicit parameters. Thermal energy
 is `k_B*T` in eV; zero temperature uses the occupation limit. Broadening and Gaussian

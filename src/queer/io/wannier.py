@@ -57,13 +57,18 @@ def resolve_wannier_files(
     poscar=None,
     wsvec=None,
     interpolation="standard",
+    position="auto",
 ) -> dict[str, Path]:
     """Inventory effective native inputs without parsing large operator files.
 
     This resolver mirrors loader sidecar discovery so durable cache keys include
     every consumed file, including companions absent from a family manifest.
     Explicit missing paths are retained to produce actionable file errors.
+    With ``position="diagonal"`` a TB file is consumed only as the Hamiltonian
+    source, so a companion ``_tb.dat`` is neither discovered nor accepted.
     """
+    if position not in {"auto", "full", "diagonal"}:
+        raise ValueError("position must be auto, full or diagonal")
     root = Path(directory).expanduser().resolve()
     if hr is None:
         if tb is None:
@@ -74,12 +79,19 @@ def resolve_wannier_files(
     tb_path = (root / tb).resolve() if tb is not None else root / f"{seed}_tb.dat"
     if tb is not None and not hr_path.exists():
         seed = tb_path.name.removesuffix("_tb.dat")
-    if hr_path.name.endswith("_tb.dat"):
+    hr_is_tb = hr_path.name.endswith("_tb.dat")
+    if hr_is_tb:
         tb_path = hr_path
+    if position == "diagonal":
+        if tb is not None and hr_path.exists() and not hr_is_tb:
+            raise ValueError("position='diagonal' reads no TB position data; omit tb when an HR file is used")
+        consume_tb = hr_is_tb or (tb is not None and not hr_path.exists())
+    else:
+        consume_tb = tb is not None or tb_path.exists()
     files = {}
-    if hr_path.exists() and not hr_path.name.endswith("_tb.dat"):
+    if hr_path.exists() and not hr_is_tb:
         files["hr"] = hr_path
-    if tb is not None or tb_path.exists():
+    if consume_tb:
         files["tb"] = tb_path.resolve()
     if not files:
         files["hr"] = hr_path
