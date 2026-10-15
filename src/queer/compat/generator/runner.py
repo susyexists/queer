@@ -27,7 +27,7 @@ from types import MappingProxyType
 from typing import Any
 
 from .bands import run_bands
-from .pythtb_params import STEP_BANDS, WannierStepParameters
+from .pythtb_params import STEP_BANDS, STEP_TOPOLOGY, WannierStepParameters
 from .results import (
     ERR_BAD_PARAMS,
     EXIT_FAILED,
@@ -39,9 +39,12 @@ from .results import (
     new_document,
     write_json_atomic,
 )
+from .topology import run_topology
 from .wannier_steps import WannierStepContext, model_stage
 
-STEP_RUNNERS: Mapping[str, Callable[[WannierStepContext], None]] = MappingProxyType({STEP_BANDS: run_bands})
+STEP_RUNNERS: Mapping[str, Callable[[WannierStepContext], None]] = MappingProxyType(
+    {STEP_BANDS: run_bands, STEP_TOPOLOGY: run_topology}
+)
 USAGE = (
     "usage: python -m queer generator {run --step STEP --params FILE [--workspace DIR] | "
     "capabilities | compare ...}"

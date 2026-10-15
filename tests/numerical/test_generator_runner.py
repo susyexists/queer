@@ -143,7 +143,7 @@ def test_an_interrupt_propagates_after_the_running_document_is_written(tmp_path,
 def test_capabilities_list_the_steps_of_this_build(capsys):
     assert main(["capabilities"]) == EXIT_OK
     payload = json.loads(capsys.readouterr().out)
-    assert payload == {"queer_version": queer.__version__, "steps": ["QUEER_BANDS"]}
+    assert payload == {"queer_version": queer.__version__, "steps": ["QUEER_BANDS", "QUEER_TOPOLOGY"]}
     assert payload["steps"] == sorted(STEP_RUNNERS)
 
 
@@ -195,4 +195,4 @@ def test_the_module_entry_runs_a_step_in_its_workspace(tmp_path):
 
     finished = entry(["capabilities"], tmp_path)
     assert finished.returncode == 0
-    assert json.loads(finished.stdout)["steps"] == ["QUEER_BANDS"]
+    assert json.loads(finished.stdout)["steps"] == ["QUEER_BANDS", "QUEER_TOPOLOGY"]
