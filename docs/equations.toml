@@ -408,3 +408,27 @@ canonical = "queer.physics.geometry:quantum_weight"
 specialized_backends = ["queer.physics.geometry:in_plane_trace"]
 source_references = ["docs/generator_services.md#numerical-ports-of-the-pythtb-engine", "https://doi.org/10.1103/PhysRevX.14.011052"]
 independent_tests = ["tests/numerical/test_berry_plane.py::test_qwz_metric_trace_curvature_and_quantum_weight_match_the_bloch_sphere_forms"]
+
+[[equations]]
+id = "surface.open_slab_hamiltonian"
+expression = "B_d(k_par) = sum_(R: R_f = d) H(R)*exp(2*pi*i*k_par.R_par); H_slab[w, w+d] = B_d for cells 0 <= w, w+d < N"
+input_units = "H: eV; R: integer lattice translations; k_par: fractional"
+output_units = "eV"
+assumptions = ["Whole unit cells along the finite axis with unchanged termination", "Hops along an axis that is neither finite nor periodic are dropped"]
+conventions = ["Cell-major basis with the model's orbital order in each cell", "Levels are relative to E_F, taken off the home-cell block; the window is (-w, w]"]
+canonical = "queer.physics.slab:slab_hamiltonian"
+specialized_backends = ["queer.physics.slab:layer_blocks"]
+source_references = ["docs/generator_services.md#numerical-ports-of-the-pythtb-engine"]
+independent_tests = ["tests/numerical/test_slab_edges.py::test_open_chain_levels_and_ribbon_levels_equal_independent_constructions", "tests/numerical/test_slab_edges.py::test_layer_blocks_keep_finite_axis_offsets_and_drop_vacuum_hops", "tests/numerical/test_slab_edges.py::test_haldane_ribbon_carries_one_chiral_mode_on_each_edge"]
+
+[[equations]]
+id = "surface.cluster_edge_weight"
+expression = "W_edge(cluster) = sum_(n in cluster) sum_(w in edge cells) sum_(i in cell w) |psi_n(w, i)|^2"
+input_units = "psi: normalized slab eigenvectors"
+output_units = "dimensionless probability"
+assumptions = ["A cluster is a run of energy-sorted levels closer than the degeneracy tolerance and lies wholly inside the window"]
+conventions = ["The edges are the first and last edge_cells cells, clipped to [1, N//2]", "Every level carries its cluster's total; the Generator's per-state weights stay in queer.compat.generator.estimators"]
+canonical = "queer.physics.slab:cluster_totals"
+specialized_backends = ["queer.physics.slab:edge_probabilities", "queer.physics.slab:degenerate_clusters"]
+source_references = ["docs/generator_services.md#numerical-ports-of-the-pythtb-engine"]
+independent_tests = ["tests/numerical/test_slab_edges.py::test_cluster_summed_weights_are_invariant_inside_degenerate_clusters", "tests/numerical/test_slab_edges.py::test_haldane_ribbon_carries_one_chiral_mode_on_each_edge"]

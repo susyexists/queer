@@ -303,6 +303,23 @@ quantum weight is Σ tr g·|b_a×b_b|/(n²·2π) (`quantum_weight`).
 `rotate_velocity` keeps the Generator's rotation of orbital-basis velocities into
 row eigenvectors.
 
+`queer.physics.slab` builds the PYTHTB_SLAB Hamiltonians. `layer_blocks` sums
+H(R) e^{2πik∥·R∥} into inter-cell blocks B_d by the offset d along the finite
+axis, dropping hops along an axis that is neither finite nor periodic, and
+`slab_hamiltonian` places them block-Toeplitz over whole cells,
+H[w, w + d] = B_d, with no change of termination.
+`queer.observables.surface.slab_eigensystem` solves one slab for its levels with
+E - E_F in (-w, w] (`scipy.linalg.eigh` with `subset_by_value` and the `evr`
+driver, E_F taken off the home-cell block). `slab_edge_spectrum` adds each
+degenerate cluster's total probability on the first and last edge cells. That
+cluster sum is the physical edge weight and does not depend on the basis inside
+the cluster. The Generator's per-state weights first rotate each cluster (levels
+closer than 1e-5 eV) to diagonalize the first-edge projector, and its crossing
+count follows states with weight ≥ 0.5 edge by edge to the nearest-energy state
+at the next k. Both are historical semantics in
+`queer.compat.generator.estimators`: inside a cluster whose edge projector is
+degenerate they still depend on the basis.
+
 ### Replaying saved Generator PythTB calculations
 
 `scripts/validation/generator_replay.py` compares an already downloaded successful

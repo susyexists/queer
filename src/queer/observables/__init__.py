@@ -16,7 +16,7 @@ for _module, _names in {
         "spin_texture",
         "reduce_basis",
     ),
-    "surface": ("surface_state",),
+    "surface": ("surface_state", "slab_edge_spectrum"),
     "topology": ("wilson_plane",),
     "unfolding": ("bandunfolding", "bandunfolding_spin_texture"),
     "geometry": (

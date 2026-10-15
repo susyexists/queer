@@ -8,8 +8,17 @@ from scipy.linalg import eigh, solve
 from ..execution import ExecutionOptions
 from ..geometry.lattice import validated_points
 from ..physics.broadening import lorentzian as lorentzian_shape
+from ..physics.slab import (
+    cluster_totals,
+    degenerate_clusters,
+    edge_cells_used,
+    edge_probabilities,
+    layer_blocks,
+    slab_hamiltonian,
+)
 from ..physics.validation import NumericalError
 from ._common import positive
+from ._sampling import map_points
 from ._tb import degeneracy_tolerance
 from .electronic import _mean_manifolds, _projection_manifolds
 from .result import ObservableResult
@@ -312,5 +321,156 @@ def surface_state(
             "slab_layers": int(slab_layers),
             "projection": "layer_mulliken_including_neighbor_overlap",
             "converged": True,
+        },
+    )
+
+
+def _slab_axes(model, finite_axis, periodic_axes):
+    if isinstance(finite_axis, bool) or finite_axis not in (0, 1, 2):
+        raise ValueError("finite_axis must be a lattice axis index 0, 1 or 2")
+    if periodic_axes is None:
+        translations = np.asarray(model.translations)
+        periodic_axes = [axis for axis in range(3) if axis != finite_axis and np.any(translations[:, axis])]
+    periodic = sorted({int(axis) for axis in periodic_axes})
+    if any(axis not in (0, 1, 2) for axis in periodic) or int(finite_axis) in periodic:
+        raise ValueError("periodic_axes must be lattice axes other than finite_axis")
+    return int(finite_axis), periodic
+
+
+def _home_block(model):
+    """Index and E_F-shifted copy of the home-cell block, or None without one."""
+    home = np.flatnonzero(~np.asarray(model.translations).any(axis=1))
+    if not len(home):
+        return None
+    return int(home[0]), model.hopping_matrices[home[0]] - model.fermi_energy * np.eye(model.nbnd)
+
+
+def _windowed_slab(model, home, finite_axis, periodic, cells, window, k_par):
+    # Views of the model's blocks; only the home block is replaced by its shifted copy.
+    blocks = list(model.hopping_matrices)
+    if home is not None:
+        blocks[home[0]] = home[1]
+    big = slab_hamiltonian(layer_blocks(model.translations, blocks, finite_axis, periodic, k_par), cells)
+    if home is None:
+        big -= model.fermi_energy * np.eye(len(big))
+    return eigh(big, subset_by_value=(-window, window), driver="evr")
+
+
+def _slab_options(model, cells, window):
+    if isinstance(cells, bool) or int(cells) != cells or cells < 2:
+        raise ValueError("cells must be an integer of at least two")
+    positive(window, "window")
+    return int(cells), float(window)
+
+
+def slab_eigensystem(model, k_par, *, finite_axis, cells, window=0.5, periodic_axes=None):
+    """Levels of an open slab with E - E_F in (-window, window] at one in-plane k, and their vectors.
+
+    The slab keeps ``cells`` whole unit cells along ``finite_axis`` with no change
+    of termination: H[w, w + d] = B_d(k_par), the blocks of
+    :func:`queer.physics.slab.layer_blocks`, cell-major with the model's orbital
+    order in each cell. ``periodic_axes`` defaults to the other axes that the
+    hopping table crosses; hops along any remaining axis are dropped. E_F is
+    taken off the home-cell block before assembly, so energies are relative to
+    it, and the eigenvectors are columns.
+    """
+    finite, periodic = _slab_axes(model, finite_axis, periodic_axes)
+    count, width = _slab_options(model, cells, window)
+    point = np.asarray(k_par, dtype=float)
+    if point.shape != (3,) or not np.isfinite(point).all():
+        raise ValueError("k_par must be a finite fractional (3,) point")
+    return _windowed_slab(model, _home_block(model), finite, periodic, count, width, point)
+
+
+def slab_edge_spectrum(
+    model,
+    kpoints,
+    *,
+    finite_axis,
+    cells,
+    window=0.5,
+    edge_cells=2,
+    periodic_axes=None,
+    degenerate_tol=1e-5,
+    execution=None,
+):
+    """Open-slab levels near E_F with each degenerate cluster's weight on the two edges.
+
+    Levels are those of :func:`slab_eigensystem`. A cluster is a run of
+    energy-sorted levels closer than ``degenerate_tol`` eV; every level carries its
+    cluster's total probability on the first (``left``) and last (``right``)
+    ``edge_cells`` cells, which does not depend on the basis chosen inside the
+    cluster. Arrays are padded per k-point to the largest level count: NaN
+    energies and weights, cluster -1 and size 0, with ``state_count`` per k.
+    """
+    points = validated_points(kpoints)
+    finite, periodic = _slab_axes(model, finite_axis, periodic_axes)
+    count, width = _slab_options(model, cells, window)
+    positive(degenerate_tol, "degenerate_tol")
+    edge = edge_cells_used(edge_cells, count)
+    home = _home_block(model)
+    dimension = count * model.nbnd
+    options = (execution or getattr(model, "execution", None) or ExecutionOptions()).resolved()
+    # One dense slab matrix, its eigenvectors and the solver workspace must fit the budget.
+    options.bounded_batch_size(256 * dimension**2)
+
+    def at(point):
+        energies, vectors = _windowed_slab(model, home, finite, periodic, count, width, point)
+        left, right = edge_probabilities(vectors, count, model.nbnd, edge)
+        labels = degenerate_clusters(energies, degenerate_tol)
+        sizes = np.bincount(labels)[labels] if len(labels) else np.zeros(0, dtype=np.int64)
+        return energies, cluster_totals(left, labels), cluster_totals(right, labels), labels, sizes
+
+    rows = map_points(model, points, at, options)
+    states = np.asarray([len(row[0]) for row in rows], dtype=np.int64)
+    width_out = int(np.max(states, initial=0))
+    energies, left, right = (np.full((len(points), width_out), np.nan) for _ in range(3))
+    clusters = np.full((len(points), width_out), -1, dtype=np.int64)
+    sizes = np.zeros((len(points), width_out), dtype=np.int64)
+    for index, (level, first, last, label, size) in enumerate(rows):
+        span = slice(0, len(level))
+        energies[index, span], left[index, span], right[index, span] = level, first, last
+        clusters[index, span], sizes[index, span] = label, size
+    pair = ("kpoint", "state")
+    return ObservableResult(
+        {
+            "kpoints": points,
+            "energies": energies,
+            "left_weight": left,
+            "right_weight": right,
+            "cluster": clusters,
+            "cluster_size": sizes,
+            "state_count": states,
+        },
+        {
+            "kpoints": ("kpoint", "fractional"),
+            "energies": pair,
+            "left_weight": pair,
+            "right_weight": pair,
+            "cluster": pair,
+            "cluster_size": pair,
+            "state_count": ("kpoint",),
+        },
+        {
+            "kpoints": "fractional",
+            "energies": "eV",
+            "left_weight": "1",
+            "right_weight": "1",
+            "cluster": "1",
+            "cluster_size": "1",
+            "state_count": "1",
+        },
+        {
+            "observable": "slab_edge_spectrum",
+            "finite_axis": finite,
+            "periodic_axes": periodic,
+            "cells": count,
+            "states": dimension,
+            "window_eV": width,
+            "edge_cells": edge,
+            "degenerate_tolerance_eV": float(degenerate_tol),
+            "energy_reference": "relative to the model Fermi energy",
+            "weight_definition": "probability on the edge cells summed over each degenerate cluster",
+            "layout": "cell-major, model orbital order within each cell",
         },
     )

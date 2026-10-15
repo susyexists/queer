@@ -8,13 +8,16 @@ of the same code lives in the topology, Berry-plane, slab and estimator tests.
 import numpy as np
 import pytest
 from numpy.testing import assert_allclose, assert_array_equal
+from scipy.linalg import eigh
 from tight_binding_models import cell_periodic_operators, haldane, kane_mele, qwz
 
+from queer.compat.generator import estimators
 from queer.models.evaluation import states
 from queer.models.wannier import WannierModel
 from queer.observables.geometry import berry_plane, wilson_loop
+from queer.observables.surface import slab_edge_spectrum, slab_eigensystem
 from queer.observables.topology import plane_kpoints, plane_loops, wilson_plane
-from queer.physics import geometry, topology
+from queer.physics import geometry, slab, topology
 
 PLANE_2D = np.array([[a, b, 0] for a in (-1, 0, 1) for b in (-1, 0, 1)])
 
@@ -237,3 +240,85 @@ def test_berry_plane_equals_the_generator_maps_on_pythtb_velocities(generator_co
     scale = np.abs(original_bands).max()
     assert_allclose(sea, original_sea, rtol=0, atol=1e-10 * scale)
     assert_allclose(bands, original_bands, rtol=0, atol=1e-10 * scale)
+
+
+def test_layer_blocks_and_slab_hamiltonian_equal_the_generator(generator_core):
+    rng = np.random.default_rng(61)
+    cube = np.array([[a, b, c] for a in (-2, -1, 0, 1) for b in (-1, 0, 1, 2) for c in (-1, 0, 1)])
+    for _ in range(8):
+        bands = int(rng.integers(1, 4))
+        translations = cube[rng.permutation(len(cube))[: int(rng.integers(5, len(cube)))]]
+        hopping = random_complex(rng, (len(translations), bands, bands))
+        finite = int(rng.integers(0, 3))
+        others = [axis for axis in range(3) if axis != finite]
+        periodic = others[: int(rng.integers(0, 3))]
+        k = rng.uniform(-0.5, 0.5, size=3)
+        port = slab.layer_blocks(translations, hopping, finite, periodic, k)
+        original = generator_core.layer_blocks(translations, hopping, finite, periodic, k)
+        assert list(port) == list(original)
+        for d in port:
+            assert_array_equal(port[d], original[d])
+        for cells in (1, 2, 5):
+            assert_array_equal(
+                slab.slab_hamiltonian(port, cells), generator_core.slab_hamiltonian(original, cells)
+            )
+
+
+def test_rotated_edge_weights_and_crossings_equal_the_generator(generator_core):
+    rng = np.random.default_rng(62)
+    for cells, orbitals in ((4, 2), (7, 3), (2, 1), (5, 2)):
+        size = cells * orbitals
+        vectors = np.linalg.qr(random_complex(rng, (size, size)))[0][:, : max(1, size - 2)]
+        energies = np.sort(rng.normal(scale=0.2, size=vectors.shape[1]))
+        if len(energies) >= 5:
+            energies[1] = energies[0]
+            energies[3], energies[4] = energies[2] + 4e-6, energies[2] + 8e-6
+        for edge in (1, 2, 5):
+            for levels in (None, energies, energies[::-1].copy()):
+                port = estimators.edge_weights(vectors, cells, orbitals, edge, energies=levels)
+                original = generator_core.edge_weights(vectors, cells, orbitals, edge, energies=levels)
+                for a, b in zip(port, original):
+                    assert_array_equal(a, b)
+    for _ in range(20):
+        count = int(rng.integers(1, 12))
+        levels = [rng.normal(scale=0.3, size=int(rng.integers(0, 6))) for _ in range(count)]
+        left = [rng.uniform(0, 1, size=len(e)) for e in levels]
+        right = [rng.uniform(0, 1, size=len(e)) for e in levels]
+        for periodic in (False, True):
+            for threshold in (0.3, 0.5):
+                assert estimators.edge_crossings(
+                    levels, left, right, periodic=periodic, threshold=threshold
+                ) == generator_core.edge_crossings(
+                    levels, left, right, periodic=periodic, threshold=threshold
+                )
+
+
+@pytest.mark.parametrize("case", ["haldane", "pt_kane_mele"])
+def test_slab_levels_and_cluster_weights_equal_the_generator_windowed_solve(generator_core, case):
+    model = haldane() if case == "haldane" else kane_mele(0.0, rashba=0.0)
+    model.fermi_energy = 0.05
+    points = np.zeros((7, 3))
+    points[:, 0] = -0.5 + (np.arange(7) + 0.5) / 7
+    cells, window = 8, 1.0
+    spectrum = slab_edge_spectrum(model, points, finite_axis=1, cells=cells, window=window)
+    table = model.hopping_matrices.copy()
+    home = np.flatnonzero(np.all(model.translations == 0, axis=1))[0]
+    table[home] = table[home] - model.fermi_energy * np.eye(model.nbnd)
+    clustered = 0
+    for index, k in enumerate(points):
+        blocks = generator_core.layer_blocks(model.translations, table, 1, [0], k)
+        levels, vectors = eigh(
+            generator_core.slab_hamiltonian(blocks, cells), subset_by_value=(-window, window), driver="evr"
+        )
+        left, right = generator_core.edge_weights(vectors, cells, model.nbnd, 2, energies=levels)
+        count = spectrum["state_count"][index]
+        assert_array_equal(spectrum["energies"][index, :count], levels)
+        assert_array_equal(slab_eigensystem(model, k, finite_axis=1, cells=cells, window=window)[0], levels)
+        labels = spectrum["cluster"][index, :count]
+        assert_array_equal(labels, slab.degenerate_clusters(levels, 1e-5))
+        assert_allclose(spectrum["left_weight"][index, :count], slab.cluster_totals(left, labels), atol=1e-12)
+        assert_allclose(
+            spectrum["right_weight"][index, :count], slab.cluster_totals(right, labels), atol=1e-12
+        )
+        clustered += int(np.sum(spectrum["cluster_size"][index, :count] > 1))
+    assert clustered > 0 if case == "pt_kane_mele" else clustered == 0

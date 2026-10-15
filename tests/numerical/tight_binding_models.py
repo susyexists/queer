@@ -29,10 +29,12 @@ def rice_mele(v, w, staggered=0.0, stacking=0.3):
     return WannierModel(translations, hopping, lattice=lattice, centres=centres)
 
 
-def kane_mele(onsite, interlayer=None, height=10.0):
+def kane_mele(onsite, interlayer=None, height=10.0, rashba=0.25):
     """Kane-Mele model with Rashba coupling (PythTB's example): Z2 = 1 at onsite 1.0, 0 at 2.5.
 
-    ``interlayer`` stacks the layers along a3 with a spin-independent hop.
+    ``interlayer`` stacks the layers along a3 with a spin-independent hop. Without
+    the onsite and Rashba terms the model is PT-symmetric: every level is doubly
+    degenerate, and in a ribbon the partners of an edge state sit on opposite edges.
     """
     lattice = np.array([[1.0, 0, 0], [0.5, np.sqrt(3) / 2, 0], [0, 0, height]])
     table = {(0, 0, 0): np.kron(np.diag([onsite, -onsite]), np.eye(2)).astype(complex)}
@@ -46,9 +48,9 @@ def kane_mele(onsite, interlayer=None, height=10.0):
     root = np.sqrt(3) / 2
     for translation in ([0, 0, 0], [-1, 0, 0], [0, -1, 0]):
         hop([1.0, 0, 0, 0], 0, 1, translation)
-    hop(1j * 0.25 * np.array([0, 0.5, -root, 0]), 0, 1, [0, 0, 0])
-    hop(1j * 0.25 * np.array([0, 0.5, root, 0]), 0, 1, [-1, 0, 0])
-    hop(1j * 0.25 * np.array([0, -1.0, 0, 0]), 0, 1, [0, -1, 0])
+    hop(1j * rashba * np.array([0, 0.5, -root, 0]), 0, 1, [0, 0, 0])
+    hop(1j * rashba * np.array([0, 0.5, root, 0]), 0, 1, [-1, 0, 0])
+    hop(1j * rashba * np.array([0, -1.0, 0, 0]), 0, 1, [0, -1, 0])
     for translation in ([1, 0, 0], [-1, 1, 0], [0, -1, 0]):
         hop([0, 0, 0, 0.3j], 0, 0, translation)
         hop([0, 0, 0, 0.3j], 1, 1, [-value for value in translation])
