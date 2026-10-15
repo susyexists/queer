@@ -79,10 +79,16 @@ def test_a_run_writes_the_document_and_exits_zero(tmp_path):
         ({"planes": [[2, 0.0]]}, True, "queer_bad_params", "unknown parameters for QUEER_BANDS: planes"),
         ({"fermi_energy": None}, True, "queer_bad_params", "No Fermi energy"),
         (
-            {"step_type": "PYTHTB_SLAB", "kpath_points": None, "dos_mesh": None},
+            {
+                "step_type": "PYTHTB_SLAB",
+                "kpath": None,
+                "kpath_points": None,
+                "dos_mesh": None,
+                "slab_axis": 2,
+            },
             True,
             "queer_bad_params",
-            "QUEER_SLAB (PYTHTB_SLAB) is not available in this build",
+            "slab_axis 2 is not a periodic direction of the model",
         ),
         ({"step_type": "PYTHTB_QGEOM"}, True, "queer_bad_params", "unknown step_type"),
     ],
@@ -93,6 +99,23 @@ def test_coded_failures_exit_two_with_a_failure_document(tmp_path, settings, fil
     document = results(tmp_path)
     assert document["status"] == "failed" and document["error"]["code"] == code
     assert fragment in document["error"]["message"]
+
+
+def test_a_step_missing_from_the_build_is_a_bad_parameter_failure(tmp_path, monkeypatch):
+    from types import MappingProxyType
+
+    from queer.compat.generator import runner
+
+    built = {step: body for step, body in STEP_RUNNERS.items() if step != "QUEER_SLAB"}
+    monkeypatch.setattr(runner, "STEP_RUNNERS", MappingProxyType(built))
+    params = stage(tmp_path, step_type="PYTHTB_SLAB", kpath=None, kpath_points=None, dos_mesh=None)
+    assert run(None, params, tmp_path, log=lambda line: None) == EXIT_FAILED
+    document = results(tmp_path)
+    assert document["error"]["code"] == "queer_bad_params"
+    assert document["error"]["message"] == (
+        "QUEER_SLAB (PYTHTB_SLAB) is not available in this build; it runs QUEER_BANDS, QUEER_BERRY, "
+        "QUEER_TOPOLOGY (or their PYTHTB_ names)"
+    )
 
 
 def test_an_unreadable_parameter_file_is_a_bad_parameter_failure(tmp_path):
@@ -143,7 +166,8 @@ def test_an_interrupt_propagates_after_the_running_document_is_written(tmp_path,
 def test_capabilities_list_the_steps_of_this_build(capsys):
     assert main(["capabilities"]) == EXIT_OK
     payload = json.loads(capsys.readouterr().out)
-    assert payload == {"queer_version": queer.__version__, "steps": ["QUEER_BANDS", "QUEER_TOPOLOGY"]}
+    steps = ["QUEER_BANDS", "QUEER_BERRY", "QUEER_SLAB", "QUEER_TOPOLOGY"]
+    assert payload == {"queer_version": queer.__version__, "steps": steps}
     assert payload["steps"] == sorted(STEP_RUNNERS)
 
 
@@ -195,4 +219,9 @@ def test_the_module_entry_runs_a_step_in_its_workspace(tmp_path):
 
     finished = entry(["capabilities"], tmp_path)
     assert finished.returncode == 0
-    assert json.loads(finished.stdout)["steps"] == ["QUEER_BANDS", "QUEER_TOPOLOGY"]
+    assert json.loads(finished.stdout)["steps"] == [
+        "QUEER_BANDS",
+        "QUEER_BERRY",
+        "QUEER_SLAB",
+        "QUEER_TOPOLOGY",
+    ]
