@@ -135,7 +135,9 @@ def test_run_reports_a_missing_or_outdated_environment(tmp_path, monkeypatch):
     assert not list(workspace.glob(".queer_results.json.*"))
 
 
-def test_run_without_a_runner_reports_an_internal_error(tmp_path):
+def test_run_without_a_runner_reports_an_internal_error(tmp_path, monkeypatch):
+    # A build without the runner module: its import stops at the boot's lookup.
+    monkeypatch.setitem(sys.modules, boot.RUNNER_MODULE, None)
     code = boot.main(["run", "--step", "QUEER_TOPOLOGY", "--params", "p.json", "--workspace", str(tmp_path)])
     assert code == 1
     record = read_results(tmp_path)
@@ -154,8 +156,13 @@ def test_invalid_run_arguments_still_write_a_results_file(tmp_path):
 
 
 def test_capabilities_and_runner_delegation(tmp_path, monkeypatch, capsys):
+    from queer.compat.generator.runner import STEP_RUNNERS
+
     assert boot.main(["capabilities"]) == 0
-    assert json.loads(capsys.readouterr().out) == {"queer_version": queer.__version__, "steps": []}
+    assert json.loads(capsys.readouterr().out) == {
+        "queer_version": queer.__version__,
+        "steps": sorted(STEP_RUNNERS),
+    }
     fake_versions(monkeypatch, {"numpy": "2.0", "scipy": "1.14", "joblib": "1.4"})
     assert boot.main(["capabilities"]) == 2
     payload = json.loads(capsys.readouterr().out)

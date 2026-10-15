@@ -67,15 +67,20 @@ else:
     subprocess.run([sys.executable, "-c", probe], check=True, capture_output=True)
 
 
-def test_generator_compat_package_and_runner_lookup_import_without_numpy():
+def test_generator_compat_package_imports_without_numpy_and_the_runner_needs_it():
     probe = """
 import importlib.util
 import sys
 sys.modules["numpy"] = None
 import queer.compat.generator
 from queer import _generator_boot as boot
-assert importlib.util.find_spec("queer.compat.generator.runner") is None
-assert boot._runner() is None
+assert importlib.util.find_spec("queer.compat.generator.runner") is not None
+try:
+    boot._runner()
+except ModuleNotFoundError as error:
+    assert error.name == "numpy", error.name
+else:
+    raise AssertionError("the runner must not load without NumPy")
 """
     subprocess.run([sys.executable, "-c", probe], check=True, capture_output=True)
 

@@ -27,6 +27,7 @@ from queer.compat.generator.results import (
     describe_failure,
     execute,
     to_jsonable,
+    traceback_tail,
     write_json_atomic,
 )
 from queer.physics.validation import NumericalError
@@ -119,6 +120,32 @@ def test_failures_map_to_the_drivers_codes_and_exit_codes(error, code, exit_code
         assert described[1] == "KeyError: 'model'"
     if isinstance(error, MemoryError):
         assert "lower chunk_size/workers or the mesh sizes" in described[1]
+
+
+def test_an_unexpected_error_names_the_innermost_frames_of_its_traceback():
+    def inner():
+        raise ZeroDivisionError("division by zero")
+
+    def middle():
+        inner()
+
+    def outer():
+        middle()
+
+    try:
+        outer()
+    except ZeroDivisionError as error:
+        tail = traceback_tail(error, frames=2)
+        code, message, exit_code = describe_failure(error)
+    assert re.fullmatch(
+        r"test_generator_results\.py:\d+ in middle; test_generator_results\.py:\d+ in inner", tail
+    )
+    assert (code, exit_code) == (ERR_INTERNAL, EXIT_INTERNAL)
+    assert message.startswith(
+        "ZeroDivisionError: division by zero (traceback tail: test_generator_results.py:"
+    )
+    assert message.endswith(" in outer; " + tail + ")")
+    assert traceback_tail(ValueError("never raised")) == ""
 
 
 def write_params(tmp_path, params):
@@ -216,7 +243,9 @@ def test_a_failing_step_keeps_its_blocks_and_warnings(tmp_path, error, code, exi
     assert document["warnings"] == ["large deviation"] and document["warning_codes"] == ["band_dat_deviation"]
     assert any(line.startswith(logged) for line in lines)
     if code == ERR_INTERNAL:
-        assert document["error"]["message"] == "ValueError: unexpected"
+        message = document["error"]["message"]
+        assert message.startswith("ValueError: unexpected (traceback tail: ")
+        assert message.endswith(" in body)") and "test_generator_results.py:" in message
         assert any("Traceback" in line for line in lines)
     assert lines[-1] == f"wrote {RESULTS_FILENAME} (status failed)"
 

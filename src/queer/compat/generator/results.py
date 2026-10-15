@@ -98,6 +98,8 @@ BERRY_CONVENTIONS: Mapping[str, str] = {
 # How far a Kubo Chern number may sit from an integer before the mesh is called
 # too coarse for a small gap.
 CHERN_INTEGER_TOL = 0.05
+# Frames of an unexpected error's traceback quoted in its failure message.
+TRACEBACK_TAIL_FRAMES = 3
 
 
 def citation(version: str | None) -> str:
@@ -123,12 +125,22 @@ def exit_code_for(code: str) -> int:
     return EXIT_FAILED
 
 
+def traceback_tail(error: BaseException, frames: int = TRACEBACK_TAIL_FRAMES) -> str:
+    """The innermost ``frames`` frames of ``error``'s traceback as ``file:line in function``, outermost first.
+
+    Empty for an exception that was never raised.
+    """
+    entries = traceback.extract_tb(error.__traceback__)[-frames:] if frames > 0 else []
+    return "; ".join(f"{Path(entry.filename).name}:{entry.lineno} in {entry.name}" for entry in entries)
+
+
 def describe_failure(error: BaseException) -> tuple[str, str, int]:
     """``(code, message, exit code)`` of an exception that ended a run.
 
     A :class:`RunnerError` keeps its code; a failed or nonfinite eigensolve is
     ``queer_numerical_error``; ``MemoryError`` is ``queer_oom`` with the driver's
-    advice; anything else is ``queer_internal_error`` naming the exception type.
+    advice; anything else is ``queer_internal_error`` naming the exception type,
+    followed by the innermost frames of its traceback.
     """
     if isinstance(error, RunnerError):
         return error.code, str(error), exit_code_for(error.code)
@@ -137,7 +149,11 @@ def describe_failure(error: BaseException) -> tuple[str, str, int]:
     if isinstance(error, MemoryError):
         message = f"out of memory ({error}); lower chunk_size/workers or the mesh sizes"
         return ERR_MEMORY, message, EXIT_OUT_OF_MEMORY
-    return ERR_INTERNAL, f"{type(error).__name__}: {error}", EXIT_INTERNAL
+    message = f"{type(error).__name__}: {error}"
+    tail = traceback_tail(error)
+    if tail:
+        message += f" (traceback tail: {tail})"
+    return ERR_INTERNAL, message, EXIT_INTERNAL
 
 
 def to_jsonable(value: Any, digits: int | None = None) -> Any:
