@@ -220,6 +220,21 @@ pytest suite, Ruff, mypy and isolated wheel/sdist checks cover packaging.
 A separate optional environment also validates an actual untrained MACE
 architecture against finite-difference forces and exact checkpoint reload.
 
+### Generator command entry
+
+`python -m queer generator run --step STEP --params FILE [--workspace DIR]`,
+`python -m queer generator capabilities` and `python -m queer generator compare ...`
+start in `queer._generator_boot`, which imports only the standard library. It
+compares the installed versions of the core dependencies with its embedded copy of
+`[project].dependencies` (no `packaging` needed) before anything imports NumPy.
+A gap makes `run` write `queer_results.json` atomically with
+`{"status": "failed", "engine": "queer", "error": {"code": "queer_env_missing"}}`,
+the step, QUEER and Python versions, and exit 2; `capabilities` prints the same
+error with `"steps": []`. Otherwise each command is delegated to
+`queer.compat.generator.runner.main`; a build without that runner reports
+`queer_internal_error` and exits 1. Exit codes follow the Generator PythTB
+driver: 0 success, 1 internal error, 2 reported failure, 3 out of memory.
+
 ### Wannier90 inputs of the PythTB engine
 
 `queer.io.wannier.read_win` returns a `WinData` record of the `.win` settings that

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import signal
+import sys
 from pathlib import Path
 
 from .config import WORKFLOWS, load_config
@@ -45,8 +46,13 @@ def _terminated(signum, frame):
 
 
 def main(argv=None) -> int:
+    arguments = sys.argv[1:] if argv is None else list(argv)
+    if arguments[:1] == ["generator"]:
+        from ._generator_boot import main as generator_main
+
+        return generator_main(arguments[1:])
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(arguments)
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO, format="%(levelname)s %(message)s"
     )
