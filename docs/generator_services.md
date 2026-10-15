@@ -220,6 +220,21 @@ pytest suite, Ruff, mypy and isolated wheel/sdist checks cover packaging.
 A separate optional environment also validates an actual untrained MACE
 architecture against finite-difference forces and exact checkpoint reload.
 
+### Wannier90 inputs of the PythTB engine
+
+`queer.io.wannier.read_win` returns a `WinData` record of the `.win` settings that
+the Generator's PythTB engine consumes, read with its lenient rules: case-insensitive
+keywords in `=`, `:` or blank-separated form, `!`/`#` comments, Fortran `d`
+exponents and logical spellings, and skipped malformed `kpoints`/`kpoint_path`
+rows. A missing or malformed `mp_grid` is inferred from the distinct coordinates of
+the `kpoints` block. Bohr cells are converted with `WANNIER_BOHR_ANGSTROM`
+(CODATA 2018), which differs from the Generator's CODATA 2010 factor by about
+3e-11 relative; `cell_unit` records the declared unit. `read_eig`,
+`read_band_kpt`, `read_labelinfo` and `read_band_dat` read the other staged files,
+and `band_path_breaks` marks a path jump where a step exceeds three times the
+previous one. Unlike the validating `queer.io.bands.read_wannier_bands`, these
+readers follow the producer's semantics, so a replay sees the same rows it did.
+
 ### Replaying saved Generator PythTB calculations
 
 `scripts/validation/generator_replay.py` compares an already downloaded successful

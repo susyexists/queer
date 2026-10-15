@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import islice
 from pathlib import Path
+from types import MappingProxyType
 
 import numpy as np
 
@@ -16,6 +17,11 @@ from .wannier_ws import ComputedWignerSeitzShifts, PackedWignerSeitzShifts
 from .wannier_ws import recompute_wsvec as recompute_wsvec
 
 _FLOAT_TOKEN = r"[+\-]?(?:(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+\-]?[0-9]+)?|inf(?:inity)?|nan)"
+_WIN_COMMENT = re.compile(r"[!#].*$")
+_WIN_KEYWORD = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*[=:]?\s*(.*)$")
+_WIN_TRUE = frozenset({"true", ".true.", "t", ".t.", "1", "yes"})
+_WIN_FALSE = frozenset({"false", ".false.", "f", ".f.", "0", "no"})
+_WIN_UNITS = ("bohr", "ang", "angstrom")
 
 
 @dataclass(frozen=True)
@@ -421,6 +427,333 @@ def read_wout_lattice(path: str | Path) -> np.ndarray:
                     return validated_lattice(np.asarray(rows) * scale).copy()
             raise ValueError(f"{source}: incomplete lattice vectors block")
     raise ValueError(f"{source}: no lattice vectors block found")
+
+
+KPathSegment = tuple[str, tuple[float, float, float], str, tuple[float, float, float]]
+
+
+@dataclass(frozen=True)
+class WinData:
+    """Settings of a Wannier90 ``.win`` input that post-processing consumes.
+
+    ``lattice`` holds Cartesian row vectors in Å. ``cell_unit`` is the lower-case
+    unit line of ``unit_cell_cart``, or ``None`` when the block has none, which
+    Wannier90 reads as Å. ``mp_grid`` comes from its keyword or, when that is
+    absent or malformed, from the distinct coordinates of the ``kpoints`` block
+    (``mp_grid_inferred``). ``kpoints`` are fractional, and ``kpoint_path`` rows
+    are ``(label, start, label, end)`` in fractional coordinates. Absent or
+    unparsable scalars are ``None``. ``keywords`` maps lower-case keywords to their
+    raw values; ``blocks`` maps lower-case block names to their comment-free lines.
+    """
+
+    lattice: np.ndarray | None
+    cell_unit: str | None
+    mp_grid: tuple[int, int, int] | None
+    mp_grid_inferred: bool
+    kpoints: np.ndarray
+    kpoint_path: tuple[KPathSegment, ...]
+    num_wann: int | None
+    num_bands: int | None
+    spinors: bool | None
+    use_ws_distance: bool | None
+    translate_home_cell: bool | None
+    write_tb: bool | None
+    write_hr: bool | None
+    write_xyz: bool | None
+    bands_plot: bool | None
+    dis_win_min: float | None
+    dis_win_max: float | None
+    dis_froz_min: float | None
+    dis_froz_max: float | None
+    ws_search_size: int | None
+    ws_distance_tol: float | None
+    fermi_energy: float | None
+    keywords: Mapping[str, str]
+    blocks: Mapping[str, tuple[str, ...]]
+
+    @property
+    def n_kpoints(self) -> int:
+        return len(self.kpoints)
+
+
+def _fortran_float(token: str) -> float:
+    return float(token.strip().lower().replace("d", "e"))
+
+
+def _win_bool(value: str | None) -> bool | None:
+    if value is None:
+        return None
+    token = value.split()[0].lower() if value.strip() else ""
+    if token in _WIN_TRUE:
+        return True
+    if token in _WIN_FALSE:
+        return False
+    return None
+
+
+def _win_float(value: str | None) -> float | None:
+    if value is None or not value.strip():
+        return None
+    try:
+        return _fortran_float(value.split()[0])
+    except ValueError:
+        return None
+
+
+def _win_int(value: str | None) -> int | None:
+    number = _win_float(value)
+    return None if number is None or not np.isfinite(number) else int(round(number))
+
+
+def infer_mp_grid(kpoints) -> tuple[int, int, int] | None:
+    """Monkhorst-Pack divisions of a complete uniform fractional k-point list.
+
+    Each axis counts the distinct coordinates modulo one, after rounding to six
+    and then five decimals.
+    """
+    points = np.asarray(kpoints, dtype=float)
+    if points.ndim != 2 or points.shape[1] < 3 or not len(points):
+        return None
+    counts = []
+    for axis in range(3):
+        fractional = np.mod(np.round(points[:, axis], 6), 1.0)
+        counts.append(int(len(np.unique(np.round(fractional, 5)))))
+    return counts[0], counts[1], counts[2]
+
+
+def read_win(path: str | Path) -> WinData:
+    """Read the ``.win`` keywords and blocks consumed by Wannier post-processing.
+
+    Keywords and block names are case-insensitive; ``key = value``, ``key : value``
+    and ``key value`` are accepted, and ``!`` or ``#`` start comments. A later
+    keyword or block replaces an earlier one, an ``end`` line closes whichever block
+    is open, and an unterminated block is ignored. Fortran ``d`` exponents and
+    logical spellings (``.true.``, ``T``, ``yes``, ``1`` and their negations) are
+    recognized. Malformed rows of the ``kpoints`` and ``kpoint_path`` blocks are
+    skipped; a malformed ``unit_cell_cart`` value is an error.
+    """
+    source = Path(path)
+    keywords: dict[str, str] = {}
+    blocks: dict[str, tuple[str, ...]] = {}
+    current: str | None = None
+    lines: list[str] = []
+    for raw in source.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = _WIN_COMMENT.sub("", raw).strip()
+        if not line:
+            continue
+        low = line.lower()
+        if low.startswith("begin") and (len(low) == 5 or low[5] in " \t"):
+            parts = low.split()
+            current = parts[1] if len(parts) > 1 else ""
+            lines = []
+            continue
+        if low.startswith("end") and (len(low) == 3 or low[3] in " \t"):
+            if current is not None:
+                blocks[current] = tuple(lines)
+            current = None
+            continue
+        if current is not None:
+            lines.append(line)
+            continue
+        match = _WIN_KEYWORD.match(line)
+        if match:
+            keywords[match.group(1).lower()] = match.group(2).strip()
+
+    lattice = None
+    cell_unit = None
+    cell = blocks.get("unit_cell_cart")
+    if cell:
+        rows = list(cell)
+        scale = 1.0
+        first = rows[0].split()[0].lower()
+        if first in _WIN_UNITS:
+            cell_unit = first
+            scale = BOHR_ANGSTROM if first == "bohr" else 1.0
+            rows = rows[1:]
+        try:
+            vectors = [[_fortran_float(value) * scale for value in row.split()[:3]] for row in rows[:3]]
+        except ValueError as error:
+            raise ValueError(f"{source}: invalid unit_cell_cart value ({error})") from error
+        if len(vectors) == 3 and all(len(vector) == 3 for vector in vectors):
+            lattice = np.asarray(vectors, dtype=float)
+            lattice.setflags(write=False)
+
+    grid: list[int] | tuple[int, int, int] | None = None
+    if "mp_grid" in keywords:
+        try:
+            grid = [int(value) for value in keywords["mp_grid"].replace(",", " ").split()[:3]]
+        except ValueError:
+            grid = None
+    kpoints = []
+    for row in blocks.get("kpoints", ()):
+        fields = row.split()
+        if len(fields) >= 3:
+            try:
+                kpoints.append([_fortran_float(value) for value in fields[:3]])
+            except ValueError:
+                continue
+    inferred = False
+    if (not grid or len(grid) != 3) and kpoints:
+        grid = infer_mp_grid(kpoints)
+        inferred = grid is not None
+    mp_grid = (int(grid[0]), int(grid[1]), int(grid[2])) if grid and len(grid) == 3 else None
+    kpoint_array = np.asarray(kpoints, dtype=float).reshape(-1, 3)
+    kpoint_array.setflags(write=False)
+
+    segments: list[KPathSegment] = []
+    for row in blocks.get("kpoint_path", ()):
+        fields = row.replace(",", " ").split()
+        if len(fields) < 8:
+            continue
+        try:
+            start = [_fortran_float(value) for value in fields[1:4]]
+            end = [_fortran_float(value) for value in fields[5:8]]
+        except ValueError:
+            continue
+        segments.append((fields[0], (start[0], start[1], start[2]), fields[4], (end[0], end[1], end[2])))
+
+    return WinData(
+        lattice=lattice,
+        cell_unit=cell_unit,
+        mp_grid=mp_grid,
+        mp_grid_inferred=inferred and mp_grid is not None,
+        kpoints=kpoint_array,
+        kpoint_path=tuple(segments),
+        num_wann=_win_int(keywords.get("num_wann")),
+        num_bands=_win_int(keywords.get("num_bands")),
+        spinors=_win_bool(keywords.get("spinors")),
+        use_ws_distance=_win_bool(keywords.get("use_ws_distance")),
+        translate_home_cell=_win_bool(keywords.get("translate_home_cell")),
+        write_tb=_win_bool(keywords.get("write_tb")),
+        write_hr=_win_bool(keywords.get("write_hr")),
+        write_xyz=_win_bool(keywords.get("write_xyz")),
+        bands_plot=_win_bool(keywords.get("bands_plot")),
+        dis_win_min=_win_float(keywords.get("dis_win_min")),
+        dis_win_max=_win_float(keywords.get("dis_win_max")),
+        dis_froz_min=_win_float(keywords.get("dis_froz_min")),
+        dis_froz_max=_win_float(keywords.get("dis_froz_max")),
+        ws_search_size=_win_int(keywords.get("ws_search_size")),
+        ws_distance_tol=_win_float(keywords.get("ws_distance_tol")),
+        fermi_energy=_win_float(keywords.get("fermi_energy")),
+        keywords=MappingProxyType(dict(keywords)),
+        blocks=MappingProxyType(dict(blocks)),
+    )
+
+
+def read_eig(path: str | Path) -> np.ndarray:
+    """Read Wannier90 ``seed.eig`` rows ``band kpoint energy`` as (NK,NB) eV.
+
+    Indices are one-based; columns after the energy are ignored. Pairs absent from
+    the file are NaN, and a repeated band/k-point pair is an error.
+    """
+    source = Path(path)
+    bands: list[int] = []
+    kpoints: list[int] = []
+    energies: list[float] = []
+    with source.open(encoding="utf-8") as stream:
+        for number, line in enumerate(stream, 1):
+            fields = line.split()
+            if not fields:
+                continue
+            context = f"{source}:{number}"
+            if len(fields) < 3:
+                raise ValueError(f"{context}: expected band index, k-point index and energy")
+            band, kpoint = _integer(fields[0], context), _integer(fields[1], context)
+            if band < 1 or kpoint < 1:
+                raise ValueError(f"{context}: band and k-point indices are one-based")
+            bands.append(band - 1)
+            kpoints.append(kpoint - 1)
+            energies.append(_number(fields[2], context))
+    if not energies:
+        raise ValueError(f"{source}: no eigenvalue records")
+    band_index, kpoint_index = np.asarray(bands), np.asarray(kpoints)
+    shape = (max(kpoints) + 1, max(bands) + 1)
+    if len(np.unique(kpoint_index * shape[1] + band_index)) != len(energies):
+        raise ValueError(f"{source}: repeated band/k-point record")
+    result = np.full(shape, np.nan)
+    result[kpoint_index, band_index] = energies
+    result.setflags(write=False)
+    return result
+
+
+def read_band_kpt(path: str | Path) -> np.ndarray:
+    """Read ``seed_band.kpt`` fractional k-points (NK,3), skipping its count line.
+
+    Rows with fewer than three numeric fields are skipped; weights are ignored.
+    """
+    rows = [line.split() for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()]
+    if rows and len(rows[0]) == 1:
+        rows = rows[1:]
+    points = []
+    for fields in rows:
+        if len(fields) >= 3:
+            try:
+                points.append([_fortran_float(value) for value in fields[:3]])
+            except ValueError:
+                continue
+    result = np.asarray(points, dtype=float).reshape(-1, 3)
+    result.setflags(write=False)
+    return result
+
+
+def read_labelinfo(path: str | Path) -> tuple[list[int], list[str]]:
+    """Read ``seed_band.labelinfo.dat`` rows ``LABEL index ...`` as zero-based ticks.
+
+    Rows without an integer second field are skipped.
+    """
+    indices: list[int] = []
+    labels: list[str] = []
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        fields = line.split()
+        if len(fields) < 2:
+            continue
+        try:
+            index = int(fields[1])
+        except ValueError:
+            continue
+        indices.append(index - 1)
+        labels.append(fields[0])
+    return indices, labels
+
+
+def read_band_dat(path: str | Path, num_bands: int) -> np.ndarray:
+    """Read ``seed_band.dat`` band-major ``distance energy`` rows as (NK,NB) eV.
+
+    Blank-line separation is not required: every row with a numeric second field
+    contributes, in order, and the count must be a multiple of ``num_bands``.
+    """
+    values = []
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        fields = line.split()
+        if len(fields) >= 2:
+            try:
+                values.append(_fortran_float(fields[1]))
+            except ValueError:
+                continue
+    data = np.asarray(values, dtype=float)
+    if num_bands <= 0 or data.size % num_bands:
+        raise ValueError(f"{path}: {data.size} band values are not a multiple of {num_bands} bands")
+    result = np.ascontiguousarray(data.reshape(num_bands, -1).T)
+    result.setflags(write=False)
+    return result
+
+
+def band_path_breaks(kpoints, tick_indices: Sequence[int]) -> list[int]:
+    """Tick indices where a sampled path jumps instead of continuing.
+
+    Wannier90 does not repeat the point joining two segments, so a discontinuity
+    appears as a step more than three times longer than the step before it.
+    """
+    points = np.asarray(kpoints, dtype=float)
+    breaks: list[int] = []
+    for index in tick_indices:
+        if index < 2 or index >= len(points) or index in breaks:
+            continue
+        step = float(np.linalg.norm(points[index] - points[index - 1]))
+        reference = float(np.linalg.norm(points[index - 1] - points[index - 2]))
+        if reference > 0 and step > 3.0 * reference:
+            breaks.append(int(index))
+    return breaks
 
 
 def normalized_hopping(
