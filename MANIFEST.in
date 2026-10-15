@@ -8,6 +8,7 @@ recursive-include scripts/validation *.py
 recursive-include scripts/hpc *.py *.sbatch
 recursive-include benchmarks *.py *.md
 recursive-include tests *.py
+include tests/oracles/README.md
 recursive-include tests/fixtures *
 recursive-include notebooks/active *.ipynb
 include data/references/openmx/README.md

@@ -13,6 +13,7 @@
 - Legacy top-level modules and `scripts/runs` forward supported 1.x interfaces.
 - `configs/examples`: complete small workloads; `configs/hpc`: customizable site resources.
 - `tests/{fixtures,unit,numerical,integration,packaging}`: independent acceptance gates.
+- `tests/oracles`: verbatim Generator sources that ported functions are tested against; not tests.
 - `benchmarks`: reproducible time/memory evidence and optional real-data runs.
 - `notebooks/active`: maintained consumers; notebook/script archives: unsupported provenance.
 - `data` and `results`: ignored inputs and generated artifacts, with trackable manifests.
