@@ -322,3 +322,175 @@ def test_slab_levels_and_cluster_weights_equal_the_generator_windowed_solve(gene
         )
         clustered += int(np.sum(spectrum["cluster_size"][index, :count] > 1))
     assert clustered > 0 if case == "pt_kane_mele" else clustered == 0
+
+
+def random_lattice(rng):
+    return np.diag(rng.uniform(2.5, 6.0, size=3)) + rng.normal(scale=0.5, size=(3, 3))
+
+
+def hexagonal_lattice(angle):
+    second = [np.cos(np.radians(angle)), np.sin(np.radians(angle)), 0.0]
+    return np.array([[3.0, 0.0, 0.0], [3.0 * second[0], 3.0 * second[1], 0.0], [0.0, 0.0, 20.0]])
+
+
+def random_segments(rng, count):
+    segments, previous = [], rng.uniform(-0.5, 0.5, size=3)
+    for index in range(count):
+        start = previous if rng.uniform() < 0.6 else rng.uniform(-0.5, 0.5, size=3)
+        end = rng.uniform(-0.5, 0.5, size=3)
+        if index == 2:
+            end = start.copy()
+            end[2] = start[2] + 0.25
+        segments.append([f"P{index}", start.tolist(), f"Q{index}", end.tolist()])
+        previous = end
+    return segments
+
+
+def test_k_space_sampling_ports_equal_the_generator(generator_core):
+    rng = np.random.default_rng(71)
+    lattices = [random_lattice(rng) for _ in range(4)] + [hexagonal_lattice(120), hexagonal_lattice(60)]
+    for lattice in lattices:
+        divisions = rng.integers(1, 7, size=3)
+        for periodic in ([0, 1], [0, 1, 2], [1, 2], [0]):
+            for fixed in (None, {2: 0.5}, {0: 0.25, 1: -0.5}):
+                assert_array_equal(
+                    estimators.uniform_mesh(divisions, periodic, fixed),
+                    generator_core.uniform_mesh(divisions, periodic, fixed),
+                )
+            segments = random_segments(rng, 5)
+            assert estimators.project_path(segments, periodic) == generator_core.project_path(
+                segments, periodic
+            )
+        for points in (1, 7, 60, 400):
+            segments = random_segments(rng, int(rng.integers(1, 6)))
+            port = estimators.sample_path(segments, lattice, points)
+            original = generator_core.sample_path(segments, lattice, points)
+            assert_array_equal(port["kpoints"], original["kpoints"])
+            for key in ("tick_indices", "tick_labels", "break_indices"):
+                assert port[key] == original[key]
+            assert_array_equal(
+                estimators.k_distance(port["kpoints"], lattice, port["break_indices"]),
+                generator_core.k_distance(original["kpoints"], lattice, original["break_indices"]),
+            )
+        for a, b in ((0, 1), (1, 2), (2, 0)):
+            for port, original in zip(
+                estimators.plane_frame(lattice, a, b), generator_core.plane_frame(lattice, a, b)
+            ):
+                assert_array_equal(port, original)
+            port = estimators.surface_path(lattice, a, b, 120)
+            original = generator_core.surface_path(lattice, a, b, 120)
+            assert_array_equal(port["kpoints"], original["kpoints"])
+            assert (
+                port["tick_labels"] == original["tick_labels"]
+                and port["break_indices"] == original["break_indices"]
+            )
+    with pytest.raises(ValueError, match="empty"):
+        estimators.sample_path([], np.eye(3), 10)
+
+
+def test_band_window_deviation_and_gap_ports_equal_the_generator(generator_core):
+    rng = np.random.default_rng(72)
+    windows = [
+        {},
+        {"dis_froz_max": 1.0},
+        {"dis_froz_max": 1.0, "dis_win_min": -3.0},
+        {"dis_froz_min": -1.0, "dis_froz_max": 2.0},
+        {"dis_win_min": -4.0, "dis_win_max": 5.0},
+        {"dis_froz_min": -1.0, "dis_win_min": -2.0, "dis_win_max": 3.0},
+    ]
+    for win in windows:
+        for fermi in (0.0, 1.3):
+            assert estimators.comparison_window(win, fermi) == generator_core.comparison_window(win, fermi)
+    model = rng.normal(size=(40, 6))
+    reference = model + rng.normal(scale=1e-3, size=model.shape)
+    for window in (None, (-0.5, 0.5), (10.0, 11.0), (-1.0, 1.0)):
+        assert estimators.band_deviation(model, reference, window) == generator_core.band_deviation(
+            model, reference, window
+        )
+    assert estimators.band_deviation(model[:0], reference[:0], None) == generator_core.band_deviation(
+        model[:0], reference[:0], None
+    )
+    for bands, offset in ((1, 0.0), (4, 0.0), (4, 0.6), (6, -0.3), (5, 7.0)):
+        kpoints = rng.uniform(-0.5, 0.5, size=(30, 3))
+        centres = np.linspace(-2.0, 2.0, bands) + offset
+        energies = np.sort(centres + rng.normal(scale=0.25, size=(30, bands)), axis=1)
+        port, original = estimators.BandEdges(bands), generator_core.BandEdges(bands)
+        for start in (0, 11, 23):
+            chunk = slice(start, start + 12)
+            port_part, original_part = estimators.BandEdges(bands), generator_core.BandEdges(bands)
+            port_part.add(kpoints[chunk], energies[chunk])
+            original_part.add(kpoints[chunk], energies[chunk])
+            port.merge(port_part)
+            original.merge(original_part)
+        for name in (
+            "minimum",
+            "maximum",
+            "argmin",
+            "argmax",
+            "direct",
+            "direct_at",
+            "count_min",
+            "count_max",
+            "n_k",
+        ):
+            assert_array_equal(getattr(port, name), getattr(original, name))
+        for tolerance in (0.0, 0.02, 0.5):
+            for occupied in (None, *range(1, bands)):
+                assert estimators.classify_gap(port, tolerance, occupied) == generator_core.classify_gap(
+                    original, tolerance, occupied
+                )
+        for invalid in (0, bands):
+            with pytest.raises(ValueError, match="occupied_bands"):
+                estimators.classify_gap(port, 0.02, invalid)
+            with pytest.raises(generator_core.PythtbError):
+                generator_core.classify_gap(original, 0.02, invalid)
+
+
+def test_histogram_dos_kernel_equals_the_generator(generator_core):
+    rng = np.random.default_rng(73)
+    for sigma in (0.0, -1.0, 0.005, 0.03, 0.2):
+        for shape in ((400,), (3, 400), (37,)):
+            histogram = rng.uniform(0, 3, size=shape)
+            assert_array_equal(
+                estimators.gaussian_dos(histogram, 0.005, sigma),
+                generator_core.gaussian_dos(histogram, 0.005, sigma),
+            )
+
+
+def test_species_and_localization_ports_equal_the_generator(generator_core):
+    rng = np.random.default_rng(74)
+    for _ in range(5):
+        lattice = random_lattice(rng)
+        atoms = int(rng.integers(1, 6))
+        structure = {
+            "species": [str(rng.choice(["Mn", "Bi", "Te"])) for _ in range(atoms)],
+            "cart": rng.uniform(0, 1, size=(atoms, 3)) @ lattice,
+        }
+        centres = rng.uniform(-0.6, 1.6, size=(7, 3)) @ lattice
+        port = estimators.orbital_species(centres, structure, lattice)
+        original = generator_core.orbital_species(centres, structure, lattice)
+        assert port[0] == original[0]
+        assert_array_equal(port[1], original[1])
+        for axes in ([], [2], [0, 2], [0, 1, 2]):
+            assert_array_equal(
+                estimators.unwrap_centres(centres, lattice, axes),
+                generator_core.unwrap_centres(centres, lattice, axes),
+            )
+        translations = np.array([[a, b, c] for a in (-1, 0, 1) for b in (-2, 0, 2) for c in (0, 1)])
+        hopping = random_complex(rng, (len(translations), 7, 7)) * np.exp(
+            -rng.uniform(0, 12, size=(len(translations), 7, 7))
+        )
+        hopping[rng.uniform(size=hopping.shape) < 0.2] = 0
+        port = estimators.hopping_decay(translations, hopping, centres, lattice)
+        original = generator_core.hopping_decay(translations, hopping, centres, lattice)
+        assert port.keys() == original.keys()
+        for key in port:
+            assert_array_equal(port[key], original[key])
+    for broken in (None, {}, {"species": ["A"], "cart": [[0, 0, 0], [1, 1, 1]]}, {"species": [], "cart": []}):
+        port = estimators.orbital_species(np.zeros((3, 3)), broken, np.eye(3))
+        original = generator_core.orbital_species(np.zeros((3, 3)), broken, np.eye(3))
+        assert port[0] == original[0] == ["all"]
+        assert_array_equal(port[1], original[1])
+    zero = np.zeros((1, 2, 2))
+    assert estimators.hopping_decay([[0, 0, 0]], zero, np.zeros((2, 3)), np.eye(3)) is None
+    assert generator_core.hopping_decay([[0, 0, 0]], zero, np.zeros((2, 3)), np.eye(3)) is None

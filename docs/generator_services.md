@@ -320,6 +320,21 @@ at the next k. Both are historical semantics in
 `queer.compat.generator.estimators`: inside a cluster whose edge projector is
 degenerate they still depend on the basis.
 
+`queer.compat.generator.estimators` keeps the Generator's own estimators with
+their exact semantics. The DOS histograms the eigenvalues on bins from
+min(E) - 2 eV to max(E) + 2 eV in `dos_step_eV`, divides by N_k and smooths with
+a Gaussian sampled on the bins, truncated at ⌈5σ/step⌉ bins, normalized to unit
+sum and applied with `np.convolve(..., "same")`; each Wannier band counts as one
+state. DOS(E_F) interpolates linearly between bin centres, or, for the first
+driver revisions, takes the first bin whose centre is at or above E_F
+(`dos_at_fermi(..., "first_nonnegative_bin")`). `BandEdges` and `classify_gap`
+pick a gap above 1 meV within `fermi_tolerance_eV` of E_F, the most central one
+winning. The module also holds the band.dat window (frozen, else outer, else
+±2 eV) and deviation metrics, the wannier90-style path sampling, `k_distance`
+(with 2π), `plane_frame` (without 2π), the surface paths, the orbital species of
+the nearest atom image, centres unwrapped across a slab's vacuum and the
+hopping-decay fit.
+
 ### Replaying saved Generator PythTB calculations
 
 `scripts/validation/generator_replay.py` compares an already downloaded successful

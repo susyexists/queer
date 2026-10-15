@@ -432,3 +432,27 @@ canonical = "queer.physics.slab:cluster_totals"
 specialized_backends = ["queer.physics.slab:edge_probabilities", "queer.physics.slab:degenerate_clusters"]
 source_references = ["docs/generator_services.md#numerical-ports-of-the-pythtb-engine"]
 independent_tests = ["tests/numerical/test_slab_edges.py::test_cluster_summed_weights_are_invariant_inside_degenerate_clusters", "tests/numerical/test_slab_edges.py::test_haldane_ribbon_carries_one_chiral_mode_on_each_edge"]
+
+[[equations]]
+id = "electronic.histogram_gaussian_dos"
+expression = "DOS_j = sum_i N_i/(N_k*dE)*K_(j-i); K_m = exp(-(m*dE)^2/(2*sigma^2))/sum_(m') exp(-(m'*dE)^2/(2*sigma^2)) for |m| <= ceil(5*sigma/dE)"
+input_units = "N: eigenvalue counts per bin; dE and sigma: eV"
+output_units = "states/eV/cell"
+assumptions = ["Bins run from min(E) - 2 eV to max(E) + 2 eV in steps dE; levels outside are counted and reported", "Each Wannier band holds one state; no spin factor"]
+conventions = ["np.convolve 'same' mode per row; sigma <= 0 returns the histogram density", "DOS(E_F) interpolates linearly between bin centres; the historical rule takes the first bin whose centre is at or above 0"]
+canonical = "queer.compat.generator.estimators:gaussian_dos"
+specialized_backends = ["queer.compat.generator.estimators:eigenvalue_histogram", "queer.compat.generator.estimators:dos_at_fermi"]
+source_references = ["docs/generator_services.md#numerical-ports-of-the-pythtb-engine"]
+independent_tests = ["tests/numerical/test_generator_estimators.py::test_histogram_dos_conserves_states_and_smooths_one_level_into_a_discrete_gaussian", "tests/numerical/test_generator_estimators.py::test_dos_at_fermi_rules_match_the_replay_policies"]
+
+[[equations]]
+id = "electronic.hopping_decay_length"
+expression = "d = |R.A + tau_j - tau_i|; peak_b = max |H| in bin b of width 0.5 A; xi = -1/slope of ln(peak_b) against the bins' mean d over bins with mean d > 2 A and peak > 1e-8 eV"
+input_units = "H: eV; A and tau: angstrom"
+output_units = "angstrom"
+assumptions = ["At least three fitted bins; a nonnegative slope gives no decay length", "Slab centres are unwrapped across the vacuum before the fit"]
+conventions = ["Zero hops are ignored; the bins start at 0 A"]
+canonical = "queer.compat.generator.estimators:hopping_decay"
+specialized_backends = ["queer.compat.generator.estimators:unwrap_centres"]
+source_references = ["docs/generator_services.md#numerical-ports-of-the-pythtb-engine"]
+independent_tests = ["tests/numerical/test_generator_estimators.py::test_hopping_decay_recovers_an_exponential_length", "tests/numerical/test_generator_estimators.py::test_unwrap_centres_rejoins_a_slab_cut_by_the_wrap_line"]
