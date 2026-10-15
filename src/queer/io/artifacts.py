@@ -12,6 +12,7 @@ import socket
 import subprocess
 import tempfile
 import time
+import tomllib
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,6 +24,8 @@ import numpy as np
 from ..execution import ExecutionOptions
 
 ALGORITHM_VERSION = "1.4.1-refactor-v1"
+# The repository root when this module runs from a source checkout.
+_SOURCE_ROOT = Path(__file__).resolve().parents[3]
 
 
 def scheduler_context() -> dict[str, str]:
@@ -90,6 +93,69 @@ def atomic_npz(path: Path, arrays: Mapping[str, Any]) -> None:
             os.unlink(temporary)
 
 
+def _source_checkout(root: Path) -> bool:
+    """Whether ``root`` is a QUEER source checkout: its project file and Git metadata."""
+    try:
+        with (root / "pyproject.toml").open("rb") as stream:
+            project = tomllib.load(stream).get("project")
+    except (OSError, tomllib.TOMLDecodeError):
+        return False
+    return isinstance(project, dict) and project.get("name") == "queer" and (root / ".git").exists()
+
+
+def _source_revision(root: Path) -> dict[str, Any] | None:
+    if not _source_checkout(root):
+        return None
+    try:
+        commit = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+        ).stdout.strip()
+        dirty = bool(
+            subprocess.run(
+                ["git", "-C", str(root), "status", "--porcelain"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return {"commit": commit, "dirty": dirty}
+
+
+def distribution_identity() -> dict[str, Any]:
+    """Version, installed RECORD digest and release build revision of QUEER.
+
+    ``record_sha256`` hashes the raw bytes of the installed ``RECORD`` and is
+    ``None`` without an installed distribution. ``build_sha`` is the revision a
+    release build wrote into ``queer._build``; source checkouts carry ``None``.
+    """
+    version = None
+    record = None
+    try:
+        distribution = importlib.metadata.distribution("queer")
+    except importlib.metadata.PackageNotFoundError:
+        distribution = None
+    if distribution is not None:
+        version = distribution.version
+        for entry in distribution.files or ():
+            if entry.name == "RECORD" and entry.parent.name.endswith(".dist-info"):
+                try:
+                    content = Path(str(distribution.locate_file(entry))).read_bytes()
+                except OSError:
+                    break
+                record = hashlib.sha256(content).hexdigest()
+                break
+    if version is None:
+        from .. import __version__ as version
+    try:
+        from .._build import BUILD_SHA
+    except ImportError:
+        BUILD_SHA = None
+    build = BUILD_SHA if isinstance(BUILD_SHA, str) and BUILD_SHA else None
+    return {"version": version, "record_sha256": record, "build_sha": build}
+
+
 def environment_versions() -> dict[str, Any]:
     versions: dict[str, Any] = {"python": platform.python_version(), "platform": platform.platform()}
     for package in (
@@ -108,22 +174,10 @@ def environment_versions() -> dict[str, Any]:
             versions[package] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:
             versions[package] = "uninstalled"
-    try:
-        repository = Path(__file__).resolve().parents[3]
-        commit = subprocess.run(
-            ["git", "-C", str(repository), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
-        ).stdout.strip()
-        dirty = bool(
-            subprocess.run(
-                ["git", "-C", str(repository), "status", "--porcelain"],
-                capture_output=True,
-                text=True,
-                check=True,
-            ).stdout
-        )
-        versions["source"] = {"commit": commit, "dirty": dirty}
-    except (OSError, subprocess.CalledProcessError):
-        versions["source"] = None
+    # Git describes this code only when it runs from a QUEER checkout; an
+    # installed copy may sit inside an unrelated repository.
+    versions["source"] = _source_revision(_SOURCE_ROOT)
+    versions["queer_dist"] = distribution_identity()
     return versions
 
 

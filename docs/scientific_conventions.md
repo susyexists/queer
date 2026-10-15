@@ -61,6 +61,9 @@ different work-function/reference convention.
 
 Run manifests retain the environment, source version, scheduler allocation,
 resolved execution budget, status, and elapsed time for every resume attempt.
+The source commit comes from Git only when the code runs from a QUEER checkout;
+`queer_dist` records the installed version, the SHA-256 of its `RECORD` file and
+the revision a release build wrote into `queer._build`.
 Each checkpoint identifies its attempt and elapsed time since the previous
 checkpoint, including calculation and persistence. Release changes to numerical
 algorithms must update `ALGORITHM_VERSION` to prevent incompatible resumes.
