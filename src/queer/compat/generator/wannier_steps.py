@@ -20,7 +20,10 @@ driver does before any step runs:
   ``use_ws_distance`` (wannier90 3.x default: on). Without ``mp_grid`` the
   correction is off;
 - periodic directions from the raw table (or ``periodic_dirs``), hops folded off
-  the vacuum axes, and the averaged Hermitian model with PythTB's cutoffs.
+  the vacuum axes, and the averaged Hermitian model with PythTB's cutoffs. The
+  model block records ``hermiticity_weyl_bound``, which bounds every eigenvalue
+  difference between that model and PythTB's, the positive half of the table
+  completed by its conjugates.
 
 :meth:`WannierStepContext.validate` adds the driver's checks: the deviation from
 ``_band.dat`` (warning and failure thresholds), whether E_F lies in the frozen
@@ -330,6 +333,9 @@ class WannierStepContext:
             "fermi_source": self.params.get("fermi_source"),
             "ws_correction": report,
             "cutoffs": cutoffs,
+            # Bounds every eigenvalue difference between the averaged model and the
+            # table's positive half completed by its conjugates (Weyl's inequality).
+            "hermiticity_weyl_bound": float(self.model.metadata["hermiticity_weyl_bound"]),
             "species": list(self.species_names),
             "orbital_species": [self.species_names[index] for index in self.species_index],
             "mp_grid": None if self.win.mp_grid is None else list(self.win.mp_grid),

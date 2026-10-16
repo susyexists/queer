@@ -47,6 +47,7 @@ MODEL_KEYS = {
     "fermi_energy",
     "fermi_source",
     "folded_axes",
+    "hermiticity_weyl_bound",
     "lattice",
     "mp_grid",
     "n_R",
