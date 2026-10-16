@@ -18,10 +18,16 @@ within 3e-6 eV (the skip threshold plus a 2e-6 eV margin), the last bits of
 the eigenvalues can decide which pairs count; the maps and the path are also
 compared without those points, and the plane integral is checked to differ by
 their share alone.
+
+The parity comparator then judges the job's directory against the replay's: the
+verdict must be ``pass`` with every recorded input digest equal.
+``QUEER_PARITY_REPORT_DIR`` names a directory that receives the report as JSON
+and Markdown.
 """
 
 import json
 import os
+import shutil
 from pathlib import Path
 from types import MappingProxyType
 
@@ -30,6 +36,7 @@ import pytest
 
 from queer.compat.generator import runner
 from queer.compat.generator.berry import run_berry
+from queer.compat.generator.parity import compare, render_markdown
 from queer.compat.generator.results import EXIT_OK, RESULTS_FILENAME
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -59,6 +66,16 @@ MAP_RELATIVE_TOL = 1e-6
 INTEGRAL_TOL = 1e-9
 BLOCK_RELATIVE_TOL = 1e-9
 QUEER_ONLY_MODEL_KEYS = ("approximation", "pythtb_version", "queer_version")
+
+
+def save_parity_report(report, name):
+    """``<QUEER_PARITY_REPORT_DIR>/<name>.json`` and ``.md`` when the variable is set."""
+    directory = os.environ.get("QUEER_PARITY_REPORT_DIR")
+    if directory:
+        Path(directory).mkdir(parents=True, exist_ok=True)
+        (Path(directory) / f"{name}.json").write_text(json.dumps(report, indent=1) + "\n")
+        (Path(directory) / f"{name}.md").write_text(render_markdown(report))
+
 
 pytestmark = [
     pytest.mark.slow,
@@ -256,3 +273,16 @@ def test_8621166b_berry_step_matches_the_drivers_results(tmp_path, monkeypatch):
     assert [(o["path"], o["title"], o["kind"]) for o in document["outputs"]] == [
         (o["path"], o["title"], o["kind"]) for o in expected["outputs"]
     ]
+
+    shutil.copyfile(params_path, workspace / "pythtb_params.json")
+    verdict = compare("QUEER_BERRY", JOB, workspace)
+    save_parity_report(verdict, f"{JOB.name}-QUEER_BERRY")
+    print(
+        json.dumps(
+            {key: verdict[key] for key in ("verdict", "semantics", "summary", "flagged_sets")}, indent=1
+        )
+    )
+    assert verdict["verdict"] == "pass", verdict["summary"]
+    assert verdict["inputs_verified_by_fingerprint"] is False
+    inputs = next(item for item in verdict["preconditions"] if item["name"] == "inputs")
+    assert inputs["ok"] and inputs["detail"].startswith("SHA-256 equal for 6 files")

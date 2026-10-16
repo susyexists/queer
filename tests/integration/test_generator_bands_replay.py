@@ -16,16 +16,24 @@ The job's band path is wannier90's own ``_band.kpt`` samples, which the driver
 takes only with the ticks of ``_band.labelinfo.dat``. A replay copy without that
 file gets it back from the ticks the job's results record; the reader uses only
 each row's label and index.
+
+The parity comparator then judges the job's directory against the replay's: the
+job's driver revision is registered, so the verdict must be ``pass`` under its
+semantics, with the inputs, which that revision did not record, verified by the
+model fingerprint. ``QUEER_PARITY_REPORT_DIR`` names a directory that receives the
+report as JSON and Markdown.
 """
 
 import json
 import os
+import shutil
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 from queer.compat.generator.estimators import DOS_AT_FERMI_RULES, dos_at_fermi
+from queer.compat.generator.parity import compare, render_markdown
 from queer.compat.generator.results import EXIT_OK, RESULTS_FILENAME
 from queer.compat.generator.runner import run
 from queer.io.wannier import read_band_kpt
@@ -65,6 +73,15 @@ def restore_labelinfo(workspace, bands):
     ]
     (workspace / "wannier90_band.labelinfo.dat").write_text("\n".join(rows) + "\n")
     return np.asarray(kpoints)
+
+
+def save_parity_report(report, name):
+    """``<QUEER_PARITY_REPORT_DIR>/<name>.json`` and ``.md`` when the variable is set."""
+    directory = os.environ.get("QUEER_PARITY_REPORT_DIR")
+    if directory:
+        Path(directory).mkdir(parents=True, exist_ok=True)
+        (Path(directory) / f"{name}.json").write_text(json.dumps(report, indent=1) + "\n")
+        (Path(directory) / f"{name}.md").write_text(render_markdown(report))
 
 
 pytestmark = [
@@ -163,3 +180,11 @@ def test_e228d1af_bands_step_matches_the_drivers_results(tmp_path):
     assert rules["first_nonnegative_bin"] == pytest.approx(reference_value, abs=DOS_TOL)
     assert document["fermi_surface"]["bands_crossing"] == expected["fermi_surface"]["bands_crossing"]
     assert document["warnings"] == expected["warnings"]
+
+    shutil.copyfile(params_path, workspace / "pythtb_params.json")
+    report = compare("QUEER_BANDS", job, workspace)
+    save_parity_report(report, f"{job.name}-QUEER_BANDS")
+    print(json.dumps({key: report[key] for key in ("verdict", "semantics", "summary")}, indent=1))
+    assert report["verdict"] == "pass", report["summary"]
+    assert report["semantics"]["profile"] == "driver-9f43886"
+    assert report["inputs_verified_by_fingerprint"] is True
