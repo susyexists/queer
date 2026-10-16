@@ -753,6 +753,12 @@ class _Comparison:
             ]
             if digests[0] and digests[0] == digests[1]:
                 return self.precondition("parameters", True, "identical parameter files (params_sha256)")
+            if digests[0] and digests[1]:
+                # Both runs recorded their parameter file and the files differ, but
+                # the files themselves are not here to show where: unverifiable.
+                return self.precondition(
+                    "parameters", False, "parameter files differ (params_sha256) and are not available"
+                )
             missing = [run.role for run in (reference, candidate) if run.params is None]
             return self.precondition(
                 "parameters", True, f"not compared: no parameter file for {' and '.join(missing)}"

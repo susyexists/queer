@@ -206,6 +206,21 @@ def test_a_different_step_parameter_is_not_comparable(runs, tmp_path):
     assert "dos_sigma_eV" in failed(report)["parameters"]
 
 
+def test_differing_parameter_digests_without_the_files_are_not_comparable(runs, tmp_path):
+    reference, candidate = runs["haldane_bands"]
+    reference = copy(reference, tmp_path / "reference")
+    candidate = copy(candidate, tmp_path / "candidate")
+    for directory in (reference, candidate):
+        for params in directory.glob("*_params.json"):
+            params.unlink()
+    document = read(candidate / QUEER_RESULTS)
+    document["provenance"]["params_sha256"] = "0" * 64
+    write(candidate / QUEER_RESULTS, document)
+    report = compare("QUEER_BANDS", reference, candidate)
+    assert report["verdict"] == NOT_COMPARABLE
+    assert list(failed(report)) == ["parameters"]
+
+
 def test_execution_settings_and_the_atom_order_are_not_step_parameters(runs, tmp_path):
     reference, _ = runs["haldane_bands"]
     structure = read(reference / "pythtb_params.json")["structure"]
