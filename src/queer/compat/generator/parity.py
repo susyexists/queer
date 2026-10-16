@@ -962,6 +962,11 @@ class _Comparison:
         handled = set(OCCUPATION_DERIVED) | set(OCCUPATION_ENERGIES_EV) | set(OCCUPATION_ENERGIES_MEV)
         handled |= set(OCCUPATION_KPOINTS) | {"dos_at_fermi_per_eV"}
         keys = sorted((set(reference) | set(candidate)) - handled)
+        # is_direct compares the band-edge k-points, so a tie between extrema
+        # can flip it; a flipped flag is judged with those k-points below.
+        direct_flipped = reference.get("is_direct") != candidate.get("is_direct")
+        if direct_flipped and "is_direct" in keys:
+            keys.remove("is_direct")
         self.exact(f"{name}.counts", reference, candidate, keys)
         edge_tol = EDGE_FACTOR * self.eigenvalue_tol
         worst = 0.0
@@ -989,24 +994,54 @@ class _Comparison:
             difference = _max_difference(a, b) if a is not None or b is not None else 0.0
             if difference is None or difference > COORDINATE_TOL:
                 moved.append((key, energy))
+        tied = bool(moved)
         if not moved:
             self.quantity(f"{name}.edge_kpoints", AGREE, 0.0, COORDINATE_TOL, "band-edge k-points equal")
-            return
-        tied = True
-        for _, energy in moved:
-            difference = _max_difference(reference.get(energy), candidate.get(energy))
-            tied = tied and difference is not None and difference <= edge_tol
-        detail = ", ".join(f"{key} {reference.get(key)} vs {candidate.get(key)}" for key, _ in moved)
-        if tied:
-            self.quantity(
-                f"{name}.edge_kpoints",
-                DOCUMENTED,
-                None,
-                COORDINATE_TOL,
-                _shorten(f"an extremum tied within 2 τ_E at another k-point: {detail}"),
-            )
         else:
-            self.quantity(f"{name}.edge_kpoints", UNEXPLAINED, None, COORDINATE_TOL, _shorten(detail))
+            for _, energy in moved:
+                difference = _max_difference(reference.get(energy), candidate.get(energy))
+                tied = tied and difference is not None and difference <= edge_tol
+            detail = ", ".join(f"{key} {reference.get(key)} vs {candidate.get(key)}" for key, _ in moved)
+            if tied:
+                self.quantity(
+                    f"{name}.edge_kpoints",
+                    DOCUMENTED,
+                    None,
+                    COORDINATE_TOL,
+                    _shorten(f"an extremum tied within 2 τ_E at another k-point: {detail}"),
+                )
+            else:
+                self.quantity(f"{name}.edge_kpoints", UNEXPLAINED, None, COORDINATE_TOL, _shorten(detail))
+        if direct_flipped:
+            self.judge_direct_flag(name, reference, candidate, tied, edge_tol)
+
+    def judge_direct_flag(
+        self,
+        name: str,
+        reference: Mapping[str, Any],
+        candidate: Mapping[str, Any],
+        tied: bool,
+        edge_tol: float,
+    ) -> None:
+        """A flipped ``is_direct``: documented only as the tie-break of extrema that moved within a tie.
+
+        The flag says whether the valence maximum and conduction minimum were
+        picked at one k-point. With extrema tied at several k-points (K and K'
+        of a honeycomb model) the pick follows rounding, so the flag can flip
+        while the physics holds: in both runs the smallest direct gap must
+        equal the gap, which makes the gap direct whichever k-points were picked.
+        """
+
+        def gap_is_direct(document: Mapping[str, Any]) -> bool:
+            difference = _max_difference(document.get("direct_gap_eV"), document.get("gap_eV"))
+            return difference is not None and difference <= edge_tol
+
+        detail = f"is_direct {reference.get('is_direct')} vs {candidate.get('is_direct')}"
+        if tied and gap_is_direct(reference) and gap_is_direct(candidate):
+            detail += "; the tied extrema were picked at other k-points, and the direct gap equals the gap in both runs"
+            self.quantity(f"{name}.is_direct", DOCUMENTED, None, None, detail)
+        else:
+            self.quantity(f"{name}.is_direct", UNEXPLAINED, None, None, detail)
 
     # ---------------------------------------------------------------- BANDS
     def compare_bands(self) -> None:

@@ -20,10 +20,21 @@ sys.path.insert(0, str(ROOT / "tests" / "numerical"))
 
 from generator_golden_cases import CASES, write_case  # noqa: E402
 
-from queer.compat.generator.parity import AGREE, NOT_APPLICABLE, PASS, compare  # noqa: E402
+from queer.compat.generator.parity import (  # noqa: E402
+    AGREE,
+    DOCUMENTED,
+    NOT_APPLICABLE,
+    PASS,
+    PASS_DOCUMENTED,
+    compare,
+)
 from queer.compat.generator.runner import run  # noqa: E402
 
 DRIVER_CORE_SHA256 = "56fda912ba570e2293b3a9b4bf20d11038c64efa5d2f192c8ac03c615034e215"
+# Extrema tied at several k-points (K and K' of the honeycomb models) are picked
+# by rounding, which differs between BLAS kernels and machines. Only those picks
+# may differ from a golden, as documented ties; everything else must agree.
+TIE_BREAKS = ("edge_kpoints", "is_direct", "gap_midpoints")
 
 
 def test_every_case_has_a_golden_and_nothing_else_is_stored():
@@ -43,8 +54,10 @@ def test_the_driver_golden_of_a_case_passes_against_queer(tmp_path, name):
     params = write_case(name, tmp_path)
     assert run(None, params, tmp_path, log=lambda line: None) == 0
     report = compare(CASES[name].step, golden, tmp_path)
-    assert report["verdict"] == PASS, report["summary"]
-    assert {item["class"] for item in report["quantities"]} <= {AGREE, NOT_APPLICABLE}
+    assert report["verdict"] in (PASS, PASS_DOCUMENTED), report["summary"]
+    assert {item["class"] for item in report["quantities"]} <= {AGREE, NOT_APPLICABLE, DOCUMENTED}
+    documented = [item["name"] for item in report["quantities"] if item["class"] == DOCUMENTED]
+    assert all(item.rsplit(".", 1)[-1] in TIE_BREAKS for item in documented), documented
     assert report["reference"]["engine"] == "pythtb" and report["candidate"]["engine"] == "queer"
     inputs = next(item for item in report["preconditions"] if item["name"] == "inputs")
     assert inputs["ok"] and inputs["detail"].startswith("SHA-256 equal for 6 files")

@@ -197,6 +197,38 @@ def test_a_changed_edge_crossing_count_fails(runs, tmp_path):
     assert report["summary"]["unexplained"] == ["slab.edge_crossings_at_fermi"]
 
 
+def tied_valence_maximum(runs, tmp_path, *, move_kpoint):
+    """The Kane-Mele pair with the candidate's is_direct flipped, its VBM optionally at the other valley."""
+    reference, candidate = runs["kane_mele_topology"]
+    candidate = copy(candidate, tmp_path / "candidate")
+    document = read(candidate / QUEER_RESULTS)
+    occupation = document["topology"]["occupation"]
+    assert occupation["direct_gap_eV"] == pytest.approx(occupation["gap_eV"])
+    if move_kpoint:
+        # K and K' hold the same valence maximum; the other one is picked.
+        k1, k2, k3 = occupation["vbm_k"]
+        occupation["vbm_k"] = [k2, k1, k3]
+    # Which valley this machine's rounding picked does not matter: the flag flips.
+    occupation["is_direct"] = not occupation["is_direct"]
+    write(candidate / QUEER_RESULTS, document)
+    return compare("QUEER_TOPOLOGY", reference, candidate)
+
+
+def test_a_direct_flag_flipped_by_tied_extrema_is_documented(runs, tmp_path):
+    report = tied_valence_maximum(runs, tmp_path, move_kpoint=True)
+    assert report["verdict"] == PASS_DOCUMENTED, report["summary"]
+    kinds = classes(report)
+    assert kinds["topology.occupation.edge_kpoints"] == DOCUMENTED
+    assert kinds["topology.occupation.is_direct"] == DOCUMENTED
+    assert kinds["topology.occupation.counts"] == AGREE
+
+
+def test_a_direct_flag_flipped_without_a_tie_fails(runs, tmp_path):
+    report = tied_valence_maximum(runs, tmp_path, move_kpoint=False)
+    assert report["verdict"] == FAIL
+    assert report["summary"]["unexplained"] == ["topology.occupation.is_direct"]
+
+
 def test_a_different_step_parameter_is_not_comparable(runs, tmp_path):
     reference, _ = runs["haldane_bands"]
     candidate = run_case("haldane_bands", tmp_path / "candidate", dos_sigma_eV=0.07)

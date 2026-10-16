@@ -440,7 +440,7 @@ A difference removed by one of these rules is classed `agree_after_convention`.
 | Quantity | Rule |
 |---|---|
 | Band eigenvalues | τ_E = max(1e-8 eV, δ_W) + 1e-13 max\|E\| |
-| Gap, band edges, isolation, Kramers splitting | 2 τ_E; a band edge found at another k-point with an energy within 2 τ_E is a documented tie |
+| Gap, band edges, isolation, Kramers splitting | 2 τ_E; a band edge found at another k-point with an energy within 2 τ_E is a documented tie, and so is the `is_direct` flag it flips when both runs' smallest direct gap equals their gap |
 | DOS, PDOS, DOS(E_F) | 1e-9 of the row's largest value. When δ_W > 0, eigenvalues may cross bin edges: a difference that conserves the states and stays within an L1 budget of 2 (N_bands N_k 2τ_E/ΔE + 1)/N_k is documented |
 | Fermi-surface contours | the same crossing bands; symmetric Hausdorff distance ≤ max(1e-9 \|b\|, 1e-6) in the stored coordinates (1/Å without 2π) |
 | Chern, Z2, convergence, crossings | equal, per plane matched by (fixed axis, value) |
