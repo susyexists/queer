@@ -392,7 +392,9 @@ reference run of the same step and returns a JSON-able report; `render_markdown`
 renders it. Each directory holds one results document (`queer_results.json` or the
 PythTB driver's `pythtb_results.json`), optionally its parameter file
 (`queer_params.json` or `pythtb_params.json`) and the step's `Out/*.json` data files.
-Model files are never read.
+Model files are never read. The OpenMX families (AHC, CHERN_NUMBER) compare a QUEER
+run with a PyATB run directory; see [OpenMX steps of the PyATB
+counterpart](#openmx-steps-of-the-pyatb-counterpart).
 
 ```bash
 python -m queer generator compare --step QUEER_BERRY \
@@ -473,6 +475,148 @@ and the tests require every golden to pass against a fresh QUEER run with all in
 digests equal. `scripts/validation/generate_generator_goldens.py` regenerates them
 with the vendored driver under `uv run --no-project --python 3.12 --with
 pythtb==2.0.2 --with scipy --with matplotlib`.
+
+### OpenMX steps of the PyATB counterpart
+
+`QUEER_AHC` and `QUEER_CHERN_NUMBER` (aliases `PYATB_AHC`, `PYATB_CHERN_NUMBER`) run
+the calculation of PyATB's `AHC` or `CHERN_NUMBER` block on the staged OpenMX scfout
+with QUEER's own model (`queer.compat.generator.openmx_steps`):
+
+```bash
+python -m queer generator run --step QUEER_AHC --params queer_params.json
+```
+
+**Parameter file.** The Generator writes `queer_params.json` beside the scfout
+(`queer.compat.generator.openmx_params`):
+
+| Key | Meaning |
+|---|---|
+| `step_type`, `counterpart_step_type` | `QUEER_AHC`/`PYATB_AHC` or `QUEER_CHERN_NUMBER`/`PYATB_CHERN_NUMBER` |
+| `input_parameters` | PyATB's INPUT_PARAMETERS as written to its `Input`, without `package` (always OPENMX) and `scfout_route`: `nspin`, `fermi_energy`, `fermi_energy_unit`, `hall_convention`, `max_kpoint_num`, `sparse_format` |
+| `parameters` | the function block as written to PyATB's `Input` |
+| `workers` | processes; absent or null: every CPU of the allocation |
+| `scfout` | the staged scfout relative to the workspace (default `scf.scfout`) |
+| `self_convergence` | `true` also evaluates a refining integration on the doubled grid |
+
+Unknown keys, `package`, `scfout_route` and values PyATB refuses fail with
+`queer_bad_params` before any calculation, as does an `nspin` the scfout's
+`SpinP_switch` contradicts (4 with spin-orbit coupling, else 1).
+`params_from_pyatb_input` builds the file from a parsed PyATB `Input`.
+`workers`, `max_kpoint_num` (a cap on the k-points of one task) and
+`sparse_format` never change a result.
+
+**Conventions,** measured against PyATB (build 60fc6b2a) on an OpenMX scfout:
+
+| Quantity | PyATB | QUEER |
+|---|---|---|
+| Hartree | 27.211324570273 eV | CODATA `HARTREE_EV` |
+| `fermi_energy Auto` | `ChemP * 27.211324570273` | `ChemP * HARTREE_EV`; `chemp_hartree` recorded |
+| explicit `fermi_energy` (eV; Ry at 13.605698066 eV) | sampled at `E / 27.211324570273` Hartree | sampled at `E * HARTREE_EV / 27.211324570273` eV; both values recorded |
+| Hall sign of the direct/Kubo engine | native: minus the physical value; `openmx`, `fhs`, `auto` (OpenMX input) flip it | physical `-(e²/ħ) ∫ f Ω`; `Out/AHC/ahc.dat` holds `export_sign` times it |
+| Hall sign of the FHS engine | physical, whatever `hall_convention` says | physical |
+| Chern number | plane flux over 2π, no Hall sign | the same orientation |
+| Grid nodes | `k_start + Σ v_i n_i / N_i`, upper end excluded | the same nodes (`kmesh`) |
+| Grid refinement | a node whose occupied curvature norm reaches the threshold (Å², raw, before prefactor and sign; for a Chern number its normal component) is replaced by an `adaptive_grid` sub-grid starting half a cell below it | refinement off (threshold ≥ 1e30): the plain grid; otherwise QUEER's threshold quadrature on cell midpoints |
+| Spin without spin-orbit coupling | `Hks[0]` only: the spin-up channel of a collinear SCF, no spin factor | the physical value, and `legacy_single_channel` (channel 0, occupied once) |
+| Chern `integrate_mode Adaptive` | stops with an AttributeError | QUEER's cubature (a gapped plane) |
+
+A 1 x 1 x 1 `adaptive_grid` does not switch PyATB's replacement off: a flagged
+node is still replaced by the node half a cell below it.
+
+**Integration.** A Grid with the refinement off is the plain Gamma-origin sum,
+evaluated point by point with the functions `queer.observables.integrated.ahc`
+sums (the same result to the last bit); each point's occupation facts give the
+flagged set `F`: points with a level within `delta_EF` of E_F, or an occupied-empty
+pair in one spin channel closer than 1e-4 eV, where `delta_EF = 1e-6 eV *
+HARTREE_EV / 27.211324570273` (the Fermi-energy agreement allowed between the
+codes) `+ max(1e-8 eV, degeneracy tolerance)`. `per_k_flagged` lists each point of
+`F` with its contribution `c_k` (S/cm per component; dimensionless for a Chern
+number), the largest first. A refining Grid runs QUEER's threshold quadrature and an
+Adaptive integral QUEER's cubature with PyATB's tolerances (`absolute_error` in
+S/cm). Their nodes differ from PyATB's, so their comparison needs
+`self_convergence: true`, which records `e_Q = |sigma(N) - sigma(2N)|` (the grid
+doubled on its active axes; 4 or 8 times the cost); a cubature also records its own
+embedded error estimate. The FHS engine scans PyATB's energies (the window
+offsets, upper end excluded) with QUEER's FHS plaquettes; `fhs_dimension 0`
+evaluates the k1-k2 plane only. A Chern number on a plane that is metallic at E_F
+is the Fermi-sea flux over 2π (PyATB's definition) with the warning
+`chern_plane_metallic`; a refining Chern integral requires a gapped plane.
+
+**Results.** `queer_results.json` holds `engine`, `step_type`,
+`counterpart_step_type`, `provenance` (QUEER version, `queer_record_sha256`, the
+bytes and SHA-256 of `scf.scfout` and `queer_params.json` in `inputs`, the parallel
+plans), `model` (`scfout_sha256`, `spin_mode`, `spin_p_switch`, `nspin`,
+`fermi_energy` sampled, `fermi_source`, `fermi_energy_pyatb_eV`, `chemp_hartree`,
+both Hartree values, the lattice and volume), `ahc` (`mu_eV`, `mu_pyatb_eV`,
+`energy_offsets_eV`, `sigma_S_cm {yz, zx, xy}` per energy, `at_fermi`,
+`convention {requested, resolved, export_sign}`, `legacy_single_channel`,
+`per_k_flagged`, `flagged`, `raw_curvature_to_S_cm`) or `chern` (`value`, `integer`,
+`gapped`, `method`, `integrate_mode`, `occupied_bands`, `plane`, `flux`,
+`legacy_single_channel`, `per_k_flagged`, `flagged`), `integration` (mode,
+refinement, grid, threshold in Å², node placement, points, error estimate,
+`self_convergence`), `warnings` with their `warning_codes` and `outputs`. The
+workspace also receives PyATB's `Out/AHC/ahc.dat` or `Out/Chern_Num/chern_number.dat`
+in PyATB's layout and requested sign, and neither `pyatb_results.json` nor
+`manifest.json`. Failures write the same document with `status: failed` and
+`error {code, message}`: `queer_bad_params`, `queer_missing_input` (the scfout is
+missing or cannot be read), `queer_validation_failed` (a refining Chern integral on
+a metallic plane), `queer_env_missing`, `queer_oom` and `queer_internal_error`, with
+exit codes 2, 2, 2, 2, 3 and 1.
+
+**Parity.** `compare` reaches `queer.compat.generator.parity_pyatb` for the
+`AHC` and `CHERN_NUMBER` families. The reference is a PyATB run directory: `Input`,
+optional `inputs.sha256`, `Out/input.json`, `Out/running.log`, the product and,
+for an adaptive integral, `Out/AHC/integraton.log`. The command recognises such a
+directory and needs no `--step`; `--scfout FILE` names the scfout to hash when the
+reference has no `inputs.sha256`:
+
+```bash
+python -m queer generator compare --reference runs/pyatb-ahc --candidate runs/queer-ahc \
+  --scfout runs/pyatb-ahc/scf.scfout --report parity.json --markdown parity.md
+```
+
+The preconditions are the family, the scfout digest (and the reference `Input`
+against its recorded digest), the effective parameters (PyATB's defaults applied,
+keys of the other engine and integration mode and the execution-only keys left
+out), the Fermi point `|E_F^Q / HARTREE_EV - E_F^P / 27.211324570273| <= 1e-6 /
+27.211324570273` Hartree (E_F^P from the input echo, or the six decimals
+`running.log` prints for `Auto`; the eV difference is `agree_after_convention`),
+the resolved Hall convention, and an integration that can be compared: an adaptive
+integral from at least 512 cells and an error estimate for a refining one.
+PyATB's printed values are compared with QUEER's physical value times the sign
+table's factor (`agree_after_convention` when it is -1) and, without spin-orbit
+coupling, with `legacy_single_channel` (`agree_after_convention`):
+
+| Tier | When | Rule per component |
+|---|---|---|
+| A | Grid with the refinement off in both runs | `|d sigma| <= 2e-7 |sigma| + sum_F |c_k| + 5e-7 S/cm` |
+| B | a Grid threshold below 1e30, or Adaptive | outside Tier A, `differs_documented` only if `|d sigma| <= 3 max(e_Q, e_P)`; without `e_Q`, `not_comparable` |
+| FHS | the FHS engine | the energies equal to the printed six decimals; `agree` when every energy meets Tier A, else `differs_documented` with the largest gap and the correlation |
+| Chern | gapped plane, both values within 0.05 of an integer | the integers equal; otherwise the floats meet Tier A with a 1e-9 floor (Tier B when refining) |
+
+2e-7 covers the two codes' physical constants (PyATB's e and ħ differ from CODATA's
+by up to 1.8e-7 in e²/ħ) and 5e-7 S/cm the six decimals PyATB prints. `e_P` is
+PyATB's last-generation error in `integraton.log`, converted with
+`raw_curvature_to_S_cm`. The candidate's own product file must hold what its
+document says. Two failed runs pass when their failures are equivalent: PyATB's
+are classified from its logs (an nspin conflict is `bad_params`, a memory failure
+`oom`).
+
+**Calibration.** On a kagome Chern insulator with spin-orbit coupling (101 kB
+scfout; E_F -2.35 eV on its sigma_xy plateau, -2.12 eV in a band, -2.60 eV below
+it) every Tier A case passes, direct and Kubo, in each convention: QUEER's 38.740461
+and 33.739453 S/cm (direct; plateau and metal) against PyATB's 38.740468 and
+33.739459 are the constant 1.7e-7 of the physical constants. The Chern numbers are
+-1.0000000000000013 (QUEER) and -0.9999999999999967 (PyATB). Refined Grids (thresholds 10 and 20 Å²,
+2 x 2 sub-grids) are `differs_documented`: |d sigma| 0.0096 and 0.0090 S/cm within
+3 e_Q (e_Q 0.0048 and 0.0044 S/cm). The FHS scan (201 energies) agrees to Tier A
+at the 159 energies in a gap; at the 42 energies inside a band QUEER's FHS stays
+within 0.002-0.04 S/cm of the direct Fermi-sea sum on the same grid while PyATB's
+lies 0.07-0.13 S/cm above it (correlation 0.999998): PyATB builds its plaquette
+links from a first-order expansion of exp(i dk.r) at the link's start, QUEER at its
+midpoint, and the difference shows only where the occupied rank changes across
+plaquettes, inside a band. `tests/integration/test_generator_pyatb_calibration.py` replays the
+twelve cases with `QUEER_PYATB_CALIBRATION=1`.
 
 ### Replaying saved response calculations
 

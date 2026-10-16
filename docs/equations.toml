@@ -466,7 +466,7 @@ assumptions = ["Both codes read the same scfout Hamiltonian in Hartree", "PyATB 
 conventions = ["An energy is the same physical point in both codes when its Hartree values are equal", "Explicit PyATB energies, FHS scan offsets included, move to QUEER's scale; Auto is the scfout's ChemP in both"]
 canonical = "queer.compat.generator.pyatb_conventions:queer_energy"
 specialized_backends = ["queer.compat.generator.pyatb_conventions:pyatb_input_fermi_energy", "queer.compat.generator.pyatb_conventions:fermi_difference_hartree"]
-source_references = ["docs/generator_services.md#compatibility-and-exported-products"]
+source_references = ["docs/generator_services.md#compatibility-and-exported-products", "docs/generator_services.md#openmx-steps-of-the-pyatb-counterpart"]
 independent_tests = ["tests/unit/test_generator_pyatb_conventions.py::test_explicit_fermi_energies_move_to_queer_hartree_scale", "tests/unit/test_generator_pyatb_conventions.py::test_the_fermi_rule_compares_the_two_hartree_scales", "tests/unit/test_generator_pyatb_conventions.py::test_fhs_scans_sample_pyatb_energies_on_queer_scale"]
 
 [[equations]]
@@ -478,5 +478,17 @@ assumptions = ["The same curvature orientation Omega_ab = -2 Im Q_ab in both cod
 conventions = ["auto resolves to openmx for an OPENMX package, pyatb otherwise", "A file in PyATB's layout holds s times QUEER's physical value"]
 canonical = "queer.compat.generator.pyatb_conventions:hall_export_sign"
 specialized_backends = ["queer.compat.generator.pyatb_conventions:resolve_hall_convention"]
-source_references = ["docs/generator_services.md#compatibility-and-exported-products"]
+source_references = ["docs/generator_services.md#compatibility-and-exported-products", "docs/generator_services.md#openmx-steps-of-the-pyatb-counterpart"]
 independent_tests = ["tests/unit/test_generator_pyatb_conventions.py::test_the_hall_sign_table", "tests/unit/test_generator_pyatb_conventions.py::test_auto_resolves_per_package_and_unknown_conventions_are_refused", "tests/integration/test_generator_services.py::test_pyatb_exports_apply_the_sign_table_and_pyatbs_layouts"]
+
+[[equations]]
+id = "response.grid_hall_contributions"
+expression = "sigma_ab = -g*(e^2/hbar)*(1e8/V)*(1/N)*sum_k sum_n f_n(k)*Omega_n,ab(k); c_k = -g*(e^2/hbar)*(1e8/V)*(1/N)*sum_n f_n(k)*Omega_n,ab(k); C = sum_k sum_n f_n*Omega_n,ab*s1_a*s2_b/(N1*N2*2*pi); F = {k: min_n |E_n - mu| < delta_EF or a same-channel occupied-empty gap < 1e-4 eV}"
+input_units = "Omega: angstrom^2; V: angstrom^3; E and mu: eV; s1, s2: reciprocal spans in inverse angstrom"
+output_units = "sigma and c_k: S/cm; C: dimensionless"
+assumptions = ["Gamma-origin nodes k_start + sum_i v_i n_i/N_i, upper boundary excluded", "Zero temperature: f = 1 for E < mu (or the lowest occupied_bands levels)", "delta_EF = 1e-6 eV*HARTREE_EV/27.211324570273 + max(1e-8 eV, the model's degeneracy tolerance)"]
+conventions = ["g is the spin degeneracy (2 without spin polarization)", "The sum equals queer.observables.integrated.ahc on the same nodes to the last bit", "A metallic plane's C is the Fermi-sea flux, not a topological invariant"]
+canonical = "queer.compat.generator.openmx_steps:hall_rows"
+specialized_backends = ["queer.compat.generator.openmx_steps:hall_factor", "queer.compat.generator.openmx_steps:run_chern"]
+source_references = ["docs/generator_services.md#openmx-steps-of-the-pyatb-counterpart", "https://doi.org/10.1103/RevModPhys.82.1959"]
+independent_tests = ["tests/numerical/test_generator_openmx_steps.py::test_the_grid_ahc_is_queers_own_sum_and_pyatbs_layout", "tests/numerical/test_generator_openmx_steps.py::test_a_level_at_the_fermi_energy_flags_its_point_with_its_contribution", "tests/numerical/test_generator_openmx_steps.py::test_the_chern_number_is_queers_own_and_a_metal_gives_the_fermi_sea_flux", "tests/numerical/test_generator_openmx_steps.py::test_the_single_channel_model_is_the_spin_up_hamiltonian_occupied_once"]
