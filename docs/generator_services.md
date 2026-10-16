@@ -501,7 +501,11 @@ python -m queer generator run --step QUEER_AHC --params queer_params.json
 Unknown keys, `package`, `scfout_route` and values PyATB refuses fail with
 `queer_bad_params` before any calculation, as does an `nspin` the scfout's
 `SpinP_switch` contradicts (4 with spin-orbit coupling, else 1).
-`params_from_pyatb_input` builds the file from a parsed PyATB `Input`.
+`params_from_pyatb_input` builds the file from a parsed PyATB `Input` (or, with
+`echo=True`, from PyATB's resolved `Out/input.json`) and always writes
+`hall_convention`: a missing key is `auto` in an `Input` and `pyatb` in an echo,
+which names the key whenever PyATB has one, so an echo without it comes from an
+older PyATB that printed its native sign.
 `workers`, `max_kpoint_num` (a cap on the k-points of one task) and
 `sparse_format` never change a result.
 
@@ -512,7 +516,7 @@ Unknown keys, `package`, `scfout_route` and values PyATB refuses fail with
 | Hartree | 27.211324570273 eV | CODATA `HARTREE_EV` |
 | `fermi_energy Auto` | `ChemP * 27.211324570273` | `ChemP * HARTREE_EV`; `chemp_hartree` recorded |
 | explicit `fermi_energy` (eV; Ry at 13.605698066 eV) | sampled at `E / 27.211324570273` Hartree | sampled at `E * HARTREE_EV / 27.211324570273` eV; both values recorded |
-| Hall sign of the direct/Kubo engine | native: minus the physical value; `openmx`, `fhs`, `auto` (OpenMX input) flip it | physical `-(e²/ħ) ∫ f Ω`; `Out/AHC/ahc.dat` holds `export_sign` times it |
+| Hall sign of the direct/Kubo engine | native: minus the physical value; `openmx`, `fhs`, `auto` (OpenMX input) flip it; the prefactor carries the signed reciprocal volume, so a left-handed lattice flips it again | physical `-(e²/ħ) ∫ f Ω`; `Out/AHC/ahc.dat` holds `export_sign` times it: the sign table's factor times the lattice's handedness (`model.lattice_handedness`) |
 | Hall sign of the FHS engine | physical, whatever `hall_convention` says | physical |
 | Chern number | plane flux over 2π, no Hall sign | the same orientation |
 | Grid nodes | `k_start + Σ v_i n_i / N_i`, upper end excluded | the same nodes (`kmesh`) |
@@ -576,9 +580,11 @@ python -m queer generator compare --reference runs/pyatb-ahc --candidate runs/qu
 ```
 
 The preconditions are the family, the scfout digest (and the reference `Input`
-against its recorded digest), the effective parameters (PyATB's defaults applied,
+against its recorded digest), the effective parameters (both sides read as the
+runner reads them, text vectors and numbers included; PyATB's defaults applied,
 keys of the other engine and integration mode and the execution-only keys left
-out), the Fermi point `|E_F^Q / HARTREE_EV - E_F^P / 27.211324570273| <= 1e-6 /
+out; an echo without `hall_convention` is `pyatb`), then, for two completed runs,
+the Fermi point `|E_F^Q / HARTREE_EV - E_F^P / 27.211324570273| <= 1e-6 /
 27.211324570273` Hartree (E_F^P from the input echo, or the six decimals
 `running.log` prints for `Auto`; the eV difference is `agree_after_convention`),
 the resolved Hall convention, and an integration that can be compared: an adaptive
@@ -599,8 +605,12 @@ by up to 1.8e-7 in e²/ħ) and 5e-7 S/cm the six decimals PyATB prints. `e_P` is
 PyATB's last-generation error in `integraton.log`, converted with
 `raw_curvature_to_S_cm`. The candidate's own product file must hold what its
 document says. Two failed runs pass when their failures are equivalent: PyATB's
-are classified from its logs (an nspin conflict is `bad_params`, a memory failure
-`oom`).
+are classified from its logs, Slurm's `slurm-*.err` and `slurm-*.out` included
+(the Generator's batch script does not redirect PyATB's output; an nspin conflict
+is `bad_params`, a memory failure `oom`). A QUEER refusal at a documented limit of
+QUEER's (`queer_validation_failed`, or `queer_bad_params` for an integration
+larger than the job's memory) against a completed PyATB run is `not_comparable`
+with the reason.
 
 **Calibration.** On a kagome Chern insulator with spin-orbit coupling (101 kB
 scfout; E_F -2.35 eV on its sigma_xy plateau, -2.12 eV in a band, -2.60 eV below

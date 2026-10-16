@@ -99,6 +99,8 @@ def test_the_grid_ahc_is_queers_own_sum_and_pyatbs_layout(tmp_path):
     assert document["ahc"]["convention"] == {
         "requested": "openmx",
         "resolved": "openmx",
+        "sign_table": 1,
+        "lattice_handedness": 1,
         "export_sign": 1,
         "physical": "sigma_ab = -(e^2/hbar) integral(f Omega_ab), carrier charge -e",
         "file": "Out/AHC/ahc.dat holds export_sign times sigma_S_cm",

@@ -103,9 +103,60 @@ def test_an_nspin_conflict_with_the_scfout_is_a_bad_parameter():
 def test_params_from_the_generator_input_file():
     params = params_from_pyatb_input(read_input(FIXTURES / "h_chern_fermi" / "Input"), workers=2)
     assert params["step_type"] == STEP_CHERN and params["counterpart_step_type"] == "PYATB_CHERN_NUMBER"
-    assert params["input_parameters"] == {"nspin": 4, "fermi_energy": -2.35, "fermi_energy_unit": "eV"}
+    # An Input without hall_convention is PyATB's default auto; the file names it explicitly.
+    assert params["input_parameters"] == {
+        "nspin": 4,
+        "fermi_energy": -2.35,
+        "fermi_energy_unit": "eV",
+        "hall_convention": "auto",
+    }
     assert params["parameters"]["integrate_grid"] == [100, 100, 1] and params["workers"] == 2
     assert translate_openmx(params).step == STEP_CHERN
+
+
+def test_a_key_less_echo_is_a_pre_key_pyatb_with_its_native_sign():
+    # PyATB resolves hall_convention before it writes Out/input.json, so an echo
+    # without the key comes from a build older than the key: the native sign.
+    echo = {"INPUT_PARAMETERS": {"nspin": 4, "fermi_energy": 0.1}, "AHC": {"engine": "kubo", "method": 0}}
+    params = params_from_pyatb_input(echo, echo=True)
+    assert params["input_parameters"]["hall_convention"] == "pyatb"
+    assert translate_openmx(params).recipe(fermi_energy=0.0)["export_metadata"]["hall_export_sign"] == -1
+    assert params_from_pyatb_input(echo)["input_parameters"]["hall_convention"] == "auto"
+    explicit = {**echo, "INPUT_PARAMETERS": {**echo["INPUT_PARAMETERS"], "hall_convention": "openmx"}}
+    assert params_from_pyatb_input(explicit, echo=True)["input_parameters"]["hall_convention"] == "openmx"
+    function = {"engine": "kubo"}
+    assert effective_parameters(STEP_AHC, {}, function)["input"]["hall_convention"] == "openmx"
+    keyless = effective_parameters(STEP_AHC, {}, function, missing_convention="pyatb")
+    assert keyless["input"]["hall_convention"] == "pyatb"
+
+
+def test_effective_parameters_read_text_values_as_the_runner_does():
+    # The Generator's raw parameter JSON may hold vectors and numbers as text.
+    text = effective_parameters(
+        STEP_AHC,
+        {"nspin": "4", "hall_convention": "OpenMX"},
+        {
+            "integrate_grid": "100 100 1",
+            "adaptive_grid": "1, 1, 1",
+            "adaptive_grid_threshold": "1e30",
+            "method": "1",
+        },
+    )
+    listed = effective_parameters(
+        STEP_AHC,
+        {"nspin": 4, "hall_convention": "openmx"},
+        {
+            "integrate_grid": [100, 100, 1],
+            "adaptive_grid": [1, 1, 1],
+            "adaptive_grid_threshold": 1e30,
+            "method": 1,
+        },
+    )
+    assert text == listed
+    fhs = {"engine": "fhs", "fhs_energy_window": "-0.5 0.5", "fhs_grid": "100 100 1"}
+    assert effective_parameters(STEP_AHC, {}, fhs)["function"]["fhs_energy_window"] == [-0.5, 0.5]
+    chern = effective_parameters(STEP_CHERN, {}, {"k_start": "0 0 0", "k_vect1": "1 0 0"})
+    assert chern["function"]["k_start"] == [0.0, 0.0, 0.0] and chern["function"]["k_vect1"] == [1.0, 0.0, 0.0]
 
 
 def test_effective_parameters_apply_pyatb_defaults_and_drop_inapplicable_keys():

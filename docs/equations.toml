@@ -471,15 +471,15 @@ independent_tests = ["tests/unit/test_generator_pyatb_conventions.py::test_expli
 
 [[equations]]
 id = "response.pyatb_hall_sign"
-expression = "sigma^P = s*sigma^Q with sigma^Q = -(e^2/hbar) int f Omega; s = -1 for hall_convention pyatb with the direct/Kubo engine, +1 for openmx, fhs, auto (OpenMX input) and the FHS engine"
-input_units = "sigma: S/cm"
+expression = "sigma^P = s*h*sigma^Q with sigma^Q = -(e^2/hbar) int f Omega; s = -1 for hall_convention pyatb with the direct/Kubo engine, +1 for openmx, fhs, auto (OpenMX input) and the FHS engine; h = sign(det A) for the direct/Kubo engine, +1 for the FHS engine"
+input_units = "sigma: S/cm; A: the scfout lattice rows"
 output_units = "S/cm"
-assumptions = ["The same curvature orientation Omega_ab = -2 Im Q_ab in both codes", "Chern numbers carry no Hall sign"]
-conventions = ["auto resolves to openmx for an OPENMX package, pyatb otherwise", "A file in PyATB's layout holds s times QUEER's physical value"]
+assumptions = ["The same curvature orientation Omega_ab = -2 Im Q_ab in both codes", "Chern numbers carry no Hall sign", "PyATB's direct/Kubo prefactor det(B) e^2/hbar/(2 pi)^3 uses the signed reciprocal volume, sign(det B) = sign(det A)"]
+conventions = ["auto resolves to openmx for an OPENMX package, pyatb otherwise", "A file in PyATB's layout holds s*h times QUEER's physical value", "A resolved input echo without hall_convention comes from a PyATB older than the key: pyatb, its native sign"]
 canonical = "queer.compat.generator.pyatb_conventions:hall_export_sign"
-specialized_backends = ["queer.compat.generator.pyatb_conventions:resolve_hall_convention"]
+specialized_backends = ["queer.compat.generator.pyatb_conventions:resolve_hall_convention", "queer.compat.generator.openmx_steps:run_ahc"]
 source_references = ["docs/generator_services.md#compatibility-and-exported-products", "docs/generator_services.md#openmx-steps-of-the-pyatb-counterpart"]
-independent_tests = ["tests/unit/test_generator_pyatb_conventions.py::test_the_hall_sign_table", "tests/unit/test_generator_pyatb_conventions.py::test_auto_resolves_per_package_and_unknown_conventions_are_refused", "tests/integration/test_generator_services.py::test_pyatb_exports_apply_the_sign_table_and_pyatbs_layouts"]
+independent_tests = ["tests/unit/test_generator_pyatb_conventions.py::test_the_hall_sign_table", "tests/unit/test_generator_pyatb_conventions.py::test_auto_resolves_per_package_and_unknown_conventions_are_refused", "tests/integration/test_generator_services.py::test_pyatb_exports_apply_the_sign_table_and_pyatbs_layouts", "tests/numerical/test_generator_parity_pyatb.py::test_a_left_handed_lattice_flips_pyatbs_direct_and_kubo_sign", "tests/numerical/test_generator_parity_pyatb.py::test_an_echo_without_hall_convention_is_pyatbs_native_sign"]
 
 [[equations]]
 id = "response.grid_hall_contributions"

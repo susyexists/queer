@@ -335,6 +335,176 @@ def test_failures_pass_only_when_both_runs_failed_alike(runs, tmp_path):
     assert compare("AHC", reference, failed)["verdict"] == FAIL
 
 
+def test_a_generator_workspace_failure_is_read_from_slurms_logs(runs, tmp_path):
+    # The Generator's run.sh launches pyatb without redirection: its traceback lands
+    # in slurm-<job>.err and nothing reaches Out/running.log or a pyatb.out.
+    reference = reference_from(tmp_path / "reference", runs["openmx"])
+    (reference / "Out/AHC/ahc.dat").unlink()
+    (reference / "run.sh").write_text("#!/bin/bash\n#SBATCH --error=slurm-%j.err\nmpirun -n 4 pyatb\n")
+    (reference / "slurm-4242.out").write_text("PyATB 60fc6b2a\nreading the scfout\n")
+    (reference / "slurm-4242.err").write_text(
+        'Traceback (most recent call last):\n  File "main.py", line 37, in main\n'
+        "ValueError: nspin=1 is inconsistent with scfout SpinP_switch=3 (expected nspin=4)\n"
+    )
+    failed = copy(runs["openmx"], tmp_path / "failed")
+    document = read(failed / "queer_results.json")
+    document.update(status="failed", error={"code": "queer_bad_params", "message": "nspin conflicts"})
+    write(failed / "queer_results.json", document)
+    report = compare("AHC", reference, failed)
+    assert report["verdict"] == PASS and classes(report) == {"status": AGREE}, render_markdown(report)
+    (reference / "slurm-4242.err").write_text("srun: error: task 0: Out Of Memory\noom-kill event\n")
+    document["error"] = {"code": "queer_oom", "message": "out of memory"}
+    write(failed / "queer_results.json", document)
+    assert compare("AHC", reference, failed)["verdict"] == PASS
+
+
+def test_a_capability_refusal_is_not_comparable_and_other_failures_fail(runs, tmp_path):
+    reference = reference_from(tmp_path / "reference", runs["openmx"])
+    refused = copy(runs["openmx"], tmp_path / "refused")
+    document = read(refused / "queer_results.json")
+    cases = (
+        ("queer_validation_failed", "QUEER refines a Chern-number integral only on a gapped plane", None),
+        ("queer_bad_params", "the doubled grid exceeds QUEER's integration budget of 10 cells", None),
+        ("queer_bad_params", "Invalid PYATB_AHC settings: method must be 0 (direct) or 1 (Kubo)", FAIL),
+        ("queer_internal_error", "RuntimeError: boom", FAIL),
+    )
+    for code, message, verdict in cases:
+        document.update(status="failed", error={"code": code, "message": message})
+        write(refused / "queer_results.json", document)
+        report = compare("AHC", reference, refused)
+        if verdict is None:
+            assert report["verdict"] == NOT_COMPARABLE and _preconditions(report) == {"capability"}
+            assert message in report["preconditions"][-1]["detail"]
+        else:
+            assert report["verdict"] == verdict and classes(report) == {"status": UNEXPLAINED}
+    # A failed candidate given other settings than the reference is not comparable, never a fail.
+    params = read(refused / "queer_params.json")
+    params["parameters"]["integrate_grid"] = [14, 12, 1]
+    write(refused / "queer_params.json", params)
+    report = compare("AHC", reference, refused)
+    assert report["verdict"] == NOT_COMPARABLE and _preconditions(report) == {"parameters"}
+
+
+def test_a_metallic_chern_refinement_refused_by_queer_is_not_comparable(runs, tmp_path):
+    directory = tmp_path / "metal-refining"
+    directory.mkdir()
+    qwz_spinor_scfout(directory / "scf.scfout")
+    function = {
+        "method": 0,
+        "occ_band": -1,
+        **GRID,
+        "adaptive_grid": [2, 2, 1],
+        "adaptive_grid_threshold": 0.0,
+    }
+    params = {
+        "step_type": "QUEER_CHERN_NUMBER",
+        "counterpart_step_type": "PYATB_CHERN_NUMBER",
+        "input_parameters": {"nspin": 4, "fermi_energy": -2.0},
+        "parameters": function,
+        "workers": 1,
+        "self_convergence": True,
+    }
+    write(directory / "queer_params.json", params)
+    assert run(None, directory / "queer_params.json", directory, log=lambda line: None) == 2
+    document = read(directory / "queer_results.json")
+    assert document["error"]["code"] == "queer_validation_failed"
+    # PyATB prints the Fermi-sea flux of the metallic plane.
+    reference = reference_from(tmp_path / "reference", runs["metal"])
+    echo = read(reference / "Out/input.json")
+    echo["CHERN_NUMBER"].update(adaptive_grid=[2, 2, 1], adaptive_grid_threshold=0.0)
+    write(reference / "Out/input.json", echo)
+    report = compare("CHERN_NUMBER", reference, directory)
+    assert report["verdict"] == NOT_COMPARABLE and _preconditions(report) == {"capability"}, render_markdown(
+        report
+    )
+
+
+def _rehash(reference):
+    """Record the reference's current Input in its inputs.sha256."""
+    lines = (reference / "inputs.sha256").read_text().splitlines()
+    kept = [line for line in lines if not line.endswith("  Input")]
+    (reference / "inputs.sha256").write_text(
+        "\n".join([*kept, f"{sha256(reference / 'Input')}  Input"]) + "\n"
+    )
+
+
+def test_an_echo_without_hall_convention_is_pyatbs_native_sign(runs, tmp_path):
+    # A PyATB build older than hall_convention printed its native sign and echoed no key.
+    reference = reference_from(tmp_path / "reference", runs["pyatb"])
+    echo = read(reference / "Out/input.json")
+    del echo["INPUT_PARAMETERS"]["hall_convention"]
+    write(reference / "Out/input.json", echo)
+    text = (reference / "Input").read_text().splitlines()
+    (reference / "Input").write_text("\n".join(line for line in text if "hall_convention" not in line) + "\n")
+    _rehash(reference)
+    report = compare("AHC", reference, runs["pyatb"])
+    assert report["verdict"] == PASS and classes(report)["sigma_xy"] == AFTER_CONVENTION, render_markdown(
+        report
+    )
+    detail = [item for item in report["preconditions"] if item["name"] == "hall_convention"][0]["detail"]
+    assert "older than the key" in detail and "factor -1" in detail
+    # A candidate built from the key-less Input file (auto, so openmx) is not comparable, never a fail.
+    auto = copy(runs["pyatb"], tmp_path / "auto")
+    params = read(auto / "queer_params.json")
+    params["input_parameters"]["hall_convention"] = "auto"
+    write(auto / "queer_params.json", params)
+    report = compare("AHC", reference, auto)
+    assert report["verdict"] == NOT_COMPARABLE and _preconditions(report) == {"parameters"}
+    assert "hall_convention: 'pyatb' vs 'openmx'" in report["preconditions"][3]["detail"]
+
+
+def test_text_values_in_the_candidates_parameter_file_compare_as_the_runner_reads_them(runs, tmp_path):
+    reference = reference_from(tmp_path / "reference", runs["openmx"])
+    textual = copy(runs["openmx"], tmp_path / "textual")
+    params = read(textual / "queer_params.json")
+    params["parameters"].update(
+        integrate_grid="12 12 1", adaptive_grid="1 1 1", adaptive_grid_threshold="1e30", method="0"
+    )
+    params["input_parameters"]["nspin"] = "4"
+    write(textual / "queer_params.json", params)
+    report = compare("AHC", reference, textual)
+    assert report["verdict"] == PASS, render_markdown(report)
+
+
+def left_handed_qwz_scfout(path):
+    """The QWZ spinor model with a3 reversed: the same bands on a left-handed lattice."""
+    from openmx_files import SQUARE_TRANSLATIONS, write_scfout_model
+
+    uu = np.array([1.0, 0.5, 0.5, 0.5, 0.5])
+    up_down_real = np.array([0.0, 0.0, 0.0, -0.5, 0.5])
+    up_down_imaginary = np.array([0.0, -0.5, 0.5, 0.0, 0.0])
+    hamiltonian = np.stack((uu, -uu, up_down_real, up_down_imaginary))[:, :, None, None]
+    return write_scfout_model(
+        path,
+        lattice=np.diag([2.0, 2.0, -10.0]),
+        translations=SQUARE_TRANSLATIONS,
+        hamiltonian=hamiltonian,
+        spin=3,
+    )
+
+
+def test_a_left_handed_lattice_flips_pyatbs_direct_and_kubo_sign(runs, tmp_path):
+    left = candidate(tmp_path / "left", inputs={"hall_convention": "openmx"}, scfout=left_handed_qwz_scfout)
+    document = read(left / "queer_results.json")
+    right = read(runs["openmx"] / "queer_results.json")
+    assert document["model"]["lattice_handedness"] == -1 and right["model"]["lattice_handedness"] == 1
+    # The physical conductivity does not depend on the lattice's handedness ...
+    assert document["ahc"]["sigma_S_cm"]["xy"][0] == pytest.approx(
+        right["ahc"]["sigma_S_cm"]["xy"][0], rel=1e-12
+    )
+    # ... but PyATB's signed reciprocal volume flips what it prints, and the file follows it.
+    convention = document["ahc"]["convention"]
+    assert convention["sign_table"] == 1 and convention["export_sign"] == -1
+    physical = [document["ahc"]["sigma_S_cm"][name][0] for name in ("yz", "zx", "xy")]
+    assert (left / "Out/AHC/ahc.dat").read_text() == ahc_vector_text([-value for value in physical])
+    report = compare("AHC", reference_from(tmp_path / "pyatb-like", left), left)
+    assert report["verdict"] == PASS and classes(report)["sigma_xy"] == AFTER_CONVENTION, render_markdown(
+        report
+    )
+    unsigned = compare("AHC", reference_from(tmp_path / "unsigned", left, sigma=physical), left)
+    assert unsigned["verdict"] == FAIL and classes(unsigned)["sigma_xy"] == UNEXPLAINED
+
+
 def test_a_candidate_file_disagreeing_with_its_document_fails(runs, tmp_path):
     reference = reference_from(tmp_path / "reference", runs["openmx"])
     tampered = copy(runs["openmx"], tmp_path / "tampered")

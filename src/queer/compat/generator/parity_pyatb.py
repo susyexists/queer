@@ -14,8 +14,11 @@ verdicts of :mod:`~queer.compat.generator.parity`.
   file the caller names, when the reference has none) equals the candidate's
   recorded digest; the reference's ``Input`` still matches its digest;
 - the same parameters: the function block and ``nspin``/``hall_convention`` of
-  ``Out/input.json`` against the candidate's ``queer_params.json``, PyATB's
-  defaults applied, inapplicable and execution-only keys ignored;
+  ``Out/input.json`` against the candidate's ``queer_params.json``, both read as
+  the runner reads them (text vectors and numbers included), PyATB's defaults
+  applied, inapplicable and execution-only keys ignored. An echo without
+  ``hall_convention`` comes from a PyATB build older than the key, which printed
+  its native sign: it is ``pyatb`` (a missing key in an ``Input`` is ``auto``);
 - the same Fermi point: ``|E_F^Q / HARTREE_EV - E_F^P / PYATB_HARTREE_EV| <=
   1e-6 / PYATB_HARTREE_EV`` (Hartree; E_F^P from the input echo, or the six
   decimals ``running.log`` prints for ``Auto``); the eV difference itself is
@@ -49,9 +52,16 @@ single-channel").
   1e-9 floor (and Tier B when the integral refines).
 
 The candidate's own product file must also hold what its document says (with
-the sign table applied). Two failed runs pass when their failures are
-equivalent: a PyATB failure is classified from its logs (an nspin conflict is
-``bad_params``, a memory failure ``oom``).
+the sign table applied). The sign table's factor is the convention's (-1 for
+``pyatb`` with the direct/Kubo engine) times, for the direct/Kubo engine, the
+lattice's handedness: PyATB's prefactor carries the signed reciprocal volume.
+
+Runs are judged after the scfout and parameter preconditions. Two failed runs
+pass when their failures are equivalent: a PyATB failure is classified from its
+logs, Slurm's ``slurm-*.err``/``slurm-*.out`` included (an nspin conflict is
+``bad_params``, a memory failure ``oom``). A QUEER refusal at its own documented
+limit (``queer_validation_failed``, or an integration larger than the job's
+memory) against a completed PyATB run is ``not_comparable``.
 """
 
 from __future__ import annotations
@@ -67,6 +77,7 @@ from typing import Any
 import numpy as np
 
 from .openmx_params import (
+    BUDGET_REFUSAL,
     COUNTERPARTS,
     FUNCTION_BLOCKS,
     PARAMS_FILENAME,
@@ -114,7 +125,15 @@ from .pyatb_files import (
     parse_integration_log,
     parse_running_log,
 )
-from .results import CHERN_INTEGER_TOL, RESULTS_FILENAME, sha256_file, to_jsonable
+from .results import (
+    CHERN_INTEGER_TOL,
+    ERR_BAD_PARAMS,
+    ERR_MISSING_INPUT,
+    ERR_VALIDATION,
+    RESULTS_FILENAME,
+    sha256_file,
+    to_jsonable,
+)
 
 FAMILIES: tuple[str, ...] = ("AHC", "CHERN_NUMBER")
 TIER_A_RELATIVE = 2e-7
@@ -134,6 +153,8 @@ FAILURE_SIGNATURES: tuple[tuple[str, str], ...] = (
     (r"No such file or directory|FileNotFoundError", "missing_input"),
 )
 FAILURE_LOGS = ("pyatb.out", "pyatb.err", "job.err", "job.out", RUNNING_LOG)
+# The Generator's batch script leaves PyATB's output and tracebacks in Slurm's files.
+FAILURE_LOG_PATTERNS = ("slurm-*.err", "slurm-*.out")
 
 
 def openmx_family(name: Any) -> str | None:
@@ -240,10 +261,17 @@ class PyatbRun:
     def ok(self) -> bool:
         return self.failure is None and self.product is not None
 
+    def failure_logs(self) -> list[Path]:
+        """The logs a failure is read from: PyATB's own, then Slurm's ``slurm-*.err`` and ``slurm-*.out``."""
+        paths = [self.directory / name for name in FAILURE_LOGS]
+        for pattern in FAILURE_LOG_PATTERNS:
+            paths += sorted(self.directory.glob(pattern))
+        return paths
+
     def failure_code(self) -> str:
         """The failure a failed run's logs show (``bad_params``, ``oom``, ``missing_input``) or ``failed``."""
-        for name in FAILURE_LOGS:
-            text = _read_text(self.directory / name)
+        for path in self.failure_logs():
+            text = _read_text(path)
             if not text:
                 continue
             for pattern, code in FAILURE_SIGNATURES:
@@ -257,9 +285,24 @@ class PyatbRun:
         return dict(self.blocks.get(self.family or "", {}))
 
     def input_parameters(self) -> dict[str, Any]:
-        if self.echo is not None and isinstance(self.echo.get("INPUT_PARAMETERS"), dict):
-            return dict(self.echo["INPUT_PARAMETERS"])
+        echoed = (self.echo or {}).get("INPUT_PARAMETERS")
+        if isinstance(echoed, dict):
+            return dict(echoed)
         return dict(self.blocks.get("INPUT_PARAMETERS", {}))
+
+    def echoed_inputs(self) -> bool:
+        """Whether the INPUT_PARAMETERS come from PyATB's resolved echo ``Out/input.json``."""
+        return self.echo is not None and isinstance(self.echo.get("INPUT_PARAMETERS"), dict)
+
+    def missing_convention(self) -> str:
+        """What an absent ``hall_convention`` means for this run.
+
+        PyATB resolves the key before it writes ``Out/input.json``, so an echo
+        without it comes from a build older than the key, which printed its native
+        sign (``pyatb``); a missing key in an ``Input`` file is PyATB's default
+        ``auto``.
+        """
+        return "pyatb" if self.echoed_inputs() else "auto"
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -394,10 +437,33 @@ class _PyatbComparison:
         detail = f"reference {self.reference.family}, candidate {candidate}: the {self.family} step"
         return self.precondition("step", ok, detail if ok else detail + " is not both runs' step")
 
+    def capability_refusal(self) -> str | None:
+        """Why the candidate refused a run QUEER cannot do (its own limit), or None.
+
+        ``queer_validation_failed`` (a refining Chern integral on a metallic plane,
+        an integration that ran out of its budget) and a ``queer_bad_params``
+        refusal of an integration larger than the job's memory allows.
+        """
+        if self.candidate.ok:
+            return None
+        error = self.candidate.document.get("error") or {}
+        code, message = str(error.get("code") or ""), str(error.get("message") or "")
+        if code == ERR_VALIDATION or (code == ERR_BAD_PARAMS and BUDGET_REFUSAL in message):
+            return f"{code}: {message}"
+        return None
+
     def compare_failures(self) -> None:
         reference = None if self.reference.ok else self.reference.failure_code()
         error = (self.candidate.document.get("error") or {}).get("code")
         candidate = None if self.candidate.ok else str(error or "failed").removeprefix("queer_")
+        refusal = self.capability_refusal()
+        if reference is None and refusal is not None:
+            self.precondition(
+                "capability",
+                False,
+                f"QUEER refused a calculation PyATB completed, at a documented limit of QUEER's ({refusal})",
+            )
+            return
         status = f"reference {'ok' if reference is None else 'failed (' + reference + ')'}, candidate "
         status += f"{self.candidate.document.get('status')} ({error})"
         if (
@@ -437,9 +503,17 @@ class _PyatbComparison:
             )
             return self.precondition("inputs", False, why)
         model = self.candidate.block("model")
-        name = model.get("scfout") or "scf.scfout"
+        name = model.get("scfout") or (self.candidate.params or {}).get("scfout") or "scf.scfout"
         recorded = ((self.candidate.document.get("provenance") or {}).get("inputs") or {}).get(name) or {}
         candidate = recorded.get("sha256") or model.get("scfout_sha256")
+        code = (self.candidate.document.get("error") or {}).get("code")
+        if not candidate and not self.candidate.ok and code == ERR_MISSING_INPUT:
+            return self.precondition(
+                "inputs",
+                True,
+                f"the candidate failed before it read a scfout ({code}); the reference's scfout SHA-256 "
+                f"{digest[:16]}... from {source}",
+            )
         ok = bool(candidate) and candidate == digest
         detail = f"scfout SHA-256 {digest[:16]}... from {source}; candidate {str(candidate)[:16]}..."
         if ok and self.reference.digests and INPUT_FILENAME in self.reference.digests:
@@ -457,7 +531,10 @@ class _PyatbComparison:
             return self.precondition("parameters", False, f"the candidate holds no {PARAMS_FILENAME}")
         step = STEP_AHC if self.family == "AHC" else STEP_CHERN
         reference = effective_parameters(
-            step, self.reference.input_parameters(), self.reference.function_block()
+            step,
+            self.reference.input_parameters(),
+            self.reference.function_block(),
+            missing_convention=self.reference.missing_convention(),
         )
         inputs = dict(params.get("input_parameters") or {})
         if inputs.get("nspin") is None and self.candidate.block("model").get("nspin") is not None:
@@ -514,18 +591,44 @@ class _PyatbComparison:
             )
         return self.precondition("fermi_energy", ok, detail)
 
+    def candidate_handedness(self) -> int:
+        """+1 for a right-handed scfout lattice, -1 for a left-handed one (the candidate's record)."""
+        model = self.candidate.block("model")
+        recorded = model.get("lattice_handedness")
+        if recorded in (1, -1):
+            return int(recorded)
+        lattice = model.get("lattice_A")
+        if lattice is None:
+            return 1
+        return 1 if float(np.linalg.det(np.asarray(lattice, float))) > 0 else -1
+
     def check_convention(self) -> bool:
         if self.family != "AHC":
             return self.precondition("hall_convention", True, "a Chern number carries no Hall sign")
         engine = str(self.notes.get("parameters", {}).get("function", {}).get("engine", "kubo"))
-        reference = resolve_hall_convention(self.reference.input_parameters().get("hall_convention"))
-        self.sign = hall_export_sign(reference, engine)
+        value = self.reference.input_parameters().get("hall_convention")
+        reference = resolve_hall_convention(
+            value if value is not None else self.reference.missing_convention()
+        )
+        note = ""
+        if value is None and self.reference.echoed_inputs():
+            note = (
+                "; the input echo names no hall_convention: a PyATB build older than the key, which "
+                "printed its native sign (pyatb)"
+            )
+        elif value is None:
+            note = "; the Input names no hall_convention: PyATB's default auto"
         if engine == "fhs":
+            self.sign = 1
             return self.precondition("hall_convention", True, "the FHS engine ignores hall_convention")
+        handedness = self.candidate_handedness()
+        self.sign = hall_export_sign(reference, engine) * handedness
         convention = self.candidate.block("ahc").get("convention") or {}
         candidate = convention.get("resolved")
         ok = candidate == reference
-        detail = f"reference {reference}, candidate {candidate}; sign table factor {self.sign:+d}"
+        detail = f"reference {reference}, candidate {candidate}; sign table factor {self.sign:+d}" + note
+        if handedness < 0:
+            detail += " (a left-handed lattice: PyATB's signed reciprocal volume flips its sign)"
         return self.precondition("hall_convention", ok, detail)
 
     def check_integration(self) -> bool:
@@ -796,17 +899,14 @@ class _PyatbComparison:
     def run(self) -> None:
         if not self.check_documents() or not self.check_family():
             return
+        # The same inputs and settings first: a failure is only judged between comparable runs.
+        for check in (self.check_inputs, self.check_parameters):
+            if not self.guarded(check):
+                return
         if not self.reference.ok or not self.candidate.ok:
             self.compare_failures()
             return
-        checks = [
-            self.check_inputs,
-            self.check_parameters,
-            self.check_fermi_energy,
-            self.check_convention,
-            self.check_integration,
-        ]
-        for check in checks:
+        for check in (self.check_fermi_energy, self.check_convention, self.check_integration):
             if not self.guarded(check):
                 return
         stage = self.compare_ahc if self.family == "AHC" else self.compare_chern

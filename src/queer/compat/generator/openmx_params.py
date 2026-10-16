@@ -52,6 +52,9 @@ FUNCTION_BLOCKS: Mapping[str, str] = MappingProxyType({STEP_AHC: "AHC", STEP_CHE
 FAMILIES: Mapping[str, str] = MappingProxyType({STEP_AHC: "AHC", STEP_CHERN: "CHERN_NUMBER"})
 PARAMS_FILENAME = "queer_params.json"
 DEFAULT_SCFOUT = "scf.scfout"
+# Every refusal of an integration too large for the job's memory says this, so a
+# parity comparison can tell QUEER's own limit from a failed calculation.
+BUDGET_REFUSAL = "exceeds QUEER's integration budget"
 
 TOP_LEVEL_KEYS: tuple[str, ...] = (
     "step_type",
@@ -387,21 +390,39 @@ def _resolved(key: str, value: Any) -> Any:
     return value
 
 
+def _comparable(key: str, value: Any, convert: Any) -> Any:
+    """``value`` as :func:`translate_openmx` normalizes it (text vectors, numbers as text); else as given."""
+    try:
+        return convert(key, value)
+    except (TypeError, ValueError, OverflowError):
+        return _resolved(key, value)
+
+
 def effective_parameters(
-    step: str, input_parameters: Mapping[str, Any], parameters: Mapping[str, Any]
+    step: str,
+    input_parameters: Mapping[str, Any],
+    parameters: Mapping[str, Any],
+    *,
+    missing_convention: str = "auto",
 ) -> dict[str, Any]:
     """The physics settings PyATB resolves for a step: defaults applied, inapplicable keys dropped.
 
-    The function block keeps the keys of the selected engine and integration
-    mode; a Chern grid's third axis is 1, as PyATB sets it. ``input`` holds
-    ``nspin`` and the resolved ``hall_convention`` (omitted for the FHS engine,
-    which ignores it). Execution-only settings and the Fermi energy (compared by
-    its own rule) are left out.
+    Values are normalized as :func:`translate_openmx` reads them (``"100 100 1"``
+    is ``[100, 100, 1]``, ``"1e30"`` is ``1e30``). The function block keeps the keys
+    of the selected engine and integration mode; a Chern grid's third axis is 1,
+    as PyATB sets it. ``input`` holds ``nspin`` and the resolved
+    ``hall_convention`` (omitted for the FHS engine, which ignores it); a missing
+    convention is ``missing_convention``: ``auto`` for an ``Input`` file, ``pyatb``
+    for PyATB's resolved echo, which names the key once PyATB has one.
+    Execution-only settings and the Fermi energy (compared by its own rule) are
+    left out.
     """
     resolved = canonical_openmx_step(step)
     defaults = dict(AHC_DEFAULTS if resolved == STEP_AHC else CHERN_DEFAULTS)
     block = {
-        key: _resolved(key, value) for key, value in {**defaults, **parameters}.items() if value is not None
+        key: _comparable(key, value, _function_value)
+        for key, value in {**defaults, **parameters}.items()
+        if value is not None
     }
     engine = "kubo"
     if resolved == STEP_AHC:
@@ -434,9 +455,14 @@ def effective_parameters(
             kept[key] = float(kept[key])
     inputs: dict[str, Any] = {}
     if input_parameters.get("nspin") is not None:
-        inputs["nspin"] = int(_resolved("nspin", input_parameters["nspin"]))
+        inputs["nspin"] = int(
+            _comparable("nspin", input_parameters["nspin"], lambda k, v: _input_value(k, v, None))
+        )
     if engine != "fhs":
-        inputs["hall_convention"] = resolve_hall_convention(input_parameters.get("hall_convention"))
+        convention = input_parameters.get("hall_convention")
+        inputs["hall_convention"] = resolve_hall_convention(
+            missing_convention if convention is None else convention
+        )
     return {"function": kept, "input": inputs}
 
 
@@ -447,11 +473,16 @@ def params_from_pyatb_input(
     workers: int | None = None,
     scfout: str = DEFAULT_SCFOUT,
     self_convergence: bool | None = None,
+    echo: bool = False,
 ) -> dict[str, Any]:
     """The ``queer_params.json`` of the PyATB ``Input`` blocks (:func:`~.pyatb_files.parse_input`).
 
     ``step`` defaults to the step of the single function block present. The
-    INPUT_PARAMETERS keep every key but ``package`` and ``scfout_route``.
+    INPUT_PARAMETERS keep every key but ``package`` and ``scfout_route``, and
+    ``hall_convention`` is always written: an absent key is PyATB's default
+    ``auto`` in an ``Input`` file and, with ``echo`` (the blocks of PyATB's
+    resolved ``Out/input.json``), ``pyatb``, the native sign of a PyATB build
+    older than the key.
     """
     if step is None:
         present = [name for name, block in FUNCTION_BLOCKS.items() if block in blocks]
@@ -464,6 +495,8 @@ def params_from_pyatb_input(
         for key, value in (blocks.get("INPUT_PARAMETERS") or {}).items()
         if key not in FIXED_INPUT_KEYS
     }
+    if inputs.get("hall_convention") is None:
+        inputs["hall_convention"] = "pyatb" if echo else "auto"
     params: dict[str, Any] = {
         "step_type": resolved,
         "counterpart_step_type": COUNTERPARTS[resolved],

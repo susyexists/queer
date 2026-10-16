@@ -44,8 +44,10 @@ non-spin-polarized one. QUEER reports its physical value and, beside it,
 occupation one (half the value for a non-spin-polarized SCF).
 
 **Signs.** ``sigma`` is the physical ``-(e^2/hbar) int f Omega``; ``Out/AHC/ahc.dat``
-holds ``convention.export_sign`` times it (-1 for the ``pyatb`` convention of the
-direct/Kubo engine). A Chern number is the plane flux over 2 pi in its native
+holds ``convention.export_sign`` times it: the sign table's factor (-1 for the
+``pyatb`` convention of the direct/Kubo engine) times, for the direct/Kubo engine,
+the lattice's handedness (PyATB's prefactor uses the signed reciprocal volume, so a
+left-handed lattice flips what it prints). A Chern number is the plane flux over 2 pi in its native
 orientation, with no Hall sign; for a metallic plane it is the Fermi-sea flux
 (PyATB's definition), flagged with a warning.
 """
@@ -291,6 +293,7 @@ class OpenMXStepContext:
             "n_basis": int(model.nbnd),
             "n_translations": int(len(model.translations)),
             "lattice_A": np.asarray(model.lattice, float).tolist(),
+            "lattice_handedness": self.handedness,
             "cell_volume_A3": volume(model),
             "fermi_energy": self.mu,
             "fermi_source": meta["fermi_source"],
@@ -306,6 +309,11 @@ class OpenMXStepContext:
             f"model: {model.nbnd} orbitals ({model.spin_mode}), {len(model.translations)} translations, "
             f"E_F {self.mu:.9f} eV ({meta['fermi_source']})"
         )
+
+    @property
+    def handedness(self) -> int:
+        """+1 for a right-handed scfout lattice, -1 for a left-handed one (the sign of its determinant)."""
+        return 1 if float(np.linalg.det(np.asarray(self.model.lattice, float))) > 0 else -1
 
     @property
     def delta_ef(self) -> float:
@@ -545,8 +553,11 @@ def run_ahc(context: OpenMXStepContext) -> None:
     legacy = None
     if context.legacy:
         legacy = _legacy_ahc(context, physical)
-    sign = int(meta["hall_export_sign"])
     fhs = native["engine"] == "fhs"
+    table = int(meta["hall_export_sign"])
+    # PyATB's direct/Kubo prefactor carries the signed reciprocal volume: a left-handed
+    # lattice flips what it prints. Its FHS output uses lengths and unit normals only.
+    sign = table if fhs else table * context.handedness
     mus = np.asarray(native["chemical_potentials"], float)
     vectors = np.asarray(physical["sigma"], float)
     offsets = meta.get("pyatb_energy_offsets_eV")
@@ -570,6 +581,8 @@ def run_ahc(context: OpenMXStepContext) -> None:
         "convention": {
             "requested": meta.get("hall_convention_requested"),
             "resolved": meta.get("hall_convention"),
+            "sign_table": table,
+            "lattice_handedness": context.handedness,
             "export_sign": sign,
             "physical": PHYSICAL_SIGN,
             "file": f"{AHC_FILE} holds export_sign times sigma_S_cm",
