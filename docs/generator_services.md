@@ -383,6 +383,87 @@ core are verified against recorded SHA256 values; the core is read for provenanc
 and is never imported or executed. DOS-at-Fermi diagnostics explicitly distinguish
 the historical first nonnegative bin, nearest bin and linear interpolation.
 
+### Parity comparator
+
+`queer.compat.generator.parity.compare(step, reference_dir, candidate_dir)` judges a
+candidate run of a Generator Wannier step (BANDS, TOPOLOGY, BERRY or SLAB) against a
+reference run of the same step and returns a JSON-able report; `render_markdown`
+renders it. Each directory holds one results document (`queer_results.json` or the
+PythTB driver's `pythtb_results.json`), optionally its parameter file
+(`queer_params.json` or `pythtb_params.json`) and the step's `Out/*.json` data files.
+Model files are never read.
+
+```bash
+python -m queer generator compare --step QUEER_BERRY \
+  --reference runs/pythtb-berry --candidate runs/queer-berry \
+  --report parity.json --markdown parity.md
+```
+
+The command prints the verdict and every failed check, writes the requested
+reports and exits 0 for `pass` or `pass_with_documented_differences`, 2 otherwise.
+
+**Preconditions.** A failed precondition makes the verdict `not_comparable` and
+nothing is compared:
+
+- one readable results document per directory, both of the step's family
+  (`PYTHTB_X` and `QUEER_X` are one family);
+- the same source WANNIER job when both runs name one;
+- equal SHA-256 digests in `provenance.inputs` for every file both runs recorded.
+  Without recorded inputs, a model fingerprint must match and the report sets
+  `inputs_verified_by_fingerprint`: `num_wann`, the lattice to 1e-9 Å, `n_R`,
+  `n_R_after_ws`, `n_R_model`, `folded_axes`, `periodic_dirs`, the Wigner-Seitz
+  mode and its scores to 1e-6 meV, and the `_band.dat` deviations to 1e-6 meV;
+- equal effective step parameters when both parameter files are present: the step's
+  keys with the driver defaults, ignoring `workers`, `chunk_size`, `time_budget_s`
+  and the order of the structure's atoms. When either file is missing, equal
+  `params_sha256` digests are reported, otherwise the check is skipped;
+- the same Fermi energy and the same derived decisions: the Wigner-Seitz mode, metal
+  or insulator, the occupied band count and its isolation, the occupation mode, the
+  topology's applicability, its planes and their transverse sampling, and the slab
+  kind, cells and finite axis. A threshold decision that flipped is reported as
+  not comparable, not as a failure.
+
+**Reference semantics.** A registry keyed by the producer's `core_sha256` adapts the
+comparison to the revision that wrote the reference:
+
+| Producer | Rules |
+|---|---|
+| driver 9f43886 (`f6c9b7af…`) | DOS(E_F) compared with the candidate's DOS recomputed under the first-nonnegative-bin rule; Fermi surface by its crossing bands only (no plane frame); localization not compared; the DOS mesh recorded on all three axes is read at the candidate's mesh axes; inputs verified by fingerprint |
+| a fermi-mode BERRY reference without `berry.conventions` | written before the sign fix: its maps, path curvature and integrals are compared after a factor -1 |
+| QUEER and the vendored driver | current semantics; compared as recorded |
+
+A difference removed by one of these rules is classed `agree_after_convention`.
+
+**Tolerances.** They follow from the data, never from the material. With δ_W the
+`hermiticity_weyl_bound` that QUEER records in the model block (0 when absent):
+
+| Quantity | Rule |
+|---|---|
+| Band eigenvalues | τ_E = max(1e-8 eV, δ_W) + 1e-13 max\|E\| |
+| Gap, band edges, isolation, Kramers splitting | 2 τ_E; a band edge found at another k-point with an energy within 2 τ_E is a documented tie |
+| DOS, PDOS, DOS(E_F) | 1e-9 of the row's largest value. When δ_W > 0, eigenvalues may cross bin edges: a difference that conserves the states and stays within an L1 budget of 2 (N_bands N_k 2τ_E/ΔE + 1)/N_k is documented |
+| Fermi-surface contours | the same crossing bands; symmetric Hausdorff distance ≤ max(1e-9 \|b\|, 1e-6) in the stored coordinates (1/Å without 2π) |
+| Chern, Z2, convergence, crossings | equal, per plane matched by (fixed axis, value) |
+| Wannier charge centres | optimal circular matching ≤ 1e-9 per loop; Berry phases modulo 2π |
+| BERRY, bands mode | each map ≤ 1e-8 max\|X\| of its own quantity; Kubo Chern number ≤ 1e-8; quantum weight ≤ 1e-6 relative |
+| BERRY, fermi mode | the flagged set F holds the points where the maps disagree beyond 1e-8 max\|Ω\|: a level within τ_E of E_F, or an occupied-empty pair at the 1e-6 eV skip threshold, decides such a point. Its size is reported, it must be a minority of the points carrying curvature, and the integral must agree to 1e-8 + Σ_F (\|Ω_Q\| + \|Ω_P\|)/(n² 2π). Each document's integral must equal its own map |
+| Path curvature | pointwise ≤ 1e-8 max\|Ω\| |
+| SLAB levels | τ_E per k-point; a level within τ_E of the window edge may be missing on one side |
+| SLAB edge weights | left and right weights summed over clusters of levels within 1e-5 eV ≤ 1e-9; clusters within 1e-5 eV of the window edge are excluded |
+| SLAB edge crossings | equal, unless a per-state weight lies within 1e-6 of 1/2 (documented) |
+| Model and validation blocks | float leaves ≤ 1e-6 relative (the worst is reported), other leaves equal; producer keys are skipped |
+| Warnings | the same codes: `warning_codes` when both runs record them, else codes classified from the messages. Reworded messages with the same codes, such as "PythTB bands" and "Model bands", are documented; plot warnings depend on the plotting environment and are not compared |
+
+**Classes and verdicts.** Every quantity is `agree`, `agree_after_convention`,
+`differs_documented`, `differs_unexplained` or `not_applicable`. The verdict is
+`not_comparable` when a precondition fails, `fail` when any quantity
+`differs_unexplained`, `pass_with_documented_differences` when any
+`differs_documented`, and `pass` otherwise. When both runs failed, equivalent failure
+codes (`pythtb_oom` and `queer_oom`) pass. A document whose blocks do not have the
+schema's shape fails the check that reads it instead of stopping the comparison. The
+report also lists the preconditions, the semantics profile, every flagged set and the
+quantities closest to their tolerance.
+
 ### Replaying saved response calculations
 
 Retrieve saved scientific inputs and output tables through the Generator's

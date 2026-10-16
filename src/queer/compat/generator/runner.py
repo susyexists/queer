@@ -12,8 +12,14 @@ traceback). As in the driver, an interrupt is not caught: the document, still
 default action and ends the process at once.
 
 ``capabilities`` prints ``{"queer_version", "steps"}`` as JSON, the steps being
-the ones this build runs. ``compare`` is not part of this build: it writes
-nothing and exits 2.
+the ones this build runs.
+
+``compare --step STEP --reference DIR --candidate DIR [--report FILE]
+[--markdown FILE]`` compares two run directories of a step
+(:func:`~queer.compat.generator.parity.compare`), prints the verdict and the
+failed checks, and writes the JSON report and its Markdown page when asked. It
+exits 0 for ``pass`` and ``pass_with_documented_differences``, 2 otherwise
+(``fail``, ``not_comparable`` or unusable arguments).
 """
 
 from __future__ import annotations
@@ -49,11 +55,7 @@ STEP_RUNNERS: Mapping[str, Callable[[WannierStepContext], None]] = MappingProxyT
 )
 USAGE = (
     "usage: python -m queer generator {run --step STEP --params FILE [--workspace DIR] | "
-    "capabilities | compare ...}"
-)
-COMPARE_UNAVAILABLE = (
-    "queer generator compare: the results comparator is not part of this build; nothing was compared "
-    "or written"
+    "capabilities | compare --step STEP --reference DIR --candidate DIR [--report FILE] [--markdown FILE]}"
 )
 
 
@@ -125,6 +127,42 @@ def _usage_failure(arguments: Sequence[str], message: str) -> int:
     return EXIT_FAILED
 
 
+def compare_command(arguments: Sequence[str]) -> int:
+    """``compare``: print the verdict, write the requested reports; exit 0 when the verdict passes, else 2."""
+    from .parity import compare, passing, render_markdown
+
+    parser = _Parser(prog="python -m queer generator compare")
+    parser.add_argument("--step", required=True)
+    parser.add_argument("--reference", required=True)
+    parser.add_argument("--candidate", required=True)
+    parser.add_argument("--report")
+    parser.add_argument("--markdown")
+    try:
+        options = parser.parse_args(list(arguments))
+        report = compare(options.step, options.reference, options.candidate)
+    except (_UsageError, ValueError) as error:
+        print(f"queer generator compare: {error}", file=sys.stderr)
+        return EXIT_FAILED
+    try:
+        if options.report:
+            write_json_atomic(options.report, report)
+        if options.markdown:
+            target = Path(options.markdown)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(render_markdown(report), encoding="utf-8")
+    except OSError as error:
+        print(f"queer generator compare: cannot write the report: {error}", file=sys.stderr)
+        return EXIT_FAILED
+    print(report["verdict"])
+    for item in report["preconditions"]:
+        if not item["ok"]:
+            print(f"  precondition {item['name']}: {item['detail']}")
+    for item in report["quantities"]:
+        if item["class"] == "differs_unexplained":
+            print(f"  {item['name']}: {item['detail']}")
+    return EXIT_OK if passing(report) else EXIT_FAILED
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Dispatch ``run``, ``capabilities`` or ``compare`` (the arguments after ``generator``)."""
     arguments = list(sys.argv[1:] if argv is None else argv)
@@ -143,7 +181,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(capabilities(), sort_keys=True))
         return EXIT_OK
     if command == "compare":
-        print(COMPARE_UNAVAILABLE, file=sys.stderr)
-        return EXIT_FAILED
+        return compare_command(arguments[1:])
     print(USAGE, file=sys.stderr)
     return EXIT_FAILED

@@ -23,7 +23,7 @@ from queer.compat.generator.results import (
     EXIT_OUT_OF_MEMORY,
     RESULTS_FILENAME,
 )
-from queer.compat.generator.runner import COMPARE_UNAVAILABLE, STEP_RUNNERS, main, run
+from queer.compat.generator.runner import STEP_RUNNERS, main, run
 
 ROOT = Path(__file__).resolve().parents[2]
 LAYER_PATH = {
@@ -171,11 +171,11 @@ def test_capabilities_list_the_steps_of_this_build(capsys):
     assert payload["steps"] == sorted(STEP_RUNNERS)
 
 
-def test_compare_writes_nothing_and_exits_two(tmp_path, monkeypatch, capsys):
+def test_compare_without_a_step_writes_nothing_and_exits_two(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
-    assert main(["compare", "--reference", "a.json", "--candidate", "b.json"]) == EXIT_FAILED
+    assert main(["compare", "--reference", "a", "--candidate", "b"]) == EXIT_FAILED
     captured = capsys.readouterr()
-    assert captured.out == "" and captured.err.strip() == COMPARE_UNAVAILABLE
+    assert captured.out == "" and "--step" in captured.err
     assert list(tmp_path.iterdir()) == []
 
 
