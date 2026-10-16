@@ -135,7 +135,7 @@ assert thermal_occupation(0., 0.) == .5
 assert occupations(0., 0., 0.) == 0.
 assert gaussian(0., .1) > 0 and lorentzian(0., .1) > 0
 assert len(stable_hash({'probe': 1})) == 64
-assert queer.__version__ == "1.4.1"
+assert queer.__version__ == "1.5.0"
 assert Path(queer.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
 assert files("queer").joinpath("resources/neon.mplstyle").is_file()
 assert files("queer").joinpath("resources/symmetry/hpkot.json").is_file()

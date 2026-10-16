@@ -1,5 +1,53 @@
 # Migration notes
 
+## QUEER 1.5.0 Generator parity runner
+
+QUEER now runs the Generator's PythTB steps itself. `python -m queer generator run
+--step QUEER_BANDS|QUEER_TOPOLOGY|QUEER_BERRY|QUEER_SLAB --params ... --workspace ...`
+reads the same Wannier90 inputs and parameter file as the Generator PythTB driver and
+writes `queer_results.json` in the driver's `pythtb_results.json` schema, with the
+same `Out/` files. Where PythTB was called, QUEER's own models and observables are
+used instead:
+
+- `WannierModel.from_table`, with averaging hermitization and PythTB's cutoff rules;
+- eigensystems;
+- `wilson_loop` with exact diagonal links;
+- `band_geometry` Kubo curvature and the finite-basis metric;
+- `velocities` for the Fermi sea.
+
+The driver's own numerical rules moved into QUEER:
+
+- Wigner-Seitz images and vacuum folding (`io.wannier_ws`);
+- Chern windings and the Z2 largest-gap rule (`physics.topology`, `observables.topology`);
+- Fermi-sea curvature (`physics.geometry`);
+- block-Toeplitz slabs with cluster-summed edge weights (`observables.surface`).
+
+The historical estimators stay in `compat.generator`. Every port is checked against
+the driver's original functions, which are vendored as test oracles.
+
+The command starts from a standard-library boot, so a host without NumPy or SciPy
+gets a `queer_env_missing` result instead of a traceback. It also reads `.win`,
+`.eig` and the `wannier90_band.*` files. The comparator
+(`queer.compat.generator.parity`, `python -m queer generator compare`) judges a QUEER
+run against the run it reproduces. Its report records:
+
+- preconditions;
+- a semantics profile for older driver revisions;
+- data-driven tolerances;
+- classes per quantity.
+
+Other changes:
+
+- `compat.generator` is now a package. Its historical names import lazily and are
+  unchanged.
+- TOML configurations accept `win`, `tb`, `centres` and `wout` inputs,
+  `interpolation = "auto"` and a `position` mode.
+- `QUEER_RUNSTORE_LOCK=none` disables advisory locking where a file system lacks
+  `flock`. Run manifests are written in batches.
+
+Existing workflows keep their values. Checkpoints keep the `1.4.1-refactor-v1`
+algorithm identity.
+
 ## QUEER 1.4.1 shared-kernel and workflow refactor
 
 Repeated occupation, broadening, Green-function, Lindhard, EPW, covariant geometry
