@@ -343,6 +343,17 @@ def test_a_candidate_file_disagreeing_with_its_document_fails(runs, tmp_path):
     assert report["verdict"] == FAIL and classes(report)["candidate_file"] == UNEXPLAINED
 
 
+def test_a_value_on_a_rounding_boundary_still_matches_its_six_decimals(runs, tmp_path):
+    halfway = copy(runs["openmx"], tmp_path / "halfway")
+    document = read(halfway / "queer_results.json")
+    document["ahc"]["sigma_S_cm"] = {"yz": [0.0], "zx": [0.0], "xy": [1.5e-6]}
+    write(halfway / "queer_results.json", document)
+    (halfway / "Out/AHC/ahc.dat").write_text(ahc_vector_text([0.0, 0.0, 1.5e-6]))
+    assert "0.000002" in (halfway / "Out/AHC/ahc.dat").read_text()
+    report = compare("AHC", reference_from(tmp_path / "reference", halfway), halfway)
+    assert classes(report)["candidate_file"] == AGREE
+
+
 def template(runs, directory, fixture, *, sigma=None, chern=None, offsets=None):
     """A candidate run of the kagome calibration: a runner document carrying QUEER's calibration values."""
     family = "chern" if chern is not None else "ahc"

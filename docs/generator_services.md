@@ -589,8 +589,8 @@ coupling, with `legacy_single_channel` (`agree_after_convention`):
 
 | Tier | When | Rule per component |
 |---|---|---|
-| A | Grid with the refinement off in both runs | `|d sigma| <= 2e-7 |sigma| + sum_F |c_k| + 5e-7 S/cm` |
-| B | a Grid threshold below 1e30, or Adaptive | outside Tier A, `differs_documented` only if `|d sigma| <= 3 max(e_Q, e_P)`; without `e_Q`, `not_comparable` |
+| A | Grid with the refinement off in both runs | `abs(d sigma) <= 2e-7 abs(sigma) + sum_F abs(c_k) + 5e-7 S/cm` |
+| B | a Grid threshold below 1e30, or Adaptive | outside Tier A, `differs_documented` only if `abs(d sigma) <= 3 max(e_Q, e_P)`; without `e_Q`, `not_comparable` |
 | FHS | the FHS engine | the energies equal to the printed six decimals; `agree` when every energy meets Tier A, else `differs_documented` with the largest gap and the correlation |
 | Chern | gapped plane, both values within 0.05 of an integer | the integers equal; otherwise the floats meet Tier A with a 1e-9 floor (Tier B when refining) |
 

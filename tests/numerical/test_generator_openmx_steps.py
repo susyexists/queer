@@ -134,6 +134,19 @@ def test_the_pyatb_convention_writes_the_negative_and_an_explicit_fermi_energy_i
     )
 
 
+def test_execution_only_settings_never_change_the_result(tmp_path):
+    code, plain = execute(tmp_path / "plain", params())
+    assert code == EXIT_OK
+    tuned = params(inputs={"max_kpoint_num": 7, "sparse_format": 1})
+    tuned["workers"] = 2
+    code, other = execute(tmp_path / "tuned", tuned)
+    assert code == EXIT_OK
+    assert other["ahc"]["sigma_S_cm"] == plain["ahc"]["sigma_S_cm"]
+    assert other["integration"]["max_kpoint_num"] == 7 and other["integration"]["sparse_format"] == 1
+    plans = other["provenance"]["parallel"]
+    assert plans and all(plan["chunk"] <= 7 for plan in plans)
+
+
 def test_a_level_at_the_fermi_energy_flags_its_point_with_its_contribution(tmp_path):
     model = OpenMXModel.from_scfout(qwz_spinor_scfout(tmp_path / "probe.scfout", mass=1.0))
     level = float(model.energies(np.zeros((1, 3)))[0, 0])
