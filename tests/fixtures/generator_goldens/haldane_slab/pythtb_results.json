@@ -1,0 +1,209 @@
+{
+ "schema_version": 1,
+ "status": "ok",
+ "step_type": "PYTHTB_SLAB",
+ "provenance": {
+  "core_sha256": "56fda912ba570e2293b3a9b4bf20d11038c64efa5d2f192c8ac03c615034e215",
+  "params_sha256": "1fe2c606542b4c99708d2e2b8a43dd28b98db2c54aeb51d3a89ad2b513db7e73",
+  "python": "3.12.12",
+  "numpy": "2.5.3",
+  "host": "golden",
+  "cpus": 16,
+  "memory_available_bytes": 19645075456,
+  "pythtb": "2.0.2",
+  "scipy": "1.18.1",
+  "matplotlib": "3.11.2",
+  "inputs": {
+   "wannier90.win": {
+    "bytes": 288,
+    "sha256": "e414ab0141ca734a8f989815e9cc0bf4ebb6e3c8dbd92b048d3159560ccf19a1"
+   },
+   "wannier90_hr.dat": {
+    "bytes": 1747,
+    "sha256": "6fd01f6de4681a505e908c91ce2a1b8827856b168390881cb5a1629f46488002"
+   },
+   "wannier90_centres.xyz": {
+    "bytes": 128,
+    "sha256": "0ac72f7ec51c0caef2b4b8e317b106979c1ba6d6dc249324840417a91a42a985"
+   },
+   "wannier90_band.kpt": {
+    "bytes": 820,
+    "sha256": "43ff6863c53bd8cf4e8c9a2157e6d83772f2b85ee2ff2609f86e8ba4e9ee371b"
+   },
+   "wannier90_band.dat": {
+    "bytes": 856,
+    "sha256": "564dd2c5b119faaef729bcc51d1448fce6382d589e73fca972da518b91e19d40"
+   },
+   "wannier90_band.labelinfo.dat": {
+    "bytes": 120,
+    "sha256": "49614d6db2a4a0db0abc2d27169519baa00c1d0a37fd3fc9be9c20ebb107beda"
+   }
+  },
+  "parallel": [
+   {
+    "stage": "validation",
+    "k_points": 19,
+    "chunk": 19,
+    "tasks": 1,
+    "workers": 1,
+    "processes": 1
+   },
+   {
+    "stage": "ribbon, 6 cells along a2 (12 states)",
+    "k_points": 24,
+    "chunk": 1,
+    "tasks": 24,
+    "workers": 1,
+    "processes": 1
+   }
+  ],
+  "wall_seconds": 0.64,
+  "peak_rss_bytes": 117534720,
+  "peak_worker_rss_bytes": 0
+ },
+ "citation": "T. Cole, S. Coh and D. Vanderbilt, Python Tight Binding (PythTB), doi:10.5281/zenodo.12721315",
+ "approximation": "Tight-binding (diagonal position) approximation: the Wannier centres are the orbital positions and the off-diagonal position matrix elements are dropped. Band energies and integer invariants are unaffected; Berry-curvature, quantum-metric and Hall magnitudes are approximate.",
+ "model": {
+  "num_wann": 2,
+  "n_R": 7,
+  "n_R_after_ws": 7,
+  "n_R_model": 7,
+  "folded_axes": [
+   2
+  ],
+  "n_hops": 13,
+  "spinors": false,
+  "periodic_dirs": [
+   0,
+   1
+  ],
+  "dimension": 2,
+  "lattice": [
+   [
+    1.0,
+    0.0,
+    0.0
+   ],
+   [
+    0.5,
+    0.8660254038,
+    0.0
+   ],
+   [
+    0.0,
+    0.0,
+    10.0
+   ]
+  ],
+  "fermi_energy": 0.0,
+  "fermi_source": "reference_band",
+  "ws_correction": {
+   "requested": "auto",
+   "mode": "recompute",
+   "selected_by": "band_dat",
+   "scores": {
+    "off": {
+     "in_window_max_meV": 4.406736309192638e-06,
+     "in_window_rms_meV": 2.9001703031420476e-06,
+     "max_meV": 4.406736309192638e-06
+    },
+    "recompute": {
+     "in_window_max_meV": 4.406736309192638e-06,
+     "in_window_rms_meV": 2.9001703031420476e-06,
+     "max_meV": 4.406736309192638e-06
+    }
+   },
+   "hermiticity_error": 0.0
+  },
+  "cutoffs": {
+   "min_hopping_norm": null,
+   "max_distance": null
+  },
+  "species": [
+   "B",
+   "N"
+  ],
+  "orbital_species": [
+   "B",
+   "N"
+  ],
+  "mp_grid": [
+   4,
+   4,
+   1
+  ],
+  "win_scalars": {
+   "dis_froz_min": -1.0,
+   "dis_froz_max": 1.5,
+   "dis_win_min": -6.0,
+   "dis_win_max": 6.0
+  },
+  "approximation": "Tight-binding (diagonal position) approximation: the Wannier centres are the orbital positions and the off-diagonal position matrix elements are dropped. Band energies and integer invariants are unaffected; Berry-curvature, quantum-metric and Hall magnitudes are approximate.",
+  "pythtb_version": "2.0.2",
+  "source_wannier_job_id": "job-wannier",
+  "reference_band_job_id": "job-band"
+ },
+ "validation": {
+  "band_dat": {
+   "max_meV": 4.406736087148033e-06,
+   "rms_meV": 2.9290181350412e-06,
+   "window_eV": [
+    -1.0,
+    1.5
+   ],
+   "in_window_max_meV": 4.406736087148033e-06,
+   "in_window_rms_meV": 2.900170376293132e-06,
+   "in_window_points": 10,
+   "available": true,
+   "n_k": 19
+  },
+  "fermi_in_frozen_window": true,
+  "hermiticity_error": 0.0,
+  "localization": {
+   "decay_length_A": null,
+   "max_distance_A": 1.0000000000134766
+  }
+ },
+ "slab": {
+  "kind": "ribbon",
+  "finite_axis": 1,
+  "periodic_axes": [
+   0
+  ],
+  "cells": 6,
+  "states": 12,
+  "window_eV": 0.5,
+  "edge_cells": 2,
+  "edge_crossings_at_fermi": {
+   "left": {
+    "up": 1,
+    "down": 0,
+    "net": 1
+   },
+   "right": {
+    "up": 0,
+    "down": 1,
+    "net": -1
+   }
+  },
+  "note": "Crossing counts are informational: the bulk Chern number is the invariant."
+ },
+ "warnings": [],
+ "outputs": [
+  {
+   "path": "Out/hopping_decay.png",
+   "title": "Hopping decay with distance",
+   "kind": "plot"
+  },
+  {
+   "path": "Out/ribbon_bands.json",
+   "title": "Ribbon bands (data)",
+   "kind": "data"
+  },
+  {
+   "path": "Out/ribbon_bands.png",
+   "title": "Ribbon bands with edge weight",
+   "kind": "plot"
+  }
+ ]
+}

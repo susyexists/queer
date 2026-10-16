@@ -464,6 +464,15 @@ schema's shape fails the check that reads it instead of stopping the comparison.
 report also lists the preconditions, the semantics profile, every flagged set and the
 quantities closest to their tolerance.
 
+**Goldens.** `tests/fixtures/generator_goldens` holds the driver's results on six
+analytic cases (Haldane bands with a Fermi surface, Chern topology, bands-mode and
+fermi-mode Berry curvature and a ribbon; Kane-Mele Z2). The case module
+`tests/numerical/generator_golden_cases.py` rebuilds their inputs byte for byte,
+and the tests require every golden to pass against a fresh QUEER run with all input
+digests equal. `scripts/validation/generate_generator_goldens.py` regenerates them
+with the vendored driver under `uv run --no-project --python 3.12 --with
+pythtb==2.0.2 --with scipy --with matplotlib`.
+
 ### Replaying saved response calculations
 
 Retrieve saved scientific inputs and output tables through the Generator's

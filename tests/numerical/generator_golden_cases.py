@@ -6,7 +6,9 @@ Each case stages what a Generator WANNIER job stages for a PythTB step (the
 file with the submitter's context, as the Generator writes them. Every number is
 analytic and written with fixed formatting; the band energies are rounded to 1e-8
 eV before they are written, so the files, and the SHA-256 digests a run records,
-are the same on every machine. ``test_generator_parity.py`` runs QUEER on them.
+are the same on every machine. ``scripts/validation/generate_generator_goldens.py``
+runs the Generator driver on these cases; ``test_generator_goldens.py`` and
+``test_generator_parity.py`` run QUEER on them.
 """
 
 import json

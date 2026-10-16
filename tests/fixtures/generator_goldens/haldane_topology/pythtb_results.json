@@ -1,0 +1,246 @@
+{
+ "schema_version": 1,
+ "status": "ok",
+ "step_type": "PYTHTB_TOPOLOGY",
+ "provenance": {
+  "core_sha256": "56fda912ba570e2293b3a9b4bf20d11038c64efa5d2f192c8ac03c615034e215",
+  "params_sha256": "ee476cbca996bbbaa3c6502fa299e461582cc64bec89451acffd3c8affadd85d",
+  "python": "3.12.12",
+  "numpy": "2.5.3",
+  "host": "golden",
+  "cpus": 16,
+  "memory_available_bytes": 19681808384,
+  "pythtb": "2.0.2",
+  "scipy": "1.18.1",
+  "matplotlib": "3.11.2",
+  "inputs": {
+   "wannier90.win": {
+    "bytes": 288,
+    "sha256": "e414ab0141ca734a8f989815e9cc0bf4ebb6e3c8dbd92b048d3159560ccf19a1"
+   },
+   "wannier90_hr.dat": {
+    "bytes": 1747,
+    "sha256": "6fd01f6de4681a505e908c91ce2a1b8827856b168390881cb5a1629f46488002"
+   },
+   "wannier90_centres.xyz": {
+    "bytes": 128,
+    "sha256": "0ac72f7ec51c0caef2b4b8e317b106979c1ba6d6dc249324840417a91a42a985"
+   },
+   "wannier90_band.kpt": {
+    "bytes": 820,
+    "sha256": "43ff6863c53bd8cf4e8c9a2157e6d83772f2b85ee2ff2609f86e8ba4e9ee371b"
+   },
+   "wannier90_band.dat": {
+    "bytes": 856,
+    "sha256": "564dd2c5b119faaef729bcc51d1448fce6382d589e73fca972da518b91e19d40"
+   },
+   "wannier90_band.labelinfo.dat": {
+    "bytes": 120,
+    "sha256": "49614d6db2a4a0db0abc2d27169519baa00c1d0a37fd3fc9be9c20ebb107beda"
+   }
+  },
+  "parallel": [
+   {
+    "stage": "validation",
+    "k_points": 19,
+    "chunk": 19,
+    "tasks": 1,
+    "workers": 1,
+    "processes": 1
+   },
+   {
+    "stage": "occupation",
+    "k_points": 1315,
+    "chunk": 1315,
+    "tasks": 1,
+    "workers": 1,
+    "processes": 1
+   },
+   {
+    "stage": "Wilson loops, k3=0",
+    "k_points": 252,
+    "chunk": 21,
+    "tasks": 12,
+    "workers": 1,
+    "processes": 1
+   }
+  ],
+  "wall_seconds": 0.42,
+  "peak_rss_bytes": 96231424,
+  "peak_worker_rss_bytes": 0
+ },
+ "citation": "T. Cole, S. Coh and D. Vanderbilt, Python Tight Binding (PythTB), doi:10.5281/zenodo.12721315",
+ "approximation": "Tight-binding (diagonal position) approximation: the Wannier centres are the orbital positions and the off-diagonal position matrix elements are dropped. Band energies and integer invariants are unaffected; Berry-curvature, quantum-metric and Hall magnitudes are approximate.",
+ "model": {
+  "num_wann": 2,
+  "n_R": 7,
+  "n_R_after_ws": 7,
+  "n_R_model": 7,
+  "folded_axes": [
+   2
+  ],
+  "n_hops": 13,
+  "spinors": false,
+  "periodic_dirs": [
+   0,
+   1
+  ],
+  "dimension": 2,
+  "lattice": [
+   [
+    1.0,
+    0.0,
+    0.0
+   ],
+   [
+    0.5,
+    0.8660254038,
+    0.0
+   ],
+   [
+    0.0,
+    0.0,
+    10.0
+   ]
+  ],
+  "fermi_energy": 0.0,
+  "fermi_source": "reference_band",
+  "ws_correction": {
+   "requested": "auto",
+   "mode": "recompute",
+   "selected_by": "band_dat",
+   "scores": {
+    "off": {
+     "in_window_max_meV": 4.406736309192638e-06,
+     "in_window_rms_meV": 2.9001703031420476e-06,
+     "max_meV": 4.406736309192638e-06
+    },
+    "recompute": {
+     "in_window_max_meV": 4.406736309192638e-06,
+     "in_window_rms_meV": 2.9001703031420476e-06,
+     "max_meV": 4.406736309192638e-06
+    }
+   },
+   "hermiticity_error": 0.0
+  },
+  "cutoffs": {
+   "min_hopping_norm": null,
+   "max_distance": null
+  },
+  "species": [
+   "B",
+   "N"
+  ],
+  "orbital_species": [
+   "B",
+   "N"
+  ],
+  "mp_grid": [
+   4,
+   4,
+   1
+  ],
+  "win_scalars": {
+   "dis_froz_min": -1.0,
+   "dis_froz_max": 1.5,
+   "dis_win_min": -6.0,
+   "dis_win_max": 6.0
+  },
+  "approximation": "Tight-binding (diagonal position) approximation: the Wannier centres are the orbital positions and the off-diagonal position matrix elements are dropped. Band energies and integer invariants are unaffected; Berry-curvature, quantum-metric and Hall magnitudes are approximate.",
+  "pythtb_version": "2.0.2",
+  "source_wannier_job_id": "job-wannier",
+  "reference_band_job_id": "job-band"
+ },
+ "validation": {
+  "band_dat": {
+   "max_meV": 4.406736087148033e-06,
+   "rms_meV": 2.9290181350412e-06,
+   "window_eV": [
+    -1.0,
+    1.5
+   ],
+   "in_window_max_meV": 4.406736087148033e-06,
+   "in_window_rms_meV": 2.900170376293132e-06,
+   "in_window_points": 10,
+   "available": true,
+   "n_k": 19
+  },
+  "fermi_in_frozen_window": true,
+  "hermiticity_error": 0.0,
+  "localization": {
+   "decay_length_A": null,
+   "max_distance_A": 1.0000000000134766
+  }
+ },
+ "topology": {
+  "occupation": {
+   "n_bands": 2,
+   "k_points_sampled": 1315,
+   "n_occ_source": "auto",
+   "metal": false,
+   "n_occ": 1,
+   "gap_eV": 1.1588457268119894,
+   "direct_gap_eV": 1.1588457268119894,
+   "direct_gap_k": [
+    0.6666666666666666,
+    0.3333333333333333,
+    0.0
+   ],
+   "is_direct": true,
+   "vbm_eV": -0.5794228634059948,
+   "cbm_eV": 0.5794228634059946,
+   "vbm_k": [
+    0.6666666666666666,
+    0.3333333333333333,
+    0.0
+   ],
+   "cbm_k": [
+    0.6666666666666666,
+    0.3333333333333333,
+    0.0
+   ],
+   "isolation_meV": 1158.8457268119894,
+   "isolated": true
+  },
+  "planes": [
+   {
+    "fixed_axis": 2,
+    "value": 0.0,
+    "loop_axis": 0,
+    "transverse_axis": 1,
+    "chern": -1,
+    "chern_raw": -1.0,
+    "max_phase_step": 1.0403358554067061,
+    "converged": true,
+    "transverse_points": 12,
+    "loop_points": 21,
+    "file": "Out/wcc_k3_0.json"
+   }
+  ],
+  "applicable": true,
+  "time_reversal": {
+   "spinors": false,
+   "kramers_degenerate_at_trims": false,
+   "max_kramers_split_meV": 6013.3185513491635,
+   "z2_computed": false
+  }
+ },
+ "warnings": [],
+ "outputs": [
+  {
+   "path": "Out/hopping_decay.png",
+   "title": "Hopping decay with distance",
+   "kind": "plot"
+  },
+  {
+   "path": "Out/wcc_k3_0.json",
+   "title": "Wilson loop, k3 = 0 (data)",
+   "kind": "data"
+  },
+  {
+   "path": "Out/wcc_k3_0.png",
+   "title": "Wannier charge centres, k3 = 0",
+   "kind": "plot"
+  }
+ ]
+}
