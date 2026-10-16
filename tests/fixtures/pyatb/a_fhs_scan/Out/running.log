@@ -1,0 +1,46 @@
+program start at Fri Oct 16 13:47:17 2026
+processor number is 8
+
+
+------------------------------------------------------
+|                                                    |
+|                     Structure                      |
+|                                                    |
+------------------------------------------------------
+
+Lattice Constant : 0.529177 Angstrom
+Lattice Vector   : 
+      12.472192        0.000000        0.000000 
+      -6.236096       10.801239        0.000000 
+       0.000000        0.000000      188.972599 
+
+
+------------------------------------------------------
+|                                                    |
+|                        AHC                         |
+|                                                    |
+------------------------------------------------------
+
+
+Parameter setting (FHS Berry-plaquette engine):
+ >> engine                  : fhs
+ >> fhs_grid                : 100 100 1
+ >> fhs_energy_window (eV)  : -0.7000 0.7000
+ >> fhs_energy_points       : 201
+ >> fhs_dimension           : 0
+ >> fermi_energy (eV)       : -2.700000
+
+ FHS AHC peak |sigma_xy| = 38.7405 S/cm at E = 0.2542 eV
+
+
+------------------------------------------------------
+|                                                    |
+|                   Time Statistics                  |
+|                                                    |
+------------------------------------------------------
+
+read_input : 
+ >> Read Input File :    1.405859e-02 s
+AHC : 
+ >> calculate AHC   :    2.375375e+00 s
+Total time : 0 h 0 m 4 s

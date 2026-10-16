@@ -65,7 +65,19 @@ def test_declared_legacy_alias_and_unrestricted_pair_sentinel():
     assert recipe["parameters"]["engine"] == "direct"
     assert recipe["parameters"]["chemical_potentials"] == [-5.374507]
     assert recipe["parameters"]["integration"]["method"] == "cubature"
-    assert changes
+    assert recipe["export_metadata"]["hall_convention"] == "pyatb"
+    assert recipe["export_metadata"]["hall_export_sign"] == -1
+    assert any("predates" in change for change in changes)
+    recipe, _ = MODULE.translate_resolved_input(
+        {
+            "INPUT_PARAMETERS": {**global_input, "hall_convention": "openmx"},
+            "AHC": {"engine": "kubo", "method": 1, "integrate_mode": "Grid", "integrate_grid": [4, 4, 1]},
+        },
+        "AHC",
+        fermi_energy=-5.374507,
+        spin_mode="soc",
+    )
+    assert recipe["export_metadata"]["hall_export_sign"] == 1
     recipe, changes = MODULE.translate_resolved_input(
         {
             "INPUT_PARAMETERS": global_input,

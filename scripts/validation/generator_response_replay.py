@@ -121,6 +121,11 @@ def translate_resolved_input(resolved, function, *, fermi_energy, spin_mode):
     }
     parameters = {key: value for key, value in resolved[function].items() if value is not None}
     changes = []
+    if "hall_convention" not in global_parameters:
+        # A resolved echo always names the convention once PyATB has one; an echo
+        # without it comes from a producer that printed PyATB's native sign.
+        global_parameters["hall_convention"] = "pyatb"
+        changes.append("a resolved input without hall_convention predates the key: PyATB's native sign")
     if function == "AHC" and parameters.get("engine") == "pyatb":
         parameters["engine"] = "kubo"
         changes.append("historical engine alias pyatb maps to the direct/Kubo family; method is preserved")

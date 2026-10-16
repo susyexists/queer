@@ -13,16 +13,33 @@ import numpy as np
 
 from ...io.artifacts import atomic_json, digest_file
 from ...physics.constants import ASE_FS as ASE_FS
-from ...physics.constants import BOHR_ANGSTROM, HARTREE_EV
+from ...physics.constants import BOHR_ANGSTROM as BOHR_ANGSTROM
+from ...physics.constants import HARTREE_EV
+from .pyatb_conventions import (
+    PYATB_HARTREE_EV,
+    hall_export_sign,
+    pyatb_energy,
+    pyatb_input_fermi_energy,
+    queer_energy,
+    refinement_off,
+    resolve_hall_convention,
+)
 
 
 def translate_pyatb(step_type, parameters=None, *, input_parameters=None, fermi_energy=None, spin_mode=None):
     """Translate resolved legacy keywords to native workflow arguments.
 
     Return workflow/parameters/execution/export_metadata. ``fermi_energy`` supplies
-    the authoritative SCF value for Auto; callers obtain it from native SCFOUT.
+    the authoritative SCF value (QUEER eV) for Auto; callers obtain it from native
+    SCFOUT. An explicit PyATB energy (eV, or Ry with PyATB's Rydberg) is moved to
+    QUEER's Hartree scale so both codes sample the same point
+    (:mod:`~queer.compat.generator.pyatb_conventions`). ``hall_convention``
+    defaults to ``auto``, which an OPENMX package resolves to ``openmx``;
+    ``hall_export_sign`` takes the native (physical) Hall tensor to what PyATB
+    prints. A Grid threshold is in Å² and a threshold of 1e30 or more turns the
+    refinement off: the native run then sums the plain Gamma-origin grid.
     """
-    integration: dict[str, Any]
+    integration: dict[str, Any] | None
     step = str(step_type).upper().removeprefix("PYATB_")
     names = {"AHC": "ahc", "SHIFT_CURRENT": "shift_current", "CHERN_NUMBER": "chern_number"}
     if step not in names:
@@ -72,13 +89,14 @@ def translate_pyatb(step_type, parameters=None, *, input_parameters=None, fermi_
     if step == "AHC" and legacy_engine not in {"kubo", "pyatb", "fhs"}:
         raise ValueError("AHC engine must be kubo, pyatb, or fhs")
     energy = values.get("fermi_energy", "Auto")
-    if str(energy).lower() == "auto":
+    unit = values.get("fermi_energy_unit", "eV")
+    producer_ef = pyatb_input_fermi_energy(energy, unit)
+    if producer_ef is None:
         mu = fermi_energy
+        source = "auto"
     else:
-        unit = values.get("fermi_energy_unit", "eV")
-        if unit not in {"eV", "Ry"}:
-            raise ValueError("fermi_energy_unit must be eV or Ry")
-        mu = float(energy) * (HARTREE_EV / 2 if unit == "Ry" else 1)
+        mu = queer_energy(producer_ef)
+        source = "input_Ry" if unit == "Ry" else "input_eV"
     if mu is not None and not np.isfinite(mu):
         raise ValueError("Fermi energy must be finite")
     if spin_mode is not None and "nspin" in values:
@@ -93,21 +111,25 @@ def translate_pyatb(step_type, parameters=None, *, input_parameters=None, fermi_
         execution["batch_size"] = int(values["max_kpoint_num"])
         if execution["batch_size"] < 1:
             raise ValueError("max_kpoint_num must be positive")
-    convention = str(values.get("hall_convention", "pyatb")).lower()
-    if convention not in {"auto", "pyatb", "openmx", "fhs"}:
-        raise ValueError("Unsupported hall_convention")
+    requested = str(values.get("hall_convention", "auto")).strip().lower()
+    convention = resolve_hall_convention(requested, values.get("package", "OPENMX"))
     metadata = {
         "legacy_step_type": "PYATB_" + step,
+        "hall_convention_requested": requested,
         "hall_convention": convention,
         "hall_export_sign": 1,
         "energy_reference": "absolute",
-        "legacy_parameter_version": 1,
+        "legacy_parameter_version": 2,
         "sparse_format": values.get("sparse_format", 0),
+        "fermi_source": source,
+        "fermi_energy_pyatb_eV": producer_ef if producer_ef is not None or mu is None else pyatb_energy(mu),
+        "pyatb_hartree_to_ev": PYATB_HARTREE_EV,
     }
     if step == "AHC":
         metadata["legacy_engine"] = legacy_engine
         if legacy_engine == "pyatb":
             metadata["engine_translation"] = "pyatb family alias; method selects direct or kubo"
+        metadata["hall_export_sign"] = hall_export_sign(convention, legacy_engine)
     method = int(values.get("method", 1 if step == "SHIFT_CURRENT" else 0))
     if method not in (0, 1):
         raise ValueError("method must be 0 or 1")
@@ -118,30 +140,39 @@ def translate_pyatb(step_type, parameters=None, *, input_parameters=None, fermi_
             raise ValueError("Invalid FHS energy scan")
         if mu is None:
             raise ValueError("FHS Auto translation requires the SCF Fermi energy")
+        offsets = window[0] + np.arange(count) * ((window[1] - window[0]) / count if count > 1 else 0.0)
+        dimension_flag = int(values.get("fhs_dimension", 0))
         native.update(
             engine="fhs",
             dimension=3,
-            grid=values.get("fhs_grid", [100, 100, 1]),
-            chemical_potentials=(
-                mu + window[0] + np.arange(count) * (window[1] - window[0]) / count
-            ).tolist(),
+            grid=list(values.get("fhs_grid", [100, 100, 1])),
+            chemical_potentials=(mu + offsets * (HARTREE_EV / PYATB_HARTREE_EV)).tolist(),
         )
-        metadata["hall_components"] = (
-            ["xy"] if int(values.get("fhs_dimension", 0)) == 0 else ["yz", "zx", "xy"]
-        )
+        metadata["hall_components"] = ["xy"] if dimension_flag == 0 else ["yz", "zx", "xy"]
+        metadata["pyatb_energy_offsets_eV"] = offsets.tolist()
+        metadata["fhs_dimension"] = dimension_flag
     elif step in {"AHC", "CHERN_NUMBER"}:
         native["engine"] = "direct" if method == 0 else "kubo"
         mode = values.get("integrate_mode", "Grid")
+        metadata["integrate_mode"] = mode
         if mode == "Grid":
             grid = list(values.get("integrate_grid", [4, 4, 4]))
             subdivision = list(values.get("adaptive_grid", [4, 4, 4]))
-            integration = {
-                "method": "threshold",
-                "subdivision": subdivision,
-                "threshold": float(values.get("adaptive_grid_threshold", 50)) * BOHR_ANGSTROM**2,
-                "threshold_quantity": "curvature",
-            }
-            metadata["threshold_source_unit"] = "bohr^2"
+            threshold = float(values.get("adaptive_grid_threshold", 50))
+            if np.isnan(threshold) or threshold < 0:
+                raise ValueError("adaptive_grid_threshold must be nonnegative")
+            metadata["threshold_source_unit"] = "angstrom^2"
+            if refinement_off(threshold):
+                integration = None
+                metadata["refinement"] = "off"
+            else:
+                integration = {
+                    "method": "threshold",
+                    "subdivision": subdivision,
+                    "threshold": threshold,
+                    "threshold_quantity": "curvature",
+                }
+                metadata["refinement"] = "threshold"
         elif mode == "Adaptive":
             grid = list(values.get("initial_grid", [1, 1, 1]))
             integration = {
@@ -149,13 +180,14 @@ def translate_pyatb(step_type, parameters=None, *, input_parameters=None, fermi_
                 "absolute_tolerance": float(values.get("absolute_error", 0.1)),
                 "relative_tolerance": float(values.get("relative_error", 1e-6)),
             }
+            metadata["refinement"] = "cubature"
         else:
             raise ValueError("integrate_mode must be Grid or Adaptive")
         if len(grid) != 3:
             raise ValueError("Integration grid must have three dimensions")
         if step == "CHERN_NUMBER":
             grid[2] = 1
-            if "subdivision" in integration:
+            if integration is not None and "subdivision" in integration:
                 integration["subdivision"][2] = 1
             native.update(
                 k_start=values.get("k_start", [0.0, 0.0, 0.0]),
@@ -167,11 +199,11 @@ def translate_pyatb(step_type, parameters=None, *, input_parameters=None, fermi_
             native["occupied_bands"] = None if occupied == -1 else occupied
             if mu is not None:
                 native["fermi_energy"] = float(mu)
+            metadata["chern_orientation"] = "native plane flux; no Hall sign"
         else:
             native["dimension"] = 3
             if mu is not None:
                 native["chemical_potentials"] = [float(mu)]
-            metadata["hall_export_sign"] = -1 if convention in {"openmx", "fhs"} else 1
         native.update(grid=grid, integration=integration)
     elif step == "SHIFT_CURRENT":
         if "omega" not in values or "domega" not in values or "grid" not in values:
@@ -466,6 +498,8 @@ def export_run(run_dir, *, output_dir=None, profile="generator"):
         products.append(filename)
 
     if name in {"ahc", "shift_current", "chern_number"}:
+        from .pyatb_files import AHC_FILE, CHERN_FILE, ahc_scan_text, ahc_vector_text, chern_text, write_text
+
         if name not in arrays or not np.isfinite(arrays[name]).all():
             raise ValueError("Required electronic response product is missing/nonfinite")
         convention = manifest["config"]["inputs"].get("export_metadata", {})
@@ -474,8 +508,16 @@ def export_run(run_dir, *, output_dir=None, profile="generator"):
             vector = np.column_stack((tensor[:, 1, 2], tensor[:, 2, 0], tensor[:, 0, 1]))
             if convention.get("hall_components") == ["xy"]:
                 vector[:, :2] = 0
-            values = np.column_stack((arrays["chemical_potentials"], vector))
-            filename, header = "Out/AHC/ahc.dat", "absolute_mu_eV sigma_yz sigma_zx sigma_xy (S/cm)"
+            offsets = convention.get("pyatb_energy_offsets_eV")
+            if offsets is None and len(vector) == 1:
+                product = ahc_vector_text(vector[0])
+            else:
+                if offsets is None or len(offsets) != len(vector):
+                    reference = manifest["config"].get("parameters", {}).get("ef", 0.0)
+                    offsets = np.asarray(arrays["chemical_potentials"], float) - float(reference or 0.0)
+                product = ahc_scan_text(offsets, vector)
+            filename = AHC_FILE
+            write_text(target / filename, product)
         elif name == "shift_current":
             components = [(a, b, c) for a in range(3) for b in range(3) for c in range(b, 3)]
             tensor = arrays[name]
@@ -483,10 +525,11 @@ def export_run(run_dir, *, output_dir=None, profile="generator"):
             labels = ["".join("xyz"[axis] for axis in component) for component in components]
             filename = "Out/Shift_Current/shift_current.dat"
             header = "omega(eV) " + " ".join(labels) + " (uA/V^2)"
+            _text_table(target / filename, values, header)
         else:
-            values = np.atleast_2d(arrays[name])
-            filename, header = "Out/Chern_Number/chern_number.dat", "Chern_number (dimensionless)"
-        _text_table(target / filename, values, header)
+            mode = str(convention.get("integrate_mode") or "Grid")
+            filename = CHERN_FILE
+            write_text(target / filename, chern_text(float(np.ravel(arrays[name])[0]), mode))
         products.append(filename)
         write_json(
             "pyatb_results.json",

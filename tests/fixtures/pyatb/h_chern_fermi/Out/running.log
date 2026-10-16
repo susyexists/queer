@@ -1,0 +1,62 @@
+program start at Fri Oct 16 13:47:38 2026
+processor number is 8
+
+
+------------------------------------------------------
+|                                                    |
+|                     Structure                      |
+|                                                    |
+------------------------------------------------------
+
+Lattice Constant : 0.529177 Angstrom
+Lattice Vector   : 
+      12.472192        0.000000        0.000000 
+      -6.236096       10.801239        0.000000 
+       0.000000        0.000000      188.972599 
+
+
+------------------------------------------------------
+|                                                    |
+|                    Chern Number                    |
+|                                                    |
+------------------------------------------------------
+
+
+Definition of k-surface : 
+ >> k_start :   0.0000   0.0000   0.0000
+ >> k_vect1 :   1.0000   0.0000   0.0000
+ >> k_vect2 :   0.0000   1.0000   0.0000
+
+Parameter setting of integral module : 
+ >> integrate_mode          : Grid
+ >> integrate_grid          : 100      100      1       
+ >> adaptive_grid           : 1        1        1       
+ >> adaptive_grid_threshold : 1000000000000000019884624838656.0000
+
+Parameter setting of Berry curvature : 
+ >> method                  : 0
+ >> fermi_energy            : -2.350000      
+
+Enter the integral solution module ==> 
+
+!!The number of rough k-grid : 10000
+ >> Calculated       8000 k points, took 7.567613e-01 s
+ >> Calculated       2000 k points, took 1.891155e-01 s
+
+!!The number of k points for adaptive refinement : 0
+
+ Chern number is -0.9999999999999967 by using the Grid integral 
+
+
+
+------------------------------------------------------
+|                                                    |
+|                   Time Statistics                  |
+|                                                    |
+------------------------------------------------------
+
+read_input : 
+ >> Read Input File        :    1.515603e-02 s
+chern_num : 
+ >> calculate Chern number :    1.061164e+00 s
+Total time : 0 h 0 m 1 s

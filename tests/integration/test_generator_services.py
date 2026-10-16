@@ -8,6 +8,8 @@ import pytest
 
 from queer.cli import main
 from queer.compat.generator import band_payload, export_run, translate_ase, translate_pyatb
+from queer.compat.generator.pyatb_conventions import HARTREE_EV, PYATB_HARTREE_EV, PYATB_RYDBERG_EV
+from queer.compat.generator.pyatb_files import ahc_vector_text, chern_text
 from queer.config import config_from_mapping
 from queer.io.atomistic import read_frames, write_structure
 from queer.io.bands import BandData
@@ -42,12 +44,18 @@ def test_legacy_parameter_translations_preserve_energy_units_and_component_selec
         },
     )
     parameters = translated["parameters"]
+    # PyATB's eV values (its Rydberg, its Hartree) are sampled at QUEER's eV of the same point.
+    scale = HARTREE_EV / PYATB_HARTREE_EV
     np.testing.assert_allclose(
-        parameters["chemical_potentials"], parameters["ef"] + np.array([-1, -0.5, 0, 0.5])
+        parameters["chemical_potentials"],
+        parameters["ef"] + np.array([-1, -0.5, 0, 0.5]) * scale,
+        rtol=1e-14,
     )
     assert parameters["dimension"] == 3
     assert translated["export_metadata"]["hall_components"] == ["xy"]
-    assert parameters["ef"] == pytest.approx(13.60569312299, rel=1e-7)
+    assert translated["export_metadata"]["pyatb_energy_offsets_eV"] == [-1, -0.5, 0, 0.5]
+    assert parameters["ef"] == pytest.approx(PYATB_RYDBERG_EV * scale, rel=1e-15)
+    assert parameters["ef"] == pytest.approx(13.6057289, rel=1e-8)
     shift = translate_pyatb(
         "PYATB_SHIFT_CURRENT",
         {
@@ -117,10 +125,70 @@ def test_pyatb_hall_export_matches_recorded_pseudovector_order(tmp_path, xy_only
     finally:
         store.release()
     output = export_run(store.root) / "Out/AHC/ahc.dat"
-    np.testing.assert_array_equal(
-        np.loadtxt(output), [-5.0, 0.0, 0.0, 3.0] if xy_only else [-5.0, 1.0, 2.0, 3.0]
+    assert output.read_text() == ahc_vector_text([0.0, 0.0, 3.0] if xy_only else [1.0, 2.0, 3.0])
+
+
+def _committed_run(root, workflow, arrays, export_metadata, parameters=None):
+    from queer.io.artifacts import RunStore
+
+    store = RunStore(
+        root,
+        {
+            "workflow": workflow,
+            "inputs": {"export_metadata": export_metadata},
+            "parameters": parameters or {},
+            "execution": {},
+        },
+        [],
     )
-    assert "sigma_yz sigma_zx sigma_xy" in output.read_text().splitlines()[0]
+    try:
+        store.commit("result", arrays)
+        store.finish()
+    finally:
+        store.release()
+    return store.root
+
+
+def test_pyatb_exports_apply_the_sign_table_and_pyatbs_layouts(tmp_path):
+    tensor = np.array([[[0.0, 3.0, -2.0], [-3.0, 0.0, 1.0], [2.0, -1.0, 0.0]]])
+    recipe = translate_pyatb(
+        "AHC", {"integrate_grid": [2, 2, 1]}, input_parameters={"hall_convention": "pyatb"}, fermi_energy=0.0
+    )
+    run_dir = _committed_run(
+        tmp_path / "pyatb", "ahc", {"ahc": tensor, "chemical_potentials": [0.0]}, recipe["export_metadata"]
+    )
+    assert (export_run(run_dir) / "Out/AHC/ahc.dat").read_text() == ahc_vector_text([-1.0, -2.0, -3.0])
+
+    fhs = translate_pyatb(
+        "AHC",
+        {"engine": "fhs", "fhs_energy_window": [-0.1, 0.1], "fhs_energy_points": 2},
+        input_parameters={"hall_convention": "pyatb"},
+        fermi_energy=-1.0,
+    )
+    scan = np.repeat(tensor, 2, axis=0)
+    run_dir = _committed_run(
+        tmp_path / "fhs",
+        "ahc",
+        {"ahc": scan, "chemical_potentials": fhs["parameters"]["chemical_potentials"]},
+        fhs["export_metadata"],
+    )
+    lines = (export_run(run_dir) / "Out/AHC/ahc.dat").read_text().splitlines()
+    assert lines[0] == "# FHS Berry-plaquette AHC (S/cm)" and len(lines) == 4
+    assert lines[2].split() == ["-0.100000", "0.000000", "0.000000", "3.000000"]
+
+    chern = translate_pyatb("CHERN_NUMBER", {"integrate_grid": [4, 4, 1]}, fermi_energy=0.0)
+    run_dir = _committed_run(
+        tmp_path / "chern",
+        "chern_number",
+        {"chern_number": np.array(-0.9999999999999967)},
+        chern["export_metadata"],
+    )
+    target = export_run(run_dir)
+    assert (target / "Out/Chern_Num/chern_number.dat").read_text() == chern_text(-0.9999999999999967, "Grid")
+    assert not (target / "Out/Chern_Number").exists()
+    assert json.loads((target / "pyatb_results.json").read_text())["files"] == [
+        "Out/Chern_Num/chern_number.dat"
+    ]
 
 
 def test_pyatb_shift_export_matches_recorded_eighteen_component_columns(tmp_path):

@@ -41,6 +41,8 @@ target/
 # Local configuration and logs
 .env
 *.log
+# Producer logs that tests read as fixtures
+!tests/fixtures/**/*.log
 pip-log.txt
 pip-delete-this-directory.txt
 

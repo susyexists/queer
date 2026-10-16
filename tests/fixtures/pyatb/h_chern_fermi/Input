@@ -1,0 +1,31 @@
+INPUT_PARAMETERS
+{
+    nspin                           4
+    package                         OPENMX
+    scfout_route                    ../test.scfout
+    fermi_energy                    -2.35
+    fermi_energy_unit               eV
+}
+
+LATTICE
+{
+    lattice_constant                1.0
+    lattice_constant_unit           Bohr
+    lattice_vector
+     12.472191524621  0.000000000000  0.000000000000
+     -6.236095762310  10.801239113740  0.000000000000
+     0.000000000000  0.000000000000  188.972598857892
+}
+
+CHERN_NUMBER
+{
+    method                          0
+    occ_band                        -1
+    integrate_mode                  Grid
+    integrate_grid                  100 100 1
+    adaptive_grid                   1 1 1
+    adaptive_grid_threshold         1e30
+    k_start                         0 0 0
+    k_vect1                         1 0 0
+    k_vect2                         0 1 0
+}

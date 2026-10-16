@@ -1,0 +1,29 @@
+INPUT_PARAMETERS
+{
+    nspin                           4
+    package                         OPENMX
+    scfout_route                    ../test.scfout
+    fermi_energy                    -2.35
+    fermi_energy_unit               eV
+    hall_convention                 openmx
+}
+
+LATTICE
+{
+    lattice_constant                1.0
+    lattice_constant_unit           Bohr
+    lattice_vector
+     12.472191524621  0.000000000000  0.000000000000
+     -6.236095762310  10.801239113740  0.000000000000
+     0.000000000000  0.000000000000  188.972598857892
+}
+
+AHC
+{
+    engine                          kubo
+    method                          0
+    integrate_mode                  Grid
+    integrate_grid                  100 100 1
+    adaptive_grid                   1 1 1
+    adaptive_grid_threshold         1e30
+}

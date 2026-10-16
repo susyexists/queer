@@ -154,15 +154,15 @@ constructing the native run configuration. Legacy mappings include:
 
 | Legacy field | Native meaning |
 | --- | --- |
-| `fermi_energy`, `fermi_energy_unit=Ry` | Absolute eV, with explicit Ry conversion |
-| FHS `fhs_energy_window` | Fermi-relative bounds; upper-exclusive count scan |
+| `fermi_energy`, `fermi_energy_unit=Ry` | PyATB's eV (its Rydberg is 13.605698066 eV) moved to QUEER's Hartree scale: `E * HARTREE_EV / 27.211324570273` |
+| FHS `fhs_energy_window` | Fermi-relative bounds; upper-exclusive count scan, offsets on the same scale |
 | FHS `fhs_dimension` | Selected Hall components; bulk conductivity remains S/cm |
-| Hall `openmx`/`fhs` sign conventions | Export sign only for direct/Kubo legacy recipes |
+| `hall_convention` (default `auto`, `openmx` for OpenMX input) | `hall_export_sign`: -1 for `pyatb` with the direct/Kubo engine, +1 for `openmx`, `fhs`, `auto` and the FHS engine |
 | Shift `eta` | Legacy Gaussian width divided by √2 for native standard deviation |
 | `n_occ`, `m_unocc` | A single one-based occupied/unoccupied band pair; native indices are zero-based |
 | `occ_band` | Occupied count and count-based scissors boundary |
 | Shift methods `0`, `1` | Audited legacy sum-over-states computation mapped to native analytic derivatives |
-| Threshold `adaptive_grid_threshold` | Curvature threshold converted from Bohr² to Å² |
+| Threshold `adaptive_grid_threshold` | Curvature threshold in Å², unconverted; 1e30 or more turns the refinement off (plain Gamma-origin grid) |
 | ASE `friction` | Legacy inverse ASE time converted to fs⁻¹ |
 | Layer and phonon path display recipes | Historical behavior confined to compatibility adapters |
 
@@ -185,8 +185,9 @@ writing success. An unconverged FIRE run remains available for analysis but
 cannot export success. Exports include a product-checksum manifest and units,
 input/model provenance and calculation status in JSON summaries.
 
-Expected filenames include `Out/AHC/ahc.dat`,
-`Out/Shift_Current/shift_current.dat`, `Out/Chern_Number/chern_number.dat`,
+Expected filenames include `Out/AHC/ahc.dat` (PyATB's one-line vector, or its FHS
+table), `Out/Shift_Current/shift_current.dat`, `Out/Chern_Num/chern_number.dat`
+(PyATB's one-line value),
 `pyatb_results.json`, `phonon_band.dat`, `phonon_results.json`,
 `trajectory.traj`, `nvt_results.json`, `relax.traj`, `relax_results.json`,
 `select_results.json`, `POSCAR`, `CONTCAR`, `results.json`, `band_1.dat`,
