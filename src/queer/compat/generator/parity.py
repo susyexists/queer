@@ -1798,16 +1798,29 @@ def _shorten(text: str, limit: int = 400) -> str:
     return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
-def compare(step_type: str, reference_dir: str | Path, candidate_dir: str | Path) -> dict[str, Any]:
-    """Compare a candidate run of a Generator Wannier step with a reference run of the same step.
+def compare(
+    step_type: str,
+    reference_dir: str | Path,
+    candidate_dir: str | Path,
+    *,
+    scfout: str | Path | None = None,
+) -> dict[str, Any]:
+    """Compare a candidate run of a Generator step with a reference run of the same step.
 
     ``step_type`` names the step family (``QUEER_BANDS``, ``PYTHTB_BANDS`` or
     ``BANDS``; likewise TOPOLOGY, BERRY and SLAB); an unknown step raises
-    ``ValueError``. Returns the report: ``verdict``, ``preconditions``,
-    ``semantics``, ``quantities`` (``name``, ``class``, ``metric``,
-    ``tolerance``, ``detail``), ``flagged_sets`` and
+    ``ValueError``. The OpenMX families (``AHC``, ``CHERN_NUMBER``, with a
+    ``QUEER_`` or ``PYATB_`` prefix) compare a QUEER run with a PyATB run directory
+    in :func:`~queer.compat.generator.parity_pyatb.compare`, which hashes
+    ``scfout`` when the reference recorded no input digests. Returns the report:
+    ``verdict``, ``preconditions``, ``semantics``, ``quantities`` (``name``,
+    ``class``, ``metric``, ``tolerance``, ``detail``), ``flagged_sets`` and
     ``inputs_verified_by_fingerprint``.
     """
+    from . import parity_pyatb
+
+    if parity_pyatb.openmx_family(step_type) is not None:
+        return parity_pyatb.compare(step_type, reference_dir, candidate_dir, scfout=scfout)
     family = step_family(step_type)
     comparison = _Comparison(
         family, RunDirectory.load("reference", reference_dir), RunDirectory.load("candidate", candidate_dir)
@@ -1856,9 +1869,15 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         f"- **Reference semantics:** `{semantics.get('profile')}`: {semantics.get('description')}",
         "- **Inputs verified by fingerprint:** "
         + ("yes" if report.get("inputs_verified_by_fingerprint") else "no"),
-        f"- **Eigenvalue tolerance:** {_number(basis.get('eigenvalue_eV'))} eV "
-        f"(Weyl bound {_number(basis.get('weyl_bound_eV'))} eV)",
     ]
+    if "eigenvalue_eV" in basis:
+        lines.append(
+            f"- **Eigenvalue tolerance:** {_number(basis.get('eigenvalue_eV'))} eV "
+            f"(Weyl bound {_number(basis.get('weyl_bound_eV'))} eV)"
+        )
+    else:
+        rules = ", ".join(f"{key} {_cell(value)}" for key, value in basis.items() if value is not None)
+        lines.append(f"- **Tolerance basis:** {rules}")
     if semantics.get("berry_sign_applied_to_reference"):
         lines.append("- **Convention:** the reference's fermi-mode curvature signs were multiplied by -1")
     lines += ["", "## Preconditions", "", "| Check | OK | Detail |", "|---|---|---|"]
@@ -1880,6 +1899,9 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     if flagged:
         lines += ["", "## Flagged sets", ""]
         for name, entry in flagged.items():
+            if entry.get("summary_line"):
+                lines.append(f"- `{name}`: {entry['summary_line']}")
+                continue
             lines.append(
                 f"- `{name}`: {entry.get('size')} of {entry.get('points')} points "
                 f"({entry.get('points_with_curvature')} carry curvature); integral share "

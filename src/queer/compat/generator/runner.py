@@ -1,11 +1,14 @@
 """The ``python -m queer generator`` commands behind the standard-library boot.
 
 ``run --step STEP --params FILE [--workspace DIR]`` resolves the parameter file
-for STEP (a QUEER step or its ``PYTHTB_`` name), builds and validates the model
-from the workspace's staged ``wannier90`` files, runs the step and writes
-``queer_results.json`` in the workspace on success and on every failure. The
-exit code follows the Generator PythTB driver: 0 success, 2 a failure reported
-with a stable code, 3 out of memory (``queer_oom``), 1 anything unexpected
+for STEP and runs it in the workspace, writing ``queer_results.json`` on success
+and on every failure. A Wannier step (``QUEER_BANDS``, ``QUEER_TOPOLOGY``,
+``QUEER_BERRY``, ``QUEER_SLAB`` or its ``PYTHTB_`` name) builds and validates its
+model from the staged ``wannier90`` files; an OpenMX step (``QUEER_AHC``,
+``QUEER_CHERN_NUMBER`` or its ``PYATB_`` name) reads the staged scfout and the
+``queer_params.json`` of :mod:`~queer.compat.generator.openmx_params`. The exit
+code follows the Generator PythTB driver: 0 success, 2 a failure reported with a
+stable code, 3 out of memory (``queer_oom``), 1 anything unexpected
 (``queer_internal_error``, whose message ends with the innermost frames of the
 traceback). As in the driver, an interrupt is not caught: the document, still
 ``running``, is written and the interrupt propagates; SIGTERM keeps Python's
@@ -14,12 +17,15 @@ default action and ends the process at once.
 ``capabilities`` prints ``{"queer_version", "steps"}`` as JSON, the steps being
 the ones this build runs.
 
-``compare --step STEP --reference DIR --candidate DIR [--report FILE]
-[--markdown FILE]`` compares two run directories of a step
+``compare [--step STEP] --reference DIR --candidate DIR [--scfout FILE]
+[--report FILE] [--markdown FILE]`` compares two run directories of a step
 (:func:`~queer.compat.generator.parity.compare`), prints the verdict and the
-failed checks, and writes the JSON report and its Markdown page when asked. It
-exits 0 for ``pass`` and ``pass_with_documented_differences``, 2 otherwise
-(``fail``, ``not_comparable`` or unusable arguments).
+failed checks, and writes the JSON report and its Markdown page when asked. A
+reference holding PyATB's ``Input`` and ``Out/`` is recognised as a PyATB run and
+compared with :mod:`~queer.compat.generator.parity_pyatb`; its step may then be
+left out, and ``--scfout`` names the scfout to hash when the reference has no
+``inputs.sha256``. It exits 0 for ``pass`` and ``pass_with_documented_differences``,
+2 otherwise (``fail``, ``not_comparable`` or unusable arguments).
 """
 
 from __future__ import annotations
@@ -34,6 +40,9 @@ from typing import Any
 
 from .bands import run_bands
 from .berry import run_berry
+from .openmx_params import OPENMX_STEPS, is_openmx_step, translate_openmx
+from .openmx_steps import APPROXIMATION_NOTE as OPENMX_APPROXIMATION_NOTE
+from .openmx_steps import openmx_step_body
 from .pythtb_params import STEP_BANDS, STEP_BERRY, STEP_SLAB, STEP_TOPOLOGY, WannierStepParameters
 from .results import (
     ERR_BAD_PARAMS,
@@ -54,8 +63,8 @@ STEP_RUNNERS: Mapping[str, Callable[[WannierStepContext], None]] = MappingProxyT
     {STEP_BANDS: run_bands, STEP_TOPOLOGY: run_topology, STEP_BERRY: run_berry, STEP_SLAB: run_slab}
 )
 USAGE = (
-    "usage: python -m queer generator {run --step STEP --params FILE [--workspace DIR] | "
-    "capabilities | compare --step STEP --reference DIR --candidate DIR [--report FILE] [--markdown FILE]}"
+    "usage: python -m queer generator {run --step STEP --params FILE [--workspace DIR] | capabilities | "
+    "compare [--step STEP] --reference DIR --candidate DIR [--scfout FILE] [--report FILE] [--markdown FILE]}"
 )
 
 
@@ -81,6 +90,15 @@ def step_body(parameters: WannierStepParameters, record: RunRecord, log: Callabl
     runner(model_stage(parameters, record, log))
 
 
+def _declared_step(params_path: str | Path) -> Any:
+    try:
+        with open(params_path, encoding="utf-8") as stream:
+            params = json.load(stream)
+    except (OSError, ValueError):
+        return None
+    return params.get("step_type") if isinstance(params, Mapping) else None
+
+
 def run(
     step: str | None,
     params_path: str | Path,
@@ -89,6 +107,17 @@ def run(
     log: Callable[[str], None] | None = None,
 ) -> int:
     """Run one step in ``workspace``; returns the exit code. ``queer_results.json`` is always written."""
+    if is_openmx_step(step if step is not None else _declared_step(params_path)):
+        return execute(
+            workspace,
+            params_path,
+            openmx_step_body,
+            step=step,
+            log=log,
+            translate=translate_openmx,
+            approximation=OPENMX_APPROXIMATION_NOTE,
+            record_params=True,
+        )
     return execute(workspace, params_path, step_body, step=step, log=log)
 
 
@@ -96,7 +125,7 @@ def capabilities() -> dict[str, Any]:
     """The QUEER version and the steps this build runs."""
     from ... import __version__
 
-    return {"queer_version": __version__, "steps": sorted(STEP_RUNNERS)}
+    return {"queer_version": __version__, "steps": sorted({*STEP_RUNNERS, *OPENMX_STEPS})}
 
 
 def _option(arguments: Sequence[str], name: str) -> str | None:
@@ -130,16 +159,23 @@ def _usage_failure(arguments: Sequence[str], message: str) -> int:
 def compare_command(arguments: Sequence[str]) -> int:
     """``compare``: print the verdict, write the requested reports; exit 0 when the verdict passes, else 2."""
     from .parity import compare, passing, render_markdown
+    from .parity_pyatb import is_pyatb_directory, pyatb_step
 
     parser = _Parser(prog="python -m queer generator compare")
-    parser.add_argument("--step", required=True)
+    parser.add_argument("--step")
     parser.add_argument("--reference", required=True)
     parser.add_argument("--candidate", required=True)
+    parser.add_argument("--scfout")
     parser.add_argument("--report")
     parser.add_argument("--markdown")
     try:
         options = parser.parse_args(list(arguments))
-        report = compare(options.step, options.reference, options.candidate)
+        step = options.step
+        if step is None:
+            if not is_pyatb_directory(options.reference):
+                raise ValueError("--step is required unless the reference is a PyATB run directory")
+            step = pyatb_step(options.reference)
+        report = compare(step, options.reference, options.candidate, scfout=options.scfout)
     except (_UsageError, ValueError) as error:
         print(f"queer generator compare: {error}", file=sys.stderr)
         return EXIT_FAILED

@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[2]
 PACKAGE = ROOT / "src" / "queer"
 sys.path.insert(0, str(ROOT / "tests" / "numerical"))
 
+from openmx_files import qwz_spinor_scfout  # noqa: E402
 from tight_binding_models import haldane  # noqa: E402
 from wannier90_files import Wannier90Job  # noqa: E402
 
@@ -40,6 +41,11 @@ STEPS = {
     "QUEER_TOPOLOGY": {"kpath": LAYER_PATH, "loop_points": 11, "transverse_points": 6},
     "QUEER_BERRY": {"kpath": LAYER_PATH, "kpath_points": 24, "berry_mesh": 8},
     "QUEER_SLAB": {"slab_kpoints": 12, "slab_cells": 4},
+}
+# OpenMX steps: their PyATB function block, read from the staged scfout.
+OPENMX_STEPS = {
+    "QUEER_AHC": {"engine": "kubo", "method": 1, "integrate_mode": "Grid", "integrate_grid": [4, 4, 1]},
+    "QUEER_CHERN_NUMBER": {"method": 0, "integrate_mode": "Grid", "integrate_grid": [4, 4, 1]},
 }
 STEP_BLOCKS = {
     "QUEER_BANDS": "bands",
@@ -131,7 +137,8 @@ def staged(tmp_path_factory):
 def test_capabilities_of_the_staged_copy_list_every_step(staged):
     finished = python(["-m", "queer", "generator", "capabilities"], staged["root"], staged["env"])
     assert finished.returncode == 0, finished.stderr
-    assert json.loads(finished.stdout) == {"queer_version": staged["version"], "steps": sorted(STEPS)}
+    steps = sorted({*STEPS, *OPENMX_STEPS})
+    assert json.loads(finished.stdout) == {"queer_version": staged["version"], "steps": steps}
 
 
 @pytest.mark.parametrize("step", sorted(STEPS))
@@ -161,3 +168,41 @@ def test_each_step_runs_from_the_staged_copy(staged, step):
     paths = [entry["path"] for entry in document["outputs"]]
     assert paths and all((workspace / path).is_file() for path in paths), paths
     assert any(path.endswith(".json") for path in paths), paths
+
+
+@pytest.mark.parametrize("step", sorted(OPENMX_STEPS))
+def test_each_openmx_step_runs_from_the_staged_copy(staged, step):
+    job = staged["root"] / step.lower()
+    workspace = job / "ws"
+    workspace.mkdir(parents=True)
+    qwz_spinor_scfout(workspace / "scf.scfout")
+    params = {
+        "step_type": step,
+        "input_parameters": {"nspin": 4, "fermi_energy": "Auto"},
+        "parameters": {**OPENMX_STEPS[step], "adaptive_grid_threshold": 1e30},
+        "workers": 1,
+    }
+    (workspace / "queer_params.json").write_text(json.dumps(params))
+    finished = python(
+        [
+            "-m",
+            "queer",
+            "generator",
+            "run",
+            "--step",
+            step,
+            "--params",
+            "ws/queer_params.json",
+            "--workspace",
+            "ws",
+        ],
+        job,
+        staged["env"],
+    )
+    document = json.loads((workspace / "queer_results.json").read_text())
+    assert finished.returncode == 0, (finished.stderr[-2000:], document.get("error"))
+    assert document["status"] == "ok" and document["counterpart_step_type"] == step.replace("QUEER", "PYATB")
+    assert document["provenance"]["queer_record_sha256"] == hashlib.sha256(staged["record"]).hexdigest()
+    assert set(document["provenance"]["inputs"]) == {"scf.scfout", "queer_params.json"}
+    paths = [entry["path"] for entry in document["outputs"]]
+    assert paths and all((workspace / path).is_file() for path in paths), paths

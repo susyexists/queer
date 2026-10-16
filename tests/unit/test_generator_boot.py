@@ -156,12 +156,12 @@ def test_invalid_run_arguments_still_write_a_results_file(tmp_path):
 
 
 def test_capabilities_and_runner_delegation(tmp_path, monkeypatch, capsys):
-    from queer.compat.generator.runner import STEP_RUNNERS
+    from queer.compat.generator.runner import capabilities
 
     assert boot.main(["capabilities"]) == 0
     assert json.loads(capsys.readouterr().out) == {
         "queer_version": queer.__version__,
-        "steps": sorted(STEP_RUNNERS),
+        "steps": capabilities()["steps"],
     }
     fake_versions(monkeypatch, {"numpy": "2.0", "scipy": "1.14", "joblib": "1.4"})
     assert boot.main(["capabilities"]) == 2

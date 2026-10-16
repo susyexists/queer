@@ -166,9 +166,9 @@ def test_an_interrupt_propagates_after_the_running_document_is_written(tmp_path,
 def test_capabilities_list_the_steps_of_this_build(capsys):
     assert main(["capabilities"]) == EXIT_OK
     payload = json.loads(capsys.readouterr().out)
-    steps = ["QUEER_BANDS", "QUEER_BERRY", "QUEER_SLAB", "QUEER_TOPOLOGY"]
+    steps = ["QUEER_AHC", "QUEER_BANDS", "QUEER_BERRY", "QUEER_CHERN_NUMBER", "QUEER_SLAB", "QUEER_TOPOLOGY"]
     assert payload == {"queer_version": queer.__version__, "steps": steps}
-    assert payload["steps"] == sorted(STEP_RUNNERS)
+    assert set(STEP_RUNNERS) < set(payload["steps"])
 
 
 def test_compare_without_a_step_writes_nothing_and_exits_two(tmp_path, monkeypatch, capsys):
@@ -220,8 +220,10 @@ def test_the_module_entry_runs_a_step_in_its_workspace(tmp_path):
     finished = entry(["capabilities"], tmp_path)
     assert finished.returncode == 0
     assert json.loads(finished.stdout)["steps"] == [
+        "QUEER_AHC",
         "QUEER_BANDS",
         "QUEER_BERRY",
+        "QUEER_CHERN_NUMBER",
         "QUEER_SLAB",
         "QUEER_TOPOLOGY",
     ]

@@ -30,15 +30,12 @@ import time
 import traceback
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import numpy as np
 
 from ...physics.validation import NumericalError
 from .memory import available_cpus, available_memory_bytes, peak_rss
-
-if TYPE_CHECKING:
-    from .pythtb_params import WannierStepParameters
 
 SCHEMA_VERSION = 1
 ENGINE = "queer"
@@ -277,13 +274,13 @@ class RunRecord:
     def add_output(self, path: str, title: str, kind: str) -> None:
         self.outputs.append({"path": path, "title": title, "kind": kind})
 
-    def record_input(self, name: str) -> None:
-        """Size and SHA-256 of a model file just read from the workspace, streamed from disk.
+    def record_input(self, name: str, path: str | Path | None = None) -> None:
+        """Size and SHA-256 of an input file just read, streamed from disk.
 
-        These are the bytes this run used; a file that cannot be stat'ed is not
-        recorded.
+        ``path`` defaults to ``name`` in the workspace. These are the bytes this
+        run used; a file that cannot be stat'ed is not recorded.
         """
-        path = self.workspace / name
+        path = self.workspace / name if path is None else Path(path)
         try:
             size = path.stat().st_size
         except OSError:
@@ -379,7 +376,7 @@ def unserializable_document(document: Mapping[str, Any], error: Exception) -> di
     return failed
 
 
-StepBody = Callable[["WannierStepParameters", RunRecord, Callable[[str], None]], Any]
+StepBody = Callable[[Any, RunRecord, Callable[[str], None]], Any]
 
 
 def execute(
@@ -389,29 +386,43 @@ def execute(
     *,
     step: str | None = None,
     log: Callable[[str], None] | None = None,
+    translate: Callable[[Mapping[str, Any], str | None], Any] | None = None,
+    approximation: str | None = None,
+    record_params: bool = False,
 ) -> int:
     """Run one step in ``workspace`` and write ``queer_results.json`` whatever happens.
 
-    The parameter file is resolved for ``step`` (or its own ``step_type``) and
-    ``run(parameters, record, log)`` fills ``record``. The document is written on
-    success and on every failure, with the blocks computed so far, and the
-    return value is the process exit code. Blocks that are not JSON give way to
-    a ``queer_internal_error`` document without them. An interrupt propagates
-    after the document, still ``running``, is written.
+    The parameter file is resolved for ``step`` (or its own ``step_type``) by
+    ``translate`` (the PythTB steps' :func:`~.pythtb_params.translate_pythtb` by
+    default), whose result names ``step`` and ``counterpart``, and
+    ``run(parameters, record, log)`` fills ``record``. ``approximation`` replaces
+    the Wannier steps' approximation note and ``record_params`` records the
+    parameter file among the inputs. The document is written on success and on
+    every failure, with the blocks computed so far, and the return value is the
+    process exit code. Blocks that are not JSON give way to a
+    ``queer_internal_error`` document without them. An interrupt propagates after
+    the document, still ``running``, is written.
     """
-    from .pythtb_params import translate_pythtb
+    if translate is None:
+        from .pythtb_params import translate_pythtb
+
+        translate = translate_pythtb
 
     started = time.time()
     root = Path(workspace)
     write = log if log is not None else RunLog(root / LOG_FILENAME)
     document = new_document(step, params_path)
+    if approximation is not None:
+        document["approximation"] = approximation
     record = RunRecord(root)
     exit_code = EXIT_OK
     try:
         params = read_params(params_path)
+        if record_params:
+            record.record_input(Path(params_path).name, params_path)
         if step is None:
             document["step_type"] = params.get("step_type")
-        parameters = translate_pythtb(params, step)
+        parameters = translate(params, step)
         document["step_type"] = parameters.step
         document["counterpart_step_type"] = parameters.counterpart
         (root / OUT_DIR).mkdir(parents=True, exist_ok=True)
