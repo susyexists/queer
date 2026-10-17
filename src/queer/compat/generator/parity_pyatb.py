@@ -467,7 +467,7 @@ class _PyatbComparison:
         """Why the candidate refused a run QUEER cannot do (its own limit), or None.
 
         ``queer_validation_failed`` (a refining Chern integral on a metallic plane,
-        an integration that ran out of its budget) and a ``queer_bad_params``
+        a cubature that ran out of the cells the job's memory holds) and a ``queer_bad_params``
         refusal of an integration larger than the job's memory allows or of a zero
         Adaptive tolerance (:func:`~.openmx_params.limit_refusal`).
         """

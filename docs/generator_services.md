@@ -559,16 +559,22 @@ replaced by the `adaptive_grid` sub-grid starting half a coarse cell below it;
 PyATB's pair cut at flagged points; PyATB's e, ħ and Bohr radius) on the grid and
 its double: `printed_S_cm`, `printed_doubled_S_cm`, `e_P_S_cm` (their difference,
 PyATB's discretisation error), the refined node counts, the threshold ties and the
-occupation windows. Their budgets come from the request and the job's memory
-(cgroup-aware, as for the Wannier steps): the quadrature keeps about 1 kB per cell,
-so it may hold `0.5 * 0.6 * available memory / 1024` cells. A threshold quadrature
-gets `max_cells = min(that, coarse cells x sub-grid cells)` and enough points for
-every cell to be refined; a cubature gets all of it. A coarse grid, or with
-`self_convergence` its double, that needs more cells is refused before the model is
-read (`queer_bad_params`, "exceeds QUEER's integration budget"), and a refinement
-that outgrows its budget stops with `queer_validation_failed`; PyATB has no such
-limit, so a comparison of either is `not_comparable`. The refined cells' sub-grids
-are evaluated in batches of whole cells. The FHS engine scans PyATB's energies (the window
+occupation windows. Their budgets: QUEER's quadrature holds about 1 kB per cell it
+keeps (0.7-0.9 kB measured with every cell refined), and those cells may use half
+of the planned 60% of the available memory (cgroup-aware, as for the Wannier
+steps), so it may hold `0.5 * 0.6 * available memory / 1024` cells. A threshold
+quadrature keeps only its coarse cells: the refined cells' sub-grids are evaluated
+in batches of whole cells (at most 65,536 points) and each refined cell keeps its
+mean, as the emulation of PyATB's refined sum keeps one mean per refined node. Its
+budget is the request's worst case, every cell refined (`max_cells = coarse cells x
+sub-grid cells`, enough points for all of them), so a refinement PyATB can run is
+never refused for memory: PyATB's 3D Grid of 100^3 nodes with 20^3 sub-grids fits
+in 8 GiB (with `self_convergence`, its 200^3 double from about 26 GiB). A cubature
+keeps every cell it makes and gets all of the cells the memory holds; past them it
+stops with `queer_validation_failed`. A coarse grid, or with `self_convergence` its
+double, that needs more cells than the memory holds is refused before the model is
+read (`queer_bad_params`, "exceeds QUEER's integration budget"); PyATB has no such
+limit, so a comparison of either refusal is `not_comparable`. The FHS engine scans PyATB's energies (the window
 offsets, upper end excluded) with QUEER's FHS plaquettes; `fhs_dimension 0`
 evaluates the k1-k2 plane only. Its physical vector carries `sign(det A)`: the
 plaquettes of family i are oriented by `b_(i+1) x b_(i+2)`, parallel to
@@ -606,7 +612,7 @@ in PyATB's layout and requested sign, and neither `pyatb_results.json` nor
 `error {code, message}`: `queer_bad_params` (also an integration larger than the
 job's memory allows), `queer_missing_input` (the scfout is missing or cannot be
 read), `queer_validation_failed` (a refining Chern integral on a metallic plane, a
-refinement that outgrew its budget), `queer_env_missing`, `queer_oom` and
+cubature that outgrew the cells the memory holds), `queer_env_missing`, `queer_oom` and
 `queer_internal_error`, with exit codes 2, 2, 2, 2, 3 and 1.
 
 **Parity.** `compare` reaches `queer.compat.generator.parity_pyatb` for the

@@ -227,13 +227,15 @@ def test_a_refining_grid_records_its_self_convergence_or_warns(tmp_path):
 def test_budgets_come_from_the_requested_grid_and_sub_grid():
     from queer.compat.generator.openmx_steps import cell_capacity, quadrature_budget
 
-    plenty = cell_capacity(256 * 1024**3)
-    assert plenty > 8_000_000
-    # A production 3D preset: 100^3 cells, 20^3 sub-grids, refinement on.
+    plenty, small = cell_capacity(256 * 1024**3), cell_capacity(8 * 1024**3)
+    assert plenty > 8_000_000 and 100**3 < small < 200**3
+    # A production 3D preset: 100^3 cells, 20^3 sub-grids, refinement on. A threshold
+    # quadrature holds only its coarse cells, so every cell may be refined whatever the memory.
     production = {"method": "threshold", "subdivision": [20, 20, 20], "threshold": 50.0}
-    budget = quadrature_budget(production, [100, 100, 100], plenty)
-    assert budget == {"max_cells": plenty, "max_points": 100**3 * (1 + 20**3)}
-    assert quadrature_budget(production, [200, 200, 200], plenty)["max_cells"] >= 200**3
+    worst = {"max_cells": 100**3 * 20**3, "max_points": 100**3 * (1 + 20**3)}
+    assert quadrature_budget(production, [100, 100, 100], plenty) == worst
+    assert quadrature_budget(production, [100, 100, 100], small) == worst
+    assert quadrature_budget(production, [200, 200, 200], plenty)["max_cells"] == 200**3 * 20**3
     sheet = {"method": "threshold", "subdivision": [2, 2, 1], "threshold": 10.0}
     assert quadrature_budget(sheet, [100, 100, 1], plenty) == {"max_cells": 40_000, "max_points": 50_000}
     cubature = quadrature_budget({"method": "cubature"}, [8, 8, 8], plenty)
@@ -256,24 +258,70 @@ def test_an_integration_larger_than_the_jobs_memory_is_refused_up_front(tmp_path
     assert "model" not in document and document["provenance"]["inputs"]["scf.scfout"]["sha256"]
 
 
-def test_a_refinement_that_outgrows_its_budget_is_a_validation_failure(tmp_path, monkeypatch):
+def test_pyatbs_3d_refined_grid_plan_fits_where_its_coarse_grid_does(tmp_path):
+    from queer.compat.generator.openmx_params import BUDGET_REFUSAL, translate_openmx
+    from queer.compat.generator.openmx_steps import OpenMXStepContext
+    from queer.compat.generator.results import RunnerError, RunRecord
+
+    # PyATB's usual 3D Grid: 100^3 nodes, 20^3 sub-grids, threshold 50. Planned before any model.
+    production = {
+        "integrate_grid": [100, 100, 100],
+        "adaptive_grid": [20, 20, 20],
+        "adaptive_grid_threshold": 50,
+    }
+
+    def plan(memory_gib, self_convergence=False):
+        payload = {**params(**production), "self_convergence": self_convergence}
+        context = OpenMXStepContext(
+            translate_openmx(payload),
+            RunRecord(tmp_path),
+            lambda line: None,
+            memory_bytes=memory_gib * 1024**3,
+        )
+        context.plan_budget()
+        return context.capacity
+
+    assert plan(8) >= 100**3
+    with pytest.raises(RunnerError, match=BUDGET_REFUSAL) as refused:
+        plan(8, self_convergence=True)
+    assert refused.value.code == "queer_bad_params" and "200x200x200" in str(refused.value)
+    assert plan(32, self_convergence=True) >= 200**3
+
+
+def test_a_threshold_refinement_larger_than_the_memory_budget_completes(tmp_path, monkeypatch):
+    import queer.compat.generator.openmx_steps as steps
+
+    # Every cell is refined (threshold 0) into 16 sub-cells: 576 leaf cells where the
+    # memory holds 76 cells. Only the 36 coarse cells are held, so the run completes
+    # with exactly the value it has with plenty of memory.
+    refining = {"integrate_grid": [6, 6, 1], "adaptive_grid": [4, 4, 1], "adaptive_grid_threshold": 0.0}
+    code, plenty = execute(tmp_path / "plenty", params(**refining))
+    assert code == EXIT_OK
+    monkeypatch.setattr(steps, "available_memory_bytes", lambda: 256 * 1024)
+    assert 36 < steps.cell_capacity(256 * 1024) < 36 * 16
+    code, document = execute(tmp_path / "ahc", params(**refining))
+    assert code == EXIT_OK, document.get("error")
+    assert document["ahc"]["sigma_S_cm"] == plenty["ahc"]["sigma_S_cm"]
+    quadrature = document["integration"]["quadrature"]
+    assert quadrature["cells"] == 36 * 16 and quadrature["refined_cells"] == 36
+    assert document["integration"]["budget"] == {"max_cells": 36 * 16, "max_points": 36 * 17}
+    code, document = execute(tmp_path / "chern", params("QUEER_CHERN_NUMBER", **refining))
+    assert code == EXIT_OK, document.get("error")
+    assert document["integration"]["quadrature"]["cells"] == 36 * 16
+
+
+def test_a_cubature_that_outgrows_the_memory_budget_is_a_validation_failure(tmp_path, monkeypatch):
     import queer.compat.generator.openmx_steps as steps
     from queer.compat.generator.openmx_params import BUDGET_REFUSAL
 
-    monkeypatch.setattr(steps, "available_memory_bytes", lambda: 4 * 1024**2)
-    capacity = steps.cell_capacity(4 * 1024**2)
-    assert 144 < capacity < 144 * 16
-    # Every cell is refined (threshold 0) into 16 sub-cells: more cells than the budget holds.
-    refining = {"integrate_grid": [12, 12, 1], "adaptive_grid": [4, 4, 1], "adaptive_grid_threshold": 0.0}
-    code, document = execute(tmp_path / "ahc", params(**refining))
+    monkeypatch.setattr(steps, "available_memory_bytes", lambda: 256 * 1024)
+    capacity = steps.cell_capacity(256 * 1024)
+    # A cubature keeps every cell it makes: tolerances it cannot meet within 76 cells.
+    adaptive = {"integrate_mode": "Adaptive", "initial_grid": [6, 6, 1], "relative_error": 1e-12}
+    code, document = execute(tmp_path / "ahc", params(**adaptive, absolute_error=1e-12))
     assert code == EXIT_FAILED and document["error"]["code"] == "queer_validation_failed"
-    assert (
-        BUDGET_REFUSAL in document["error"]["message"]
-        and f"{capacity:,} cells" in document["error"]["message"]
-    )
-    code, document = execute(tmp_path / "chern", params("QUEER_CHERN_NUMBER", **refining))
-    assert code == EXIT_FAILED and document["error"]["code"] == "queer_validation_failed"
-    assert BUDGET_REFUSAL in document["error"]["message"]
+    message = document["error"]["message"]
+    assert BUDGET_REFUSAL in message and f"{capacity:,} cells, sized to this job's memory" in message
 
 
 def test_a_refining_chern_grid_records_pyatbs_refined_sum(tmp_path):

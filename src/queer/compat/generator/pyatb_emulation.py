@@ -37,6 +37,7 @@ from scipy.sparse import coo_matrix, csr_matrix
 
 from ...execution import ExecutionOptions
 from ...models.evaluation import band_geometry, derivatives
+from ...observables.integration import SUBGRID_BATCH_POINTS
 from ...physics.geometry import band_curvatures, energy_blocks, projected_basis_curvature
 from ...physics.statistics import occupations
 from .pyatb_conventions import PYATB_DEGENERATE_EV
@@ -64,6 +65,7 @@ def refined_sum(
     project: Callable[[np.ndarray], np.ndarray],
     magnitude: Callable[[np.ndarray], np.ndarray],
     regularise: Callable[[np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray]],
+    batch_points: int = SUBGRID_BATCH_POINTS,
 ) -> dict[str, Any]:
     """PyATB's refined Grid mean over ``nodes`` (its Gamma-origin grid) with their per-k ``rows``.
 
@@ -72,7 +74,10 @@ def refined_sum(
     ``magnitude`` reaches ``threshold`` is then replaced by the ``subgrid`` nodes
     ``node - (sum_i v_i / N_i) / 2 + sum_i (v_i / N_i) m_i / n_i`` (``rows_at``
     gives their rows), each weighted ``1 / (N n)``; every other node counts once
-    with weight ``1 / N``. ``project`` maps rows to the summed values.
+    with weight ``1 / N``. ``project`` maps rows to the summed values. The
+    sub-grids are evaluated in batches of whole nodes, at most ``batch_points``
+    points per ``rows_at`` call (or one node's sub-grid), and only each node's mean
+    and window sum are kept.
 
     Returns the ``mean``, the ``flagged`` count, the nodes within a relative 1e-8
     of the threshold (``ties``) with ``tie_allowance``, the change a different
@@ -91,28 +96,31 @@ def refined_sum(
     offsets = gamma_nodes(subgrid, np.zeros(3), step)
     chosen = np.flatnonzero(flagged | near)
     corner = nodes[chosen] - 0.5 * step.sum(axis=0)
-    points = (corner[:, None, :] + offsets[None]).reshape(-1, 3)
-    if len(points):
+    width = values.shape[1]
+    means = np.empty((len(chosen), width))
+    window_sums = np.empty((len(chosen), width))
+    batch = max(1, int(batch_points) // len(offsets))
+    for start in range(0, len(chosen), batch):
+        stop = min(start + batch, len(chosen))
+        points = (corner[start:stop, None, :] + offsets[None]).reshape(-1, 3)
         sub_rows, sub_windows = regularise(points, np.asarray(rows_at(points)))
-    else:
-        sub_rows, sub_windows = np.empty((0, rows.shape[1])), np.empty((0, values.shape[1]))
-    sub_values = np.asarray(project(sub_rows), float).reshape(len(chosen), len(offsets), values.shape[1])
-    means = sub_values.mean(axis=1)
+        shape = (stop - start, len(offsets), width)
+        means[start:stop] = np.asarray(project(sub_rows), float).reshape(shape).mean(axis=1)
+        window_sums[start:stop] = np.asarray(sub_windows, float).reshape(shape).sum(axis=1)
     refined = flagged[chosen]
     total = values[~flagged].sum(axis=0) + means[refined].sum(axis=0)
     ties = near[chosen]
     tie_allowance = np.abs(means[ties] - values[chosen][ties]).sum(axis=0) * weight
-    used = np.repeat(refined, len(offsets))
     flag_allowance = windows[~flagged].sum(axis=0) * weight
-    if used.any():
-        flag_allowance = flag_allowance + sub_windows[used].sum(axis=0) * weight / len(offsets)
+    if refined.any():
+        flag_allowance = flag_allowance + window_sums[refined].sum(axis=0) * weight / len(offsets)
     return {
         "mean": total * weight,
         "flagged": int(flagged.sum()),
         "ties": int(near.sum()),
         "tie_allowance": tie_allowance,
         "flag_allowance": flag_allowance,
-        "sub_points": int(len(points)),
+        "sub_points": int(len(chosen) * len(offsets)),
     }
 
 

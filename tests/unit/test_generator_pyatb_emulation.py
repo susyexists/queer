@@ -78,6 +78,37 @@ def test_the_refined_sum_is_pyatbs_rule_node_by_node(grid, subgrid, origin, vect
     assert result["sub_points"] == refined * np.prod(subgrid) and result["ties"] == 0
 
 
+def test_the_refined_sum_evaluates_its_sub_grids_in_batches_of_whole_nodes():
+    grid, subgrid = [8, 6, 1], [2, 3, 1]
+    nodes = gamma_nodes(grid, np.zeros(3), np.eye(3))
+    calls = []
+
+    def rows_at(points):
+        calls.append(len(points))
+        return field(points)
+
+    def windows(points, rows):
+        return rows, np.abs(rows)
+
+    settings = {
+        "grid": grid,
+        "subgrid": subgrid,
+        "threshold": 0.6,
+        "vectors": np.eye(3),
+        "project": lambda rows: rows,
+        "magnitude": lambda rows: np.linalg.norm(rows, axis=1),
+        "regularise": windows,
+    }
+    whole = refined_sum(nodes, field(nodes), field, **settings)
+    batched = refined_sum(nodes, field(nodes), rows_at, batch_points=13, **settings)
+    # 13 points hold two whole 6-point sub-grids; the last batch holds what is left.
+    assert sum(calls) == batched["sub_points"] == whole["sub_points"] and max(calls) == 12
+    assert all(count % 6 == 0 for count in calls) and len(calls) == -(-whole["sub_points"] // 12)
+    for key in ("mean", "tie_allowance", "flag_allowance"):
+        np.testing.assert_allclose(batched[key], whole[key], rtol=1e-14, atol=1e-16)
+    assert batched["flagged"] == whole["flagged"] and batched["ties"] == whole["ties"]
+
+
 def test_a_1x1x1_subgrid_still_moves_a_flagged_node_half_a_cell():
     nodes = gamma_nodes([4, 4, 1], np.zeros(3), np.eye(3))
     result = refined_sum(

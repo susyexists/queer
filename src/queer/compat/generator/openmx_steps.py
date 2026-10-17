@@ -43,11 +43,12 @@ sample the same point (both values are recorded).
   by the sub-grid half a cell below it), evaluated with :func:`hall_rows` on the
   grid and its double, whose difference ``e_P`` is PyATB's discretisation error,
   which PyATB does not write for a Grid. It is a comparison diagnostic, never the
-  result. Their cell and point budgets come
-  from the requested grid and sub-grid and from the job's memory
-  (:func:`quadrature_budget`): a grid this process cannot hold is refused before
-  the model is read (``queer_bad_params``) and a refinement that outgrows its
-  budget stops with ``queer_validation_failed``.
+  result. Their budgets (:func:`quadrature_budget`): a threshold quadrature holds
+  only its coarse cells and evaluates its sub-grids in batches, so it may refine
+  every cell, as PyATB may; a cubature holds every cell it makes, as many as the
+  job's memory allows, and stops with ``queer_validation_failed`` past them. A
+  coarse grid (or, with ``self_convergence``, its double) this process cannot hold
+  is refused before the model is read (``queer_bad_params``).
 - The FHS engine: QUEER's FHS plaquette scan over PyATB's energies (the
   ``fhs_energy_window`` offsets, upper end excluded). ``fhs_dimension 0`` evaluates
   the k1-k2 plane only. ``sigma_S_cm`` is the physical Hall vector
@@ -88,6 +89,7 @@ from ...execution import ExecutionOptions
 from ...models.evaluation import band_geometry, basis_curvature, reciprocal, spin_degeneracy, volume
 from ...models.openmx import OpenMXModel
 from ...observables._sampling import kmesh
+from ...observables.integration import SUBGRID_BATCH_POINTS
 from ...physics.constants import E2_H, E_CHARGE, HBAR
 from ...physics.geometry import band_curvatures
 from ...physics.statistics import occupations
@@ -162,8 +164,10 @@ WARN_SELF_CONVERGENCE_SKIPPED = "self_convergence_skipped"
 WARN_ADAPTIVE_COARSE = "adaptive_initial_grid_coarse"
 WARN_CHERN_METALLIC = "chern_plane_metallic"
 ADAPTIVE_MIN_CELLS = 512
-# Bytes QUEER's local quadrature keeps per cell in this process (cell bounds, nodes,
-# values and their containers), and the share of the planned memory its cells may use.
+# Bytes QUEER's local quadrature holds in this process per cell it keeps (its bounds,
+# midpoint value and, once refined, its sub-grid's mean, with their containers; 0.7-0.9 kB
+# measured with every cell refined), and the share of the planned memory those cells may
+# use. A threshold quadrature keeps its coarse cells only, a cubature every active cell.
 QUADRATURE_CELL_BYTES = 1024
 QUADRATURE_MEMORY_SHARE = 0.5
 
@@ -181,10 +185,14 @@ def quadrature_budget(
 ) -> dict[str, int]:
     """``max_cells`` and ``max_points`` of a threshold or cubature integration on ``grid``.
 
-    A threshold quadrature may refine every cell: its cells are bounded by that
-    worst case and by ``capacity``, its points only by the worst case. A cubature
-    has no worst case: ``capacity`` cells, and enough points that the cells bind
-    first (each bisection evaluates two cells of ``2^d + 1`` nodes).
+    A threshold quadrature holds only its coarse cells (its sub-grids are evaluated
+    in batches of whole cells, each refined cell keeping its mean), so its budgets
+    are the request's worst case, every cell refined as PyATB may refine every
+    node: ``coarse x sub-grid`` cells and ``coarse x (1 + sub-grid)`` points;
+    ``capacity`` bounds its coarse grid before the run
+    (:meth:`OpenMXStepContext.plan_budget`). A cubature holds every cell it makes
+    and has no worst case: ``capacity`` cells, and enough points that the cells
+    bind first (each bisection evaluates two cells of ``2^d + 1`` nodes).
     """
     mesh = [int(value) for value in grid]
     axes = [axis for axis in range(len(mesh)) if mesh[axis] > 1] if active_axes is None else list(active_axes)
@@ -193,10 +201,7 @@ def quadrature_budget(
     if integration.get("method") == "threshold":
         subdivision = [int(value) for value in integration.get("subdivision") or [4] * len(mesh)]
         refined = int(np.prod([subdivision[axis] for axis in axes]))
-        return {
-            "max_cells": max(coarse, min(capacity, coarse * refined)),
-            "max_points": coarse * (1 + refined),
-        }
+        return {"max_cells": coarse * refined, "max_points": coarse * (1 + refined)}
     cells = max(coarse, capacity)
     return {"max_cells": cells, "max_points": (2 ** len(axes) + 1) * 2 * cells}
 
@@ -349,6 +354,7 @@ class OpenMXStepContext:
         )
         self.cap = params.input_parameters.get("max_kpoint_num")
         self.capacity: int | None = None
+        self.batch_plans: dict[str, ExecutionOptions] = {}
 
     # ------------------------------------------------------------ budget
     def plan_budget(self) -> None:
@@ -356,7 +362,8 @@ class OpenMXStepContext:
 
         A threshold or cubature integration whose coarse grid (and doubled grid,
         with ``self_convergence``) holds more cells than this process can keep is
-        refused with ``queer_bad_params``.
+        refused with ``queer_bad_params``. The sub-cells of a threshold refinement
+        are not held, so they never count against the memory.
         """
         native = self.params.recipe(fermi_energy=0.0)["parameters"]
         if native.get("integration") is None:
@@ -479,6 +486,13 @@ class OpenMXStepContext:
             chunk = min(automatic, int(self.cap))
         return self.planner.plan(stage, per_k, n_items, n_orb=model.nbnd, fixed_bytes=fixed, chunk=chunk)
 
+    def batch_options(self, stage: str, model: Any) -> ExecutionOptions:
+        """The options of a stage evaluated in batches of up to ``SUBGRID_BATCH_POINTS`` k-points:
+        planned, logged and recorded at its first batch, then reused."""
+        if stage not in self.batch_plans:
+            self.batch_plans[stage] = self.options(stage, model, SUBGRID_BATCH_POINTS)
+        return self.batch_plans[stage]
+
     # ------------------------------------------------------------ grids
     def grid_rows(
         self,
@@ -487,9 +501,10 @@ class OpenMXStepContext:
         points: np.ndarray,
         engine: str,
         occupied_bands: int | None = None,
+        options: ExecutionOptions | None = None,
     ) -> np.ndarray:
-        """:func:`hall_rows` of every point, in order, on the planned processes."""
-        options = self.options(stage, model, len(points))
+        """:func:`hall_rows` of every point, in order, on the planned processes (``options`` when given)."""
+        options = self.options(stage, model, len(points)) if options is None else options
         function = functools.partial(hall_rows, model, self.mu, engine, occupied_bands)
         parts = pmap(function, chunks(points, options.batch_size), options)
         return np.concatenate(parts, axis=0) if parts else np.empty((0, 12))
@@ -511,11 +526,13 @@ class OpenMXStepContext:
         engine: str,
         occupied_bands: int | None,
         projection: np.ndarray,
+        options: ExecutionOptions | None = None,
     ) -> np.ndarray:
-        """:func:`~.pyatb_emulation.pyatb_rule_rows` of the points, in order, on the planned processes."""
+        """:func:`~.pyatb_emulation.pyatb_rule_rows` of the points, in order, on the planned processes
+        (``options`` when given)."""
         if not len(points):
             return np.empty((0, 9 + len(projection)))
-        options = self.options(stage, model, len(points))
+        options = self.options(stage, model, len(points)) if options is None else options
         function = functools.partial(
             pyatb_rule_rows, model, self.mu, engine, occupied_bands, self.delta_ef, projection
         )
@@ -671,12 +688,12 @@ def _ahc_integrated(
 
 
 def _budget_refusal(stage: str, error: RuntimeError, integration: Mapping[str, Any]) -> RunnerError:
-    """``queer_validation_failed`` for a quadrature that ran out of its cell or point budget."""
+    """``queer_validation_failed`` for a cubature that ran out of the cells this job's memory holds."""
     return RunnerError(
         ERR_VALIDATION,
-        f"{stage}: the refinement {BUDGET_REFUSAL} ({error}; at most {integration['max_cells']:,} cells and "
-        f"{integration['max_points']:,} points in this job's memory): raise adaptive_grid_threshold or the "
-        "tolerances, lower the grid, or give the job more memory",
+        f"{stage}: the refinement {BUDGET_REFUSAL} ({error}; at most {integration['max_cells']:,} cells, "
+        f"sized to this job's memory, and {integration['max_points']:,} points): raise relative_error or "
+        "absolute_error, lower the grid, or give the job more memory",
     )
 
 
@@ -848,9 +865,12 @@ def _pyatb_refined_grid(context: OpenMXStepContext, family: str, sign: int = 1) 
             return np.abs(rows[:, :9] @ projection[0]) / area * ratio**2
 
     stage = f"{family} PyATB refined-grid emulation"
+    batches = f"{stage}, sub-grid batches"
+    rules = f"{stage}, PyATB's rule at flagged points"
 
     def rows_at(points: np.ndarray) -> np.ndarray:
-        return context.grid_rows(stage, model, points, engine, occupied)
+        options = context.batch_options(batches, model)
+        return context.grid_rows(batches, model, points, engine, occupied, options=options)
 
     def project(rows: np.ndarray) -> np.ndarray:
         return rows[:, :9] @ projection.T
@@ -861,13 +881,16 @@ def _pyatb_refined_grid(context: OpenMXStepContext, family: str, sign: int = 1) 
         windows = np.zeros((len(points), len(projection)))
         mask = context.flag_mask(rows, engine)
         if mask.any():
-            rule = context.rule_rows(stage, model, points[mask], engine, occupied, projection)
+            options = context.batch_options(rules, model)
+            rule = context.rule_rows(
+                rules, model, points[mask], engine, occupied, projection, options=options
+            )
             rows[mask, :9] = rule[:, :9]
             windows[mask] = rule[:, 9:]
         return rows, windows
 
     fine_nodes = gamma_nodes(doubled, origin, vectors)
-    fine_rows = rows_at(fine_nodes)
+    fine_rows = context.grid_rows(stage, model, fine_nodes, engine, occupied)
     # The grid's nodes are the doubled grid's even nodes along its doubled axes (the same numbers).
     keep = tuple(slice(None, None, 2) if d != g else slice(None) for g, d in zip(grid, doubled, strict=True))
     coarse_index = np.arange(len(fine_nodes)).reshape(doubled)[keep].ravel()
