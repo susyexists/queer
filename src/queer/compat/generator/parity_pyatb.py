@@ -1359,7 +1359,7 @@ def compare(
     CHERN_NUMBER and SHIFT_CURRENT); an unknown step raises ``ValueError``.
     ``scfout`` names the scfout to hash when the reference holds no
     ``inputs.sha256``. ``clean_control`` (a shift current only) is the report, or
-    the path of the JSON report, of this QUEER release's clean-control comparison
+    the path of the JSON report, of this QUEER build's clean-control comparison
     (:mod:`~queer.compat.generator.parity_shift`). Returns the report of
     :func:`~queer.compat.generator.parity.compare`'s schema.
     """

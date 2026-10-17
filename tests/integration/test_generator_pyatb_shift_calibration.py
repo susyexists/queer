@@ -23,7 +23,7 @@ import numpy as np
 import pytest
 
 from queer.compat.generator.openmx_params import params_from_pyatb_input
-from queer.compat.generator.parity import PASS, compare, render_markdown
+from queer.compat.generator.parity import AGREE, PASS, compare, render_markdown
 from queer.compat.generator.pyatb_files import SHIFT_COMPONENTS, parse_shift_current, read_input
 from queer.compat.generator.results import EXIT_OK
 from queer.compat.generator.runner import run
@@ -39,8 +39,10 @@ SPEC = importlib.util.spec_from_file_location(
 KIT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(KIT)
 CLEAN = "a_clean_control"
-# Cases where PyATB should print QUEER's emulation of its scheme to 1e-4 of its peak.
+# Cases where PyATB should print QUEER's emulation of its scheme to its own print precision.
 EMULATED = {"a_clean_control", "c_no_smearing", "e_collinear", "f_band_pair", "g_left_handed"}
+# PyATB prints %15.6e: seven significant digits, a rounding of at most 5e-7 of each value.
+PRINT_PRECISION = 1e-6
 
 pytestmark = [
     pytest.mark.slow,
@@ -82,13 +84,21 @@ def judge(case, tmp_path, clean_control=None):
 
 
 def assert_emulation_reproduces_pyatb(case, document):
-    """QUEER's emulation of PyATB's scheme reproduces PyATB's table itself (to 1e-4 of its peak)."""
+    """QUEER's emulation of PyATB's scheme reproduces PyATB's table to PyATB's print precision.
+
+    Each printed value within 1e-6 of itself (``%15.6e`` rounds to 5e-7), plus 1e-10
+    of the peak for summation order and the allowance of the transitions within
+    1e-9 eV of a bin or window edge.
+    """
     printed = np.asarray(
         parse_shift_current((DATA / case / "Out/Shift_Current/shift_current.dat").read_text())["sigma"]
     )
-    scheme = document["shift_current"]["diagnostics"]["pyatb_scheme"]["sigma_uA_V2"]
-    emulated = np.column_stack([scheme[name] for name in SHIFT_COMPONENTS])
-    assert np.max(np.abs(printed - emulated)) <= 1e-4 * np.max(np.abs(printed))
+    scheme = document["shift_current"]["diagnostics"]["pyatb_scheme"]
+    emulated = np.column_stack([scheme["sigma_uA_V2"][name] for name in SHIFT_COMPONENTS])
+    edge = np.array([scheme["edge_allowance_uA_V2"][name] for name in SHIFT_COMPONENTS])
+    allowed = PRINT_PRECISION * np.abs(emulated) + 1e-10 * np.max(np.abs(emulated)) + edge
+    excess = np.abs(printed - emulated) - allowed
+    assert np.all(excess <= 0), f"{case}: worst excess {np.max(excess):.3g} microA/V^2"
 
 
 @pytest.fixture(scope="module")
@@ -96,11 +106,14 @@ def clean_run(tmp_path_factory):
     return judge(CLEAN, tmp_path_factory.mktemp("clean"))
 
 
-def test_the_clean_control_agrees_to_1e_4_of_its_peak(clean_run):
+def test_the_clean_control_agrees_with_queers_physical_value_directly(clean_run):
     report, document = clean_run
     rules = report["semantics"]["rules"]
     assert rules["clean_control"]["eligible"], rules["clean_control"]
     assert report["verdict"] == PASS, render_markdown(report)
+    # Every component meets QUEER's physical value itself, not only its emulation of PyATB.
+    compared = {item["class"] for item in report["quantities"] if item["name"].startswith("sigma_")}
+    assert compared == {AGREE}, render_markdown(report)
     assert_emulation_reproduces_pyatb(CLEAN, document)
 
 

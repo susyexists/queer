@@ -26,8 +26,8 @@ reference holding PyATB's ``Input`` and ``Out/`` is recognised as a PyATB run an
 compared with :mod:`~queer.compat.generator.parity_pyatb`; its step may then be
 left out, and ``--scfout`` names the scfout to hash when the reference has no
 ``inputs.sha256``; ``--clean-control`` names the JSON report of this QUEER
-release's shift-current clean-control comparison, which a shift-current
-comparison applies. It exits 0 for ``pass`` and ``pass_with_documented_differences``,
+build's shift-current clean-control comparison, which a shift-current
+comparison needs before it documents a difference. It exits 0 for ``pass`` and ``pass_with_documented_differences``,
 2 otherwise (``fail``, ``not_comparable`` or unusable arguments).
 """
 
