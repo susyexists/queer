@@ -27,23 +27,33 @@ twice the spin-up channel.
 **Sign and file.** PyATB's prefactor carries the signed cell volume, so it prints
 ``lattice_handedness`` times the conductivity. ``Out/Shift_Current/shift_current.dat``
 holds ``convention.export_sign`` times QUEER's physical value; without smearing it
-holds QUEER's histogram in PyATB's normalization instead (``binned_uA_V2``: the
-weight of the transitions in ``[omega_i, omega_i + domega)``, which is ``domega``
-times QUEER's histogram half a bin higher).
+holds QUEER's histogram in PyATB's normalization instead (``binned_uA_V2``: QUEER's
+histogram evaluated half a bin higher, times ``domega``, which is the weight of the
+transitions in ``(omega_i, omega_i + domega]``).
 
 **Diagnostics** (comparison aids, never the result), evaluated on the model PyATB
-reads with QUEER's own transitions: the smallest spacing of two levels at any
-sampled k (scissored, as PyATB's derivatives see them) and the k-points within
-PyATB's 1e-4 eV threshold, the transitions inside PyATB's window, PyATB's Gaussian
-truncation, and ``pyatb_scheme``: what PyATB prints from QUEER's transitions (its
-Hartree scale, its window rule, its integer bins and ``5 eta / domega`` truncation,
-its constants, spin factor and signed volume), with the allowance of the
-transitions within 1e-9 eV of a bin or window edge. ``self_convergence: true``
-adds the physical value (and the legacy channel) on the doubled grid.
+reads: the bands of the pairs PyATB selects at each k-point and the smallest
+spacing between such a band and any other level that QUEER does not treat as
+degenerate with it (exact degeneracies, Kramers pairs among them, are skipped by
+both codes); ``regularisation``, PyATB's ``method 1`` cut at the k-points where such
+a spacing is at most 1e-4 eV (its sum-over-states derivative there drops the
+pair's ``1 / dE``), measured as QUEER's spectrum minus QUEER's spectrum with that
+cut (QUEER's degeneracy tolerance raised to 1e-4 eV at those k-points only); the
+transitions inside PyATB's window, PyATB's Gaussian truncation, and
+``pyatb_scheme``: what PyATB prints from the same transitions (its Hartree scale,
+its window rule, its integer bins and ``5 eta / domega`` truncation, its constants,
+spin factor and signed volume, and its cut at the flagged k-points), with the
+allowance of the transitions within 1e-9 eV of a bin or window edge; and
+``transition_bounds``, the absolute transition weights from which a comparison
+bounds the difference between that emulation and QUEER's physical value.
+``self_convergence: true`` adds the physical value (and the legacy channel) on
+the doubled grid. ``build.shift_source_sha256`` hashes the source files of this
+computation (:data:`SHIFT_SOURCES`).
 """
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 import math
 from collections.abc import Mapping, Sequence
@@ -71,7 +81,7 @@ from .pyatb_conventions import (
     pyatb_shift_spin_factor,
 )
 from .pyatb_files import SHIFT_COMPONENTS, SHIFT_CURRENT_FILE, shift_current_text, write_text
-from .results import ERR_BAD_PARAMS, ERR_VALIDATION, RunnerError
+from .results import ERR_BAD_PARAMS, ERR_VALIDATION, RunnerError, source_sha256
 
 # Complex N x N matrices one shift-current k-point keeps alive, and per photon energy
 # of a batch of at most FREQUENCY_BATCH (QUEER's own estimate in shift_current).
@@ -84,6 +94,26 @@ EDGE_EV = 1e-9
 # The clean-control conditions of the parity rule.
 CLEAN_PAIR_GAP_EV = 1e-3
 CLEAN_MARGIN_ETA = 5.0
+CLEAN_TRUNCATION_TAIL = 1e-6
+# Flagged k-points listed in the results (largest shift first).
+FLAGGED_LISTED = 10
+# The source files of this computation, relative to the queer package: their digest
+# identifies the build a clean-control comparison vouches for.
+SHIFT_SOURCES = (
+    "compat/generator/_legacy.py",
+    "compat/generator/memory.py",
+    "compat/generator/openmx_params.py",
+    "compat/generator/openmx_shift.py",
+    "compat/generator/openmx_steps.py",
+    "compat/generator/pyatb_conventions.py",
+    "compat/generator/pyatb_files.py",
+    "models/evaluation.py",
+    "models/openmx.py",
+    "observables/_sampling.py",
+    "observables/nonlinear.py",
+    "physics/constants.py",
+    "physics/geometry.py",
+)
 # The self-convergence rule: |sigma(N) - sigma(2N)|_inf <= this * max|sigma(2N)|.
 SELF_CONVERGENCE_RELATIVE = 0.1
 SQRT_PI = math.sqrt(math.pi)
@@ -204,39 +234,183 @@ def edge_allowance(
     return bound @ magnitude, int(np.count_nonzero(near_bin | near_window))
 
 
-def floor_bins(
-    start: float, domega: float, count: int, energies: np.ndarray, weights: np.ndarray
+def pair_gaps(
+    point: Mapping[str, Any], scheme: PyatbShiftScheme, occupied: int, band_pairs: Any
+) -> tuple[float, bool]:
+    """The smallest spacing (eV) PyATB's ``method 1`` may regularize at one k-point, and whether an exact
+    degeneracy takes part.
+
+    PyATB's sum-over-states derivative (``get_D_degenerate``) divides by ``E_l -
+    E_j`` for every level ``l`` and every band ``j`` of the pairs it selects (the
+    window's occupied-to-empty pairs, or the named pair), and replaces ``1 / dE`` by
+    ``dE / (dE^2 + 0.04^2)`` when ``|dE| <= 1e-4`` eV. A spacing within QUEER's
+    degeneracy tolerance is an exact degeneracy: PyATB's term is then zero and QUEER
+    sums the degenerate block covariantly, and the two agree (a Kramers pair at a
+    time-reversal-invariant k-point). The spacing returned is the smallest of the
+    others (scissored levels, QUEER's eV), ``inf`` when there is none.
+    """
+    energy = np.asarray(point["energies"], float)
+    raw = np.asarray(point["raw"]["energies"], float)
+    tolerance = float(point["raw"]["degeneracy_tol"])
+    selected = np.zeros(len(energy), bool)
+    if band_pairs:
+        for pair in band_pairs:
+            selected[list(pair)] = True
+    elif 0 < occupied < len(energy):
+        transitions = (energy[None, occupied:] - energy[:occupied, None]) * scheme.energy_scale
+        inside = (transitions >= scheme.start) & (transitions < scheme.end)
+        selected[:occupied] = inside.any(axis=1)
+        selected[occupied:] = inside.any(axis=0)
+    if not selected.any():
+        return math.inf, False
+    other = selected[None, :] & ~np.eye(len(energy), dtype=bool)
+    exact = other & (np.abs(raw[:, None] - raw[None, :]) <= tolerance)
+    spacing = np.abs(energy[:, None] - energy[None, :])[other & ~exact]
+    return (float(spacing.min()) if spacing.size else math.inf), bool(exact.any())
+
+
+def bin_moves(
+    scheme: PyatbShiftScheme,
+    binned_omega: np.ndarray,
+    bin_width: float,
+    energies: np.ndarray,
+    weights: np.ndarray,
 ) -> np.ndarray:
-    """Transition weights summed in ``[start + i domega, start + (i + 1) domega)`` (QUEER's eV)."""
+    """``|weight|`` of the transitions QUEER's half-bin-higher histogram and PyATB's integer bins place apart.
+
+    QUEER's bin of a transition is the row whose ``binned_omega`` lies within half a
+    ``bin_width`` of it (the histogram of
+    :func:`~queer.observables.nonlinear.shift_current_spectrum`, none when it lies
+    outside); PyATB's is ``int((E - start) / domega)`` on its Hartree scale with its
+    window rule (:func:`pyatb_scheme_spectrum`). A transition on two of QUEER's rows
+    or on different rows in the two codes adds its ``|weight|`` to each of those
+    rows: the table bounds ``|PyATB's bins - QUEER's|`` row by row.
+    """
+    count = scheme.count
     table = np.zeros((count, len(SHIFT_COMPONENTS)))
-    if len(energies):
-        index = np.floor((np.asarray(energies, float) - start) / domega).astype(int)
-        keep = (index >= 0) & (index < count)
-        np.add.at(table, index[keep], np.asarray(weights, float)[keep])
+    if not len(energies):
+        return table
+    energy = np.asarray(energies, float)
+    magnitude = np.abs(np.asarray(weights, float))
+    centre = np.floor((energy - scheme.start) / scheme.domega).astype(int)
+    hits = []
+    for offset in (-1, 0, 1):
+        row = centre + offset
+        valid = (row >= 0) & (row < count)
+        difference = np.asarray(binned_omega, float)[np.clip(row, 0, count - 1)] - energy
+        hits.append(np.where(valid & (difference >= -bin_width / 2) & (difference < bin_width / 2), row, -1))
+    rows = np.stack(hits)
+    own = np.max(rows, axis=0)
+    scaled = energy * scheme.energy_scale
+    pyatb = np.trunc((scaled - scheme.start) / scheme.domega).astype(int)
+    inside = np.ones(len(energy), bool)
+    if not scheme.pair_mode:
+        inside = (scaled >= scheme.start) & (scaled < scheme.end)
+    pyatb = np.where(inside & (pyatb >= 0) & (pyatb < count), pyatb, -1)
+    moved = (np.count_nonzero(rows >= 0, axis=0) > 1) | (own != pyatb)
+    for target in (*rows, pyatb):
+        keep = moved & (target >= 0)
+        np.add.at(table, target[keep], magnitude[keep])
     return table
 
 
-def shift_rows(
-    model: Any,
-    settings: ShiftCurrentSettings,
-    frequency_batch: int,
-    scheme: PyatbShiftScheme | None,
-    binned: bool,
-    points: np.ndarray,
+def transition_bounds(
+    scheme: PyatbShiftScheme, energies: np.ndarray, weights: np.ndarray, binned_omega: Any, bin_width: Any
 ) -> dict[str, Any]:
-    """The k-point sums of a chunk: QUEER's spectrum and, when asked, its transitions' diagnostics.
+    """The absolute transition weights (unconverted) that bound PyATB's scheme against QUEER's value.
+
+    ``abs_weight`` sums ``|w|`` over every transition, ``abs_below`` and
+    ``abs_above`` over those below and at or above PyATB's window (its scale);
+    with a Gaussian, ``abs_slope`` is ``sum |w| |G'(omega_i - E)|`` at every photon
+    energy (QUEER's energies, PyATB's ``G(x) = exp(-(x / eta)^2) / (eta sqrt(pi))``);
+    without smearing, ``bin_moves`` is :func:`bin_moves`. ``energy_max`` is the
+    largest ``|E|``.
+    """
+    width = len(SHIFT_COMPONENTS)
+    energy = np.asarray(energies, float)
+    magnitude = np.abs(np.asarray(weights, float)).reshape(len(energy), width)
+    scaled = energy * scheme.energy_scale
+    facts: dict[str, Any] = {
+        "abs_weight": magnitude.sum(axis=0),
+        "abs_below": magnitude[scaled < scheme.start].sum(axis=0),
+        "abs_above": magnitude[scaled >= scheme.end].sum(axis=0),
+        "energy_max": float(np.max(np.abs(energy), initial=0.0)),
+    }
+    if scheme.smearing == 1:
+        grid = scheme.start + np.arange(scheme.count) * scheme.domega
+        offset = grid[:, None] - energy[None, :]
+        kernel = np.exp(-((offset / scheme.eta) ** 2)) / scheme.eta / SQRT_PI
+        facts["abs_slope"] = (2 * np.abs(offset) / scheme.eta**2 * kernel) @ magnitude
+    if scheme.smearing == 0:
+        facts["bin_moves"] = bin_moves(scheme, binned_omega, float(bin_width), energy, magnitude)
+    return facts
+
+
+@dataclass(frozen=True)
+class ShiftPlan:
+    """What one pass evaluates at each k-point.
+
+    ``binned`` is QUEER's histogram half a bin higher (PyATB's bins without
+    smearing); with a ``scheme`` the pass also keeps the diagnostics of the model
+    PyATB reads, and with ``cut`` (``method 1``) QUEER's settings with PyATB's 1e-4
+    eV pair cut, used at the k-points :func:`pair_gaps` flags.
+    """
+
+    settings: ShiftCurrentSettings
+    frequency_batch: int
+    binned: ShiftCurrentSettings | None = None
+    scheme: PyatbShiftScheme | None = None
+    occupied: int = 0
+    cut: ShiftCurrentSettings | None = None
+
+
+_SUMMED = (
+    "physical",
+    "binned",
+    "pyatb",
+    "untruncated",
+    "edge",
+    "shift",
+    "binned_shift",
+    "abs_weight",
+    "abs_below",
+    "abs_above",
+    "abs_slope",
+    "bin_moves",
+)
+_COUNTED = (
+    "points",
+    "edge_count",
+    "flagged",
+    "cut_failed",
+    "exact",
+    "transitions",
+    "inside",
+    "below",
+    "above",
+)
+
+
+def shift_rows(model: Any, plan: ShiftPlan, points: np.ndarray) -> dict[str, Any]:
+    """The k-point sums of a chunk: QUEER's spectrum and, with a scheme, its transitions' diagnostics.
 
     ``physical`` sums :func:`~queer.observables.nonlinear.shift_current_spectrum`
-    (unconverted, as :func:`~queer.observables.nonlinear.shift_current` sums it);
-    ``binned`` sums :func:`floor_bins`; with a ``scheme``, ``pyatb`` and
-    ``untruncated`` sum :func:`pyatb_scheme_spectrum`, ``edge`` sums
-    :func:`edge_allowance` and the level and transition facts are kept.
+    (unconverted, as :func:`~queer.observables.nonlinear.shift_current` sums it) and
+    ``binned`` the same estimator half a bin higher. With a ``scheme``: at a
+    k-point :func:`pair_gaps` flags, ``shift`` (and ``binned_shift``) sums QUEER's
+    spectrum minus its spectrum under PyATB's cut, and the cut's transitions stand
+    in for QUEER's in what follows; ``pyatb`` and ``untruncated`` sum
+    :func:`pyatb_scheme_spectrum`, ``edge`` :func:`edge_allowance`, the ``abs_*``
+    and ``bin_moves`` sums :func:`transition_bounds`, with the level and transition
+    facts.
     """
+    settings, scheme = plan.settings, plan.scheme
     count = len(settings.omega)
     width = len(SHIFT_COMPONENTS)
+    batch = plan.frequency_batch
     result: dict[str, Any] = {"physical": np.zeros((count, 3, 3, 3)), "points": len(points)}
-    if binned:
-        result["binned"] = np.zeros((count, width))
+    if plan.binned is not None:
+        result["binned"] = np.zeros((count, 3, 3, 3))
     emulated = scheme is not None and scheme.smearing in (0, 1)
     if scheme is not None:
         result.update(
@@ -246,7 +420,18 @@ def shift_rows(
             edge_count=0,
             pair_gap=math.inf,
             pair_gap_k=None,
-            at_threshold=0,
+            exact=0,
+            flagged=0,
+            cut_failed=0,
+            flagged_points=[],
+            shift=np.zeros((count, 3, 3, 3)),
+            binned_shift=np.zeros((count, 3, 3, 3)) if plan.binned is not None else None,
+            abs_weight=np.zeros(width),
+            abs_below=np.zeros(width),
+            abs_above=np.zeros(width),
+            abs_slope=np.zeros((count, width)) if scheme.smearing == 1 else None,
+            bin_moves=np.zeros((count, width)) if scheme.smearing == 0 else None,
+            energy_max=0.0,
             transitions=0,
             inside=0,
             below=0,
@@ -254,33 +439,58 @@ def shift_rows(
             low=math.inf,
             high=-math.inf,
         )
-    start = float(settings.omega[0])
-    step = scheme.domega if scheme is not None else (settings.bin_width or 0.0)
     for k in points:
         point = shift_current_point(model, k, settings)
-        result["physical"] += shift_current_spectrum(point, settings, frequency_batch)
-        if not binned and scheme is None:
-            continue
-        source, target = np.nonzero(point["factor"])
-        energies = point["gap"][source, target]
-        weights = (point["factor"][source, target] * point["integrand"][..., source, target])[_A, _B, _C].T
-        if binned:
-            result["binned"] += floor_bins(start, step, count, energies, weights)
+        spectrum = shift_current_spectrum(point, settings, batch)
+        result["physical"] += spectrum
+        binned = None
+        if plan.binned is not None:
+            binned = shift_current_spectrum(point, plan.binned, batch)
+            result["binned"] += binned
         if scheme is None:
             continue
+        used = point
+        gap, exact = pair_gaps(point, scheme, plan.occupied, settings.band_pairs)
+        result["exact"] += int(exact)
+        if gap < result["pair_gap"]:
+            result["pair_gap"], result["pair_gap_k"] = gap, np.asarray(k, float).tolist()
+        if plan.cut is not None and gap * scheme.energy_scale <= PYATB_DEGENERATE_EV:
+            result["flagged"] += 1
+            try:
+                cut = shift_current_point(model, k, plan.cut)
+            except ValueError:
+                result["cut_failed"] += 1
+            else:
+                difference = spectrum - shift_current_spectrum(cut, settings, batch)
+                result["shift"] += difference
+                if binned is not None:
+                    result["binned_shift"] += binned - shift_current_spectrum(cut, plan.binned, batch)
+                result["flagged_points"].append(
+                    (float(np.max(np.abs(difference))), np.asarray(k, float).tolist(), gap)
+                )
+                used = cut
+        source, target = np.nonzero(used["factor"])
+        energies = used["gap"][source, target]
+        weights = (used["factor"][source, target] * used["integrand"][..., source, target])[_A, _B, _C].T
         if emulated:
-            spectrum, untruncated = pyatb_scheme_spectrum(scheme, energies, weights)
-            result["pyatb"] += spectrum
+            scheme_spectrum, untruncated = pyatb_scheme_spectrum(scheme, energies, weights)
+            result["pyatb"] += scheme_spectrum
             if untruncated is not None:
                 result["untruncated"] += untruncated
             allowance, edges = edge_allowance(scheme, energies, weights)
             result["edge"] += allowance
             result["edge_count"] += edges
-        levels = np.sort(point["energies"])
-        spacing = float(np.min(np.diff(levels))) if len(levels) > 1 else math.inf
-        if spacing < result["pair_gap"]:
-            result["pair_gap"], result["pair_gap_k"] = spacing, np.asarray(k, float).tolist()
-        result["at_threshold"] += int(spacing <= PYATB_DEGENERATE_EV)
+        bounds = transition_bounds(
+            scheme,
+            energies,
+            weights,
+            None if plan.binned is None else plan.binned.omega,
+            None if plan.binned is None else plan.binned.bin_width,
+        )
+        for key in ("abs_weight", "abs_below", "abs_above", "abs_slope", "bin_moves"):
+            if key in bounds:
+                result[key] += bounds[key]
+        result["energy_max"] = max(result["energy_max"], bounds["energy_max"])
         if len(energies):
             scaled = energies * scheme.energy_scale
             result["transitions"] += len(energies)
@@ -289,6 +499,10 @@ def shift_rows(
             result["inside"] += int(np.count_nonzero((scaled >= scheme.start) & (scaled < scheme.end)))
             result["low"] = min(result["low"], float(energies.min()))
             result["high"] = max(result["high"], float(energies.max()))
+    if scheme is not None:
+        result["flagged_points"] = sorted(result["flagged_points"], key=lambda item: -item[0])[
+            :FLAGGED_LISTED
+        ]
     return result
 
 
@@ -298,16 +512,19 @@ def _reduce(parts: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         for key, value in part.items():
             if value is None:
                 continue
-            if key in ("physical", "binned", "pyatb", "untruncated", "edge"):
+            if key in _SUMMED:
                 total[key] = total[key] + value
-            elif key in ("points", "edge_count", "at_threshold", "transitions", "inside", "below", "above"):
+            elif key in _COUNTED:
                 total[key] += value
             elif key == "pair_gap" and value < total["pair_gap"]:
                 total["pair_gap"], total["pair_gap_k"] = value, part["pair_gap_k"]
             elif key == "low":
                 total["low"] = min(total["low"], value)
-            elif key == "high":
-                total["high"] = max(total["high"], value)
+            elif key in ("high", "energy_max"):
+                total[key] = max(total[key], value)
+            elif key == "flagged_points":
+                merged = total["flagged_points"] + value
+                total["flagged_points"] = sorted(merged, key=lambda item: -item[0])[:FLAGGED_LISTED]
     return total
 
 
@@ -407,18 +624,30 @@ class ShiftStep:
         frequency_batch = min(len(self.omega), FREQUENCY_BATCH)
         per_k = SHIFT_MATRICES + SHIFT_FREQUENCY_MATRICES * frequency_batch
         options = self.context.options(stage, model, len(points), per_k=per_k)
-        function = functools.partial(
-            shift_rows, model, settings, frequency_batch, self.scheme if diagnostics else None, binned
+        domega = self.scheme.domega
+        plan = ShiftPlan(
+            settings,
+            frequency_batch,
+            binned=dataclasses.replace(settings, omega=self.omega + 0.5 * domega, bin_width=domega)
+            if binned
+            else None,
+            scheme=self.scheme if diagnostics else None,
+            occupied=self.occupied,
+            cut=dataclasses.replace(settings, degeneracy_tol=PYATB_DEGENERATE_EV / self.scheme.energy_scale)
+            if diagnostics and int(self.block["method"]) == 1
+            else None,
         )
         try:
-            parts = pmap(function, chunks(points, options.batch_size), options)
+            parts = pmap(
+                functools.partial(shift_rows, model, plan), chunks(points, options.batch_size), options
+            )
         except ValueError as error:
             raise RunnerError(
                 ERR_VALIDATION, f"QUEER cannot evaluate this shift current on the {stage} grid: {error}"
             ) from error
         sums = _reduce(parts)
         factor = conversion(model) / len(points)
-        binned_table = factor * sums["binned"] if binned else None
+        binned_table = domega * factor * component_table(sums["binned"]) if binned else None
         return ShiftEvaluation(factor * sums["physical"], binned_table, sums, factor)
 
     def run(self) -> None:
@@ -465,6 +694,13 @@ class ShiftStep:
             "convention": self.convention_block(),
             "legacy_single_channel": legacy,
             "diagnostics": self.diagnostics(main, doubled),
+            "build": {
+                "shift_source_sha256": source_sha256(SHIFT_SOURCES),
+                "sources": list(SHIFT_SOURCES),
+                "rule": "SHA-256 over the listed files of the queer package (path and bytes, sorted): with "
+                "provenance.queer_version, queer_record_sha256 and build_sha it names the build a clean-control "
+                "comparison vouches for",
+            },
         }
         record.results["integration"] = {
             "mode": "Grid",
@@ -614,6 +850,7 @@ class ShiftStep:
             "rule": "PyATB keeps the transitions in [start, start + count*domega) of its scale (every one of a "
             "named band pair); the margins run from the extreme transitions to the first and last photon energy",
         }
+        tail = math.exp(-(((scheme.interval * scheme.domega) / scheme.eta) ** 2))
         truncation = None
         if self.smearing == 1 and pyatb is not None and untruncated is not None:
             effect = np.max(np.abs(untruncated - pyatb), axis=0)
@@ -621,12 +858,13 @@ class ShiftStep:
             truncation = {
                 "interval_bins": scheme.interval,
                 "cut_eV": cut,
-                "tail_relative": math.exp(-((cut / scheme.eta) ** 2)),
+                "tail_relative": tail,
                 "effect_uA_V2": dict(zip(SHIFT_COMPONENTS, effect.tolist())),
                 "max_effect_uA_V2": float(effect.max()),
                 "rule": "PyATB sums its Gaussian over the bins within int(5 eta/domega) of a transition's bin and "
                 "keeps only the transitions inside its window: effect = max over omega of |untruncated - PyATB|",
             }
+        regularisation = self.regularisation_block(main)
         scheme_block: dict[str, Any] = {"role": EMULATION_ROLE}
         if pyatb is None:
             scheme_block.update(
@@ -647,7 +885,8 @@ class ShiftStep:
                     if self.smearing == 0
                     else "Gaussian truncated at int(5 eta/domega) bins"
                 )
-                + ", its SI constants, spin factor and signed volume, on QUEER's transitions of the model PyATB reads",
+                + ", its SI constants, spin factor and signed volume, and its method-1 cut at the flagged "
+                "k-points, on QUEER's transitions of the model PyATB reads",
                 energy_scale=scheme.energy_scale,
                 constant_ratio=self.ratio,
                 spin_factor=self.spin_factor,
@@ -669,8 +908,10 @@ class ShiftStep:
             "scissors_zero": float(self.native["scissors"]) == 0.0,
             "gaussian": self.smearing == 1,
             "method_1": int(self.block["method"]) == 1,
-            "pair_gap_above_1e-3_eV": bool(math.isfinite(gap) and gap > CLEAN_PAIR_GAP_EV),
+            "truncation_tail_below_1e-6": self.smearing == 1 and tail <= CLEAN_TRUNCATION_TAIL,
             "window_margin_5_eta": bool(margin_eta is not None and margin_eta >= CLEAN_MARGIN_ETA),
+            "no_pair_within_1e-4_eV": sums["flagged"] == 0,
+            "pair_gap_above_1e-3_eV": bool(gap > CLEAN_PAIR_GAP_EV),
         }
         return {
             "model": (
@@ -680,15 +921,75 @@ class ShiftStep:
             ),
             "min_pair_gap_eV": gap if math.isfinite(gap) else None,
             "min_pair_gap_k": sums["pair_gap_k"],
-            "pair_gap_rule": "the smallest spacing of two levels (scissored, as PyATB's derivatives see them) at "
-            "any sampled k",
-            "kpoints_at_pyatb_threshold": sums["at_threshold"],
+            "pair_gap_rule": "the smallest spacing (scissored levels, as PyATB's derivatives see them) between a "
+            "band of a pair PyATB selects at a k-point and any other level QUEER does not treat as degenerate "
+            "with it; null when there is none. Exact degeneracies (within QUEER's degeneracy tolerance, Kramers "
+            "pairs among them) are skipped by both codes",
+            "exact_degenerate_kpoints": sums["exact"],
+            "kpoints_at_pyatb_threshold": sums["flagged"],
             "pyatb_degenerate_threshold_eV": PYATB_DEGENERATE_EV,
+            "regularisation": regularisation,
             "transitions": transitions,
+            "transition_bounds": self.bounds_block(main),
             "gaussian_truncation": truncation,
             "pyatb_scheme": scheme_block,
             "clean_control": {"eligible": all(clean.values()), "conditions": clean},
             "self_convergence": doubled,
+        }
+
+    def regularisation_block(self, main: ShiftEvaluation) -> dict[str, Any]:
+        """PyATB's ``method 1`` cut at the flagged k-points, measured on QUEER's spectrum (PyATB's conventions)."""
+        sums = main.sums
+        method = int(self.block["method"])
+        scale = self.sign * self.spin_factor * main.factor
+        shift = scale * component_table(sums["shift"])
+        binned = None
+        if sums.get("binned_shift") is not None:
+            binned = self.scheme.domega * scale * component_table(sums["binned_shift"])
+        return {
+            "pyatb_method": method,
+            "threshold_eV": PYATB_DEGENERATE_EV,
+            "flagged_kpoints": sums["flagged"],
+            "kpoints": sums["points"],
+            "emulated_kpoints": sums["flagged"] - sums["cut_failed"],
+            "not_emulated_kpoints": sums["cut_failed"],
+            "shift_uA_V2": components(shift),
+            "binned_shift_uA_V2": None if binned is None else components(binned),
+            "listed": [
+                {"k": k, "pair_gap_eV": gap, "max_shift_uA_V2": abs(scale) * largest}
+                for largest, k, gap in sums["flagged_points"]
+            ],
+            "rule": (
+                "method 0 regularizes every energy denominator of its eigenvector derivatives with 0.04 eV at "
+                "every k-point (get_partial_eigenvectors_1k_SumOverStates): no flagged set"
+                if method == 0
+                else "method 1 (get_D_degenerate) replaces 1/dE by dE/(dE^2 + 0.04^2) for |dE| <= 1e-4 eV between "
+                "a band of a selected pair and any other level: at the k-points with such a spacing above QUEER's "
+                "degeneracy tolerance, shift = QUEER's spectrum - QUEER's spectrum with its degeneracy tolerance "
+                "at 1e-4 eV, in PyATB's conventions (export sign, spin factor), QUEER's kernel and constants"
+            ),
+        }
+
+    def bounds_block(self, main: ShiftEvaluation) -> dict[str, Any]:
+        """The absolute transition weights a comparison bounds PyATB's scheme with (PyATB's spin factor)."""
+        sums = main.sums
+        scale = abs(self.spin_factor * main.factor)
+
+        def vector(key: str) -> dict[str, float]:
+            return dict(zip(SHIFT_COMPONENTS, (scale * sums[key]).tolist()))
+
+        slope = sums.get("abs_slope")
+        moves = sums.get("bin_moves")
+        return {
+            "abs_weight_uA_V2_eV": vector("abs_weight"),
+            "abs_weight_below_window_uA_V2_eV": vector("abs_below"),
+            "abs_weight_above_window_uA_V2_eV": vector("abs_above"),
+            "max_abs_energy_eV": sums["energy_max"],
+            "abs_slope_uA_V2_per_eV": None if slope is None else components(scale * slope),
+            "bin_moves_uA_V2": None if moves is None else components(scale * moves),
+            "rule": "over the transitions of pyatb_scheme (the cut's at flagged k-points): sum |w| in all, below and "
+            "at or above PyATB's window; with a Gaussian sum |w| |G'(omega_i - E)| (G of PyATB's eta); without "
+            "smearing the |w| of the transitions QUEER's and PyATB's bins place apart, on each row they touch",
         }
 
     def self_convergence(self, physical: np.ndarray, legacy: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -726,11 +1027,12 @@ class ShiftStep:
                 f"{sums['below'] + sums['above']} of {sums['transitions']} sampled transitions lie outside PyATB's "
                 "window: PyATB drops them (and their Gaussian tails), QUEER's physical value keeps them",
             )
-        if sums["at_threshold"]:
+        if sums["flagged"]:
             record.warn(
                 WARN_SHIFT_THRESHOLD,
-                f"{sums['at_threshold']} k-points hold two levels within {PYATB_DEGENERATE_EV} eV: PyATB "
-                "regularizes their energy denominators",
+                f"{sums['flagged']} k-points hold a band of a selected pair within {PYATB_DEGENERATE_EV} eV of "
+                "another level that is not exactly degenerate with it: PyATB's method 1 regularizes those energy "
+                "denominators (diagnostics.regularisation measures the effect)",
             )
         if doubled is not None:
             compared = doubled["legacy_single_channel"] if legacy is not None else doubled["physical"]

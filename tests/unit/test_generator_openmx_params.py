@@ -276,8 +276,7 @@ def test_shift_current_parameters_follow_pyatbs_input():
         ({"occ_band": None}, "occ_band is required"),
         ({"omega": None, "domega": None}, "omega is required"),
         ({"occ_band": -1}, "occ_band must count the occupied bands"),
-        ({"omega": "3.0 0.5"}, "nonnegative increasing"),
-        ({"omega": "-0.5 3.0"}, "nonnegative increasing"),
+        ({"omega": "3.0 0.5"}, "increasing photon-energy range"),
         ({"domega": 0}, "domega must be positive"),
         ({"eta": -0.1}, "eta must be positive"),
         ({"smearing_method": 4}, "smearing_method must be 0"),
@@ -291,6 +290,16 @@ def test_invalid_shift_current_files_are_bad_parameters(change, fragment):
         translate_openmx(shift_params(**change))
     assert caught.value.code == "queer_bad_params" and fragment in str(caught.value)
     assert not limit_refusal(caught.value.code, str(caught.value))
+    # A key that is present but invalid is reported as invalid, never also as missing.
+    for key, value in change.items():
+        if value is not None:
+            assert f"{key} is required" not in str(caught.value)
+
+
+def test_a_negative_photon_energy_start_is_taken_as_pyatb_takes_it():
+    # PyATB uses start_omega as given; QUEER computes the same photon energies.
+    native = translate_openmx(shift_params(omega="-0.5 3.0")).recipe(fermi_energy=0.0)["parameters"]
+    assert native["omega"][0] == -0.5 and len(native["omega"]) == int(3.5 / 0.01) + 1
 
 
 def test_a_negative_scissors_and_a_pair_across_no_gap_are_queers_limits():

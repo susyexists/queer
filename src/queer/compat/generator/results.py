@@ -210,6 +210,24 @@ def sha256_file(path: str | Path) -> str | None:
         return None
 
 
+def source_sha256(relative_paths: Sequence[str]) -> str | None:
+    """SHA-256 of QUEER source files (paths relative to the ``queer`` package), or None when one is unreadable.
+
+    Each file contributes its path and its bytes, in sorted path order, so the
+    digest names the code of a computation in a source checkout as well as in an
+    installed wheel.
+    """
+    root = Path(__file__).resolve().parents[2]
+    digest = hashlib.sha256()
+    for relative in sorted(relative_paths):
+        try:
+            content = (root / relative).read_bytes()
+        except OSError:
+            return None
+        digest.update(relative.encode() + b"\0" + content + b"\0")
+    return digest.hexdigest()
+
+
 def package_version(name: str) -> str | None:
     """The installed version of a distribution, or None."""
     try:

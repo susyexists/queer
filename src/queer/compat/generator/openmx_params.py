@@ -308,9 +308,10 @@ def _function_value(key: str, value: Any) -> Any:
     if key in {"k_start", "k_vect1", "k_vect2"}:
         return _vector(value, key, 3)
     if key == "omega":
+        # PyATB takes a negative start as given (its first photon energies then see only tails).
         low, high = _vector(value, key, 2)
-        if low < 0 or high < low:
-            raise ValueError("omega must be a nonnegative increasing photon-energy range (eV)")
+        if high < low:
+            raise ValueError("omega must be an increasing photon-energy range [start, end] (eV)")
         return [low, high]
     if key in {"domega", "eta"}:
         width = _number(value, key)
@@ -396,6 +397,7 @@ def translate_openmx(params: Mapping[str, Any], step: str | None = None) -> Open
         "input_parameters",
     )
     problems += found
+    given = {key for key, value in function.items() if value is not None}
     function, found = _normalized(
         {k: v for k, v in function.items() if k in FUNCTION_KEYS[resolved]}, _function_value, "parameters"
     )
@@ -403,7 +405,7 @@ def translate_openmx(params: Mapping[str, Any], step: str | None = None) -> Open
     if function.get("integrate_mode") == "Adaptive":
         problems += [_zero_tolerance(key) for key in ADAPTIVE_TOLERANCES if function.get(key) == 0]
     if resolved == STEP_SHIFT:
-        problems += _shift_problems(function)
+        problems += _shift_problems(function, given)
     workers = params.get("workers")
     if workers is not None:
         try:
@@ -456,12 +458,16 @@ _SHIFT_LIMITS = re.compile(
 )
 
 
-def _shift_problems(function: Mapping[str, Any]) -> list[str]:
-    """What a SHIFT_CURRENT block lacks or asks beyond QUEER's limits (normalized values)."""
+def _shift_problems(function: Mapping[str, Any], given: set[str]) -> list[str]:
+    """What a SHIFT_CURRENT block lacks or asks beyond QUEER's limits (normalized values).
+
+    ``given`` names the keys the block holds: one that is present but invalid is
+    reported by its own problem, not as missing.
+    """
     problems = [
         f"parameters.{key} is required for SHIFT_CURRENT (PyATB has no default)"
         for key in SHIFT_REQUIRED
-        if key not in function
+        if key not in function and key not in given
     ]
     occupied = function.get("occ_band")
     if occupied is not None and occupied < 0:

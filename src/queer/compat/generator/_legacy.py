@@ -25,6 +25,12 @@ from .pyatb_conventions import (
     resolve_hall_convention,
 )
 
+# What export_run's Out/Shift_Current/shift_current.dat holds: PyATB's columns, QUEER's physical tensor.
+SHIFT_EXPORT_CONVENTION = (
+    "QUEER physical sigma^abc(0;w,-w) in PyATB's columns; not PyATB's convention: no signed-volume sign for a "
+    "left-handed lattice and, without smearing, QUEER's histogram per eV rather than PyATB's bin weights"
+)
+
 
 def translate_pyatb(step_type, parameters=None, *, input_parameters=None, fermi_energy=None, spin_mode=None):
     """Translate resolved legacy keywords to native workflow arguments.
@@ -214,7 +220,6 @@ def translate_pyatb(step_type, parameters=None, *, input_parameters=None, fermi_
             or not np.isfinite(limits).all()
             or not np.isfinite(delta)
             or delta <= 0
-            or limits[0] < 0
             or limits[1] < limits[0]
         ):
             raise ValueError("Invalid shift-current frequency range")
@@ -521,11 +526,17 @@ def export_run(run_dir, *, output_dir=None, profile="generator"):
         elif name == "shift_current":
             from .pyatb_files import SHIFT_CURRENT_FILE, shift_current_text
 
+            # Without the model this export knows neither the lattice's handedness (PyATB's signed volume)
+            # nor PyATB's bins: the file holds QUEER's physical tensor and says so (QUEER_SHIFT_CURRENT
+            # writes PyATB's conventions).
             components = [(a, b, c) for a in range(3) for b in range(3) for c in range(b, 3)]
             tensor = arrays[name]
             values = np.column_stack([tensor[:, a, b, c] for a, b, c in components])
             filename = SHIFT_CURRENT_FILE
-            write_text(target / filename, shift_current_text(arrays["omega"], values))
+            write_text(
+                target / filename, shift_current_text(arrays["omega"], values, note=SHIFT_EXPORT_CONVENTION)
+            )
+            convention = {**convention, "shift_current_file": SHIFT_EXPORT_CONVENTION}
         else:
             mode = str(convention.get("integrate_mode") or "Grid")
             filename = CHERN_FILE

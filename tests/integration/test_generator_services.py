@@ -9,7 +9,7 @@ import pytest
 from queer.cli import main
 from queer.compat.generator import band_payload, export_run, translate_ase, translate_pyatb
 from queer.compat.generator.pyatb_conventions import HARTREE_EV, PYATB_HARTREE_EV, PYATB_RYDBERG_EV
-from queer.compat.generator.pyatb_files import ahc_vector_text, chern_text
+from queer.compat.generator.pyatb_files import ahc_vector_text, chern_text, parse_shift_current
 from queer.config import config_from_mapping
 from queer.io.atomistic import read_frames, write_structure
 from queer.io.bands import BandData
@@ -235,12 +235,18 @@ def test_pyatb_shift_export_matches_recorded_eighteen_component_columns(tmp_path
             26.0,
         ],
     )
-    header = output.read_text().splitlines()[0].replace("#", " ").split()
+    lines = output.read_text().splitlines()
+    header = lines[0].replace("#", " ").split()
     assert header == [
         "omega(eV)",
         *"xxx xxy xxz xyy xyz xzz yxx yxy yxz yyy yyz yzz zxx zxy zxz zyy zyz zzz".split(),
         "(uA/V^2)",
     ]
+    # Without the model the export cannot apply PyATB's signed volume or bins: it says so.
+    assert lines[1].startswith("# QUEER physical sigma^abc") and "not PyATB's convention" in lines[1]
+    assert parse_shift_current(output.read_text())["sigma"][0][1] == 1.0
+    legacy = json.loads((output.parents[2] / "pyatb_results.json").read_text())["legacy_conventions"]
+    assert legacy["shift_current_file"] == lines[1][2:]
 
 
 def test_imported_band_payload_has_declared_reference_and_segment_partition():

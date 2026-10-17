@@ -340,11 +340,12 @@ def chern_text(value: Any, integrate_mode: str = "Grid") -> str:
     return f"Chern number is {number!r} by using the {integrate_mode} integral\n"
 
 
-def shift_current_text(omega: Any, sigma: Any) -> str:
+def shift_current_text(omega: Any, sigma: Any, note: str | None = None) -> str:
     """The ``shift_current.dat`` table: one row of the 18 components (uA/V^2) per photon energy (eV).
 
     ``sigma`` is a sequence of rows or a mapping of the 18 component names to
-    their columns.
+    their columns. ``note`` adds a comment line after PyATB's header (PyATB writes
+    none), which readers of PyATB's layout skip.
     """
     if isinstance(sigma, Mapping):
         columns = [[float(value) for value in sigma[name]] for name in SHIFT_COMPONENTS]
@@ -361,6 +362,8 @@ def shift_current_text(omega: Any, sigma: Any) -> str:
         + "".join(f"{name:>{width}}" for name, width in zip(SHIFT_COMPONENTS, widths))
     )
     lines = [header + f"{SHIFT_UNIT:>16}"]
+    if note:
+        lines.append("# " + " ".join(note.split()))
     lines += [
         f"{energy:10.5f}" + "".join(f"{value:15.6e}" for value in row) for energy, row in zip(energies, rows)
     ]
