@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT / "tests" / "numerical"))
 from generator_golden_cases import CASES, write_case  # noqa: E402
 
 from queer.compat.generator import parity  # noqa: E402
-from queer.compat.generator.estimators import dos_at_fermi, gaussian_dos  # noqa: E402
+from queer.compat.generator.estimators import dos_at_fermi, gaussian_dos, legacy_edge_crossings  # noqa: E402
 from queer.compat.generator.parity import (  # noqa: E402
     AFTER_CONVENTION,
     AGREE,
@@ -42,6 +42,8 @@ from queer.compat.generator.parity import (  # noqa: E402
 from queer.compat.generator.runner import main, run  # noqa: E402
 
 LEGACY_CORE = "f6c9b7af239b530253cb7eeb9b209847e7d47baaf0237cb835a326c17dd5ec32"
+# The R1 driver (dcdc104 to c1c973b): edge crossings by nearest energy.
+R1_CORE = "56fda912ba570e2293b3a9b4bf20d11038c64efa5d2f192c8ac03c615034e215"
 QUEER_RESULTS = "queer_results.json"
 DRIVER_RESULTS = "pythtb_results.json"
 
@@ -629,8 +631,83 @@ def test_the_compare_command_prints_the_verdict_and_writes_reports(runs, tmp_pat
     assert "unknown step" in capsys.readouterr().err
 
 
+def nearest_energy_slab_reference(source, target, core=R1_CORE):
+    """A QUEER SLAB run rewritten as a nearest-energy driver recorded it: the counts and nothing else."""
+    target = copy(source, target)
+    document = as_driver_document(target, "PYTHTB_SLAB", core)
+    ribbon = read(target / "Out" / "ribbon_bands.json")
+    document["slab"]["edge_crossings_at_fermi"] = legacy_edge_crossings(
+        ribbon["energies_eV"], ribbon["left_weight"], ribbon["right_weight"], periodic=True
+    )
+    write(target / DRIVER_RESULTS, document)
+    return target
+
+
+def test_a_nearest_energy_reference_meets_its_count_recomputed_from_the_candidate(runs, tmp_path):
+    source, candidate = runs["haldane_slab"]
+    reference = nearest_energy_slab_reference(source, tmp_path / "legacy")
+    # The candidate's own counts do not enter: its levels are recounted under the old rule.
+    candidate = copy(candidate, tmp_path / "candidate")
+    document = read(candidate / QUEER_RESULTS)
+    document["slab"]["edge_crossings_at_fermi"]["left"]["up"] += 5
+    write(candidate / QUEER_RESULTS, document)
+    report = compare("PYTHTB_SLAB", reference, candidate)
+    assert report["verdict"] == PASS, report["summary"]
+    assert report["semantics"]["profile"] == "driver-dcdc104" and report["semantics"]["key"] == R1_CORE
+    assert report["semantics"]["rules"]["edge_crossings_rule"] == "nearest_energy"
+    kinds = classes(report)
+    assert kinds["slab.edge_crossings_at_fermi"] == AFTER_CONVENTION
+    assert kinds["slab.edge_crossings_status"] == kinds["slab.edge_crossings_per_energy"] == NOT_APPLICABLE
+    # The recount is applied, not skipped: other reference counts fail.
+    document = read(reference / DRIVER_RESULTS)
+    document["slab"]["edge_crossings_at_fermi"]["right"]["down"] += 1
+    document["slab"]["edge_crossings_at_fermi"]["right"]["net"] -= 1
+    write(reference / DRIVER_RESULTS, document)
+    report = compare("PYTHTB_SLAB", reference, candidate)
+    assert report["verdict"] == FAIL
+    assert report["summary"]["unexplained"] == ["slab.edge_crossings_at_fermi"]
+    assert parity.semantics_of({"provenance": {"core_sha256": LEGACY_CORE}})[0].edge_crossings_rule == (
+        "nearest_energy"
+    )
+
+
+def test_the_crossing_status_and_per_energy_counts_are_compared(runs, tmp_path):
+    reference, source = runs["haldane_slab"]
+
+    def status(crossings):
+        crossings["status"] = "unresolved"
+
+    def nets(crossings):
+        crossings["per_energy"][2]["left_net"] = 0
+
+    def shifted(crossings, by):
+        crossings["window_eV"] = [value + by for value in crossings["window_eV"]]
+
+    changes = [
+        ("status", status, "slab.edge_crossings_status"),
+        ("nets", nets, "slab.edge_crossings_per_energy"),
+        ("far", lambda crossings: shifted(crossings, 1e-6), "slab.edge_crossings_per_energy"),
+        ("near", lambda crossings: shifted(crossings, 1e-9), None),
+    ]
+    for name, change, expected in changes:
+        candidate = copy(source, tmp_path / name)
+        document = read(candidate / QUEER_RESULTS)
+        change(document["slab"]["edge_crossings_at_fermi"])
+        write(candidate / QUEER_RESULTS, document)
+        report = compare("QUEER_SLAB", reference, candidate)
+        if expected is None:
+            assert report["verdict"] == PASS, report["summary"]
+            assert classes(report)["slab.edge_crossings_per_energy"] == AGREE
+        else:
+            assert report["verdict"] == FAIL, name
+            assert report["summary"]["unexplained"] == [expected], name
+
+
 def test_the_registry_names_the_first_driver_revision():
     assert parity.REFERENCE_SEMANTICS[LEGACY_CORE].dos_at_fermi_rule == "first_nonnegative_bin"
     assert parity.semantics_of({"provenance": {"core_sha256": LEGACY_CORE}})[0].name == "driver-9f43886"
+    r1 = parity.semantics_of({"provenance": {"core_sha256": R1_CORE}})[0]
+    assert r1.name == "driver-dcdc104" and r1.edge_crossings_rule == "nearest_energy"
+    assert r1.rules() == {**parity.CURRENT_SEMANTICS.rules(), "edge_crossings_rule": "nearest_energy"}
     assert parity.semantics_of({"engine": "queer", "provenance": {}})[0] is parity.CURRENT_SEMANTICS
     assert parity.passing({"verdict": PASS_DOCUMENTED}) and not parity.passing({"verdict": UNEXPLAINED})

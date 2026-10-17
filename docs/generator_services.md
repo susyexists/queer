@@ -450,7 +450,8 @@ comparison to the revision that wrote the reference:
 
 | Producer | Rules |
 |---|---|
-| driver 9f43886 (`f6c9b7af…`) | DOS(E_F) compared with the candidate's DOS recomputed under the first-nonnegative-bin rule; Fermi surface by its crossing bands only (no plane frame); localization not compared; the DOS mesh recorded on all three axes is read at the candidate's mesh axes; inputs verified by fingerprint |
+| driver 9f43886 (`f6c9b7af…`) | DOS(E_F) compared with the candidate's DOS recomputed under the first-nonnegative-bin rule; Fermi surface by its crossing bands only (no plane frame); localization not compared; the DOS mesh recorded on all three axes is read at the candidate's mesh axes; edge crossings as for dcdc104; inputs verified by fingerprint |
+| driver dcdc104 to c1c973b (`56fda912…`, QUEER 1.5.0's oracle) | SLAB edge-crossing counts compared with the nearest-energy count recomputed from the candidate's own levels; the crossing status and per-energy counts, which it did not record, are not applicable |
 | a fermi-mode BERRY reference without `berry.conventions` | written before the sign fix: its maps, path curvature and integrals are compared after a factor -1 |
 | QUEER and the vendored driver | current semantics; compared as recorded |
 
@@ -472,7 +473,7 @@ A difference removed by one of these rules is classed `agree_after_convention`.
 | Path curvature | pointwise ≤ 1e-8 max\|Ω\| |
 | SLAB levels | τ_E per k-point; a level within τ_E of the window edge may be missing on one side |
 | SLAB edge weights | left and right weights summed over clusters of levels within 1e-5 eV ≤ 1e-9; clusters within 1e-5 eV of the window edge are excluded |
-| SLAB edge crossings | equal, unless a per-state weight lies within 1e-6 of 1/2 (documented) |
+| SLAB edge crossings | counts at E_F, status and per-energy nets equal, unless a per-state weight or a left + right sum lies within 1e-6 of 1/2 (documented); per-energy energies and the gap ≤ 2 τ_E |
 | Model and validation blocks | float leaves ≤ 1e-6 relative (the worst is reported), other leaves equal; producer keys are skipped |
 | Warnings | the same codes: `warning_codes` when both runs record them, else codes classified from the messages. Reworded messages with the same codes, such as "PythTB bands" and "Model bands", are documented; plot warnings depend on the plotting environment and are not compared |
 

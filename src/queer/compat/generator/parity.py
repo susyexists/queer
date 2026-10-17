@@ -37,7 +37,11 @@ its DOS(E_F) is compared with the candidate's value recomputed under that rule,
 its Fermi surface by the crossing bands only, its localization not at all, and its
 mesh at the candidate's mesh axes. A fermi-mode BERRY reference without
 ``berry.conventions`` predates the sign fix: its maps, path curvature and integrals
-are compared after a factor -1. A difference removed by a recorded convention is
+are compared after a factor -1. The drivers up to core 56fda912 (9f43886, and
+dcdc104 to c1c973b) matched each edge state to the nearest-energy state of the same
+edge: such a reference's edge-crossing counts are compared with that count recomputed
+from the candidate's own levels, and the status and per-energy counts it never
+recorded are ``not_applicable``. A difference removed by a recorded convention is
 ``agree_after_convention``.
 
 **Tolerances** (data-driven, the same for every material). With δ_W the
@@ -58,8 +62,10 @@ carrying curvature and each document's integral must equal its own map. The path
 curvature agrees pointwise to 1e-8 of its largest magnitude. Slab levels follow
 the band tolerance per k-point (a level within τ_E of the window edge may be
 missing on one side), edge weights summed over clusters of levels within 1e-5 eV
-(clusters at the window edge excluded) agree to 1e-9, and the edge-crossing counts
-exactly unless a per-state weight lies within 1e-6 of 1/2. Float leaves of the
+(clusters at the window edge excluded) agree to 1e-9, and the edge-crossing counts,
+their status and the per-energy nets exactly unless a per-state weight or a
+left + right sum lies within 1e-6 of 1/2; the per-energy energies and the gap agree
+to 2 τ_E. Float leaves of the
 model and validation blocks agree to 1e-6 relative, other leaves exactly; the
 warning sets agree by code.
 
@@ -85,7 +91,7 @@ from typing import Any
 import numpy as np
 
 from .berry import plane_file_stem
-from .estimators import dos_at_fermi
+from .estimators import dos_at_fermi, legacy_edge_crossings
 from .pythtb_params import DEFAULT_PARAMS, step_keys, translate_pythtb
 from .results import (
     OUT_DIR,
@@ -200,6 +206,7 @@ class Semantics:
     fermi_surface_contours: bool = True
     localization: bool = True
     dos_mesh_on_every_axis: bool = False
+    edge_crossings_rule: str = "rank_continuity"
 
     def rules(self) -> dict[str, Any]:
         return {
@@ -207,26 +214,38 @@ class Semantics:
             "fermi_surface_contours_compared": self.fermi_surface_contours,
             "localization_compared": self.localization,
             "dos_mesh_on_every_axis": self.dos_mesh_on_every_axis,
+            "edge_crossings_rule": self.edge_crossings_rule,
         }
 
 
 CURRENT_SEMANTICS = Semantics(
     "current",
     "QUEER and the vendored Generator driver: DOS(E_F) interpolated linearly, Fermi-surface contours in "
-    "the plane frame, DOS mesh per periodic axis",
+    "the plane frame, DOS mesh per periodic axis, edge crossings by rank continuity checked across the gap",
 )
 DRIVER_9F43886 = Semantics(
     "driver-9f43886",
     "the first Generator PythTB driver revision: DOS(E_F) from the first bin centred at or above E_F, "
     "Fermi-surface contours without a plane frame, another localization estimate, the DOS mesh on all "
-    "three axes, no recorded inputs",
+    "three axes, edge crossings by nearest energy, no recorded inputs",
     dos_at_fermi_rule="first_nonnegative_bin",
     fermi_surface_contours=False,
     localization=False,
     dos_mesh_on_every_axis=True,
+    edge_crossings_rule="nearest_energy",
+)
+DRIVER_DCDC104 = Semantics(
+    "driver-dcdc104",
+    "the Generator PythTB driver from dcdc104 to c1c973b (QUEER 1.5.0's oracle): edge crossings by "
+    "matching each edge state to the nearest-energy state of the same edge, with no status or "
+    "per-energy counts",
+    edge_crossings_rule="nearest_energy",
 )
 REFERENCE_SEMANTICS: Mapping[str, Semantics] = MappingProxyType(
-    {"f6c9b7af239b530253cb7eeb9b209847e7d47baaf0237cb835a326c17dd5ec32": DRIVER_9F43886}
+    {
+        "f6c9b7af239b530253cb7eeb9b209847e7d47baaf0237cb835a326c17dd5ec32": DRIVER_9F43886,
+        "56fda912ba570e2293b3a9b4bf20d11038c64efa5d2f192c8ac03c615034e215": DRIVER_DCDC104,
+    }
 )
 
 
@@ -1596,6 +1615,10 @@ class _Comparison:
                 for row in rows:
                     if np.any(np.abs(row - SLAB_EDGE_THRESHOLD) <= SLAB_HALF_WEIGHT_MARGIN):
                         near_half = True
+        for lefts, rights in zip(weights["left"], weights["right"]):
+            for left_row, right_row in zip(lefts, rights):
+                if np.any(np.abs(left_row + right_row - SLAB_EDGE_THRESHOLD) <= SLAB_HALF_WEIGHT_MARGIN):
+                    near_half = True
         for index, (energies_a, energies_b) in enumerate(zip(levels_a, levels_b)):
             order_a, order_b = np.argsort(energies_a), np.argsort(energies_b)
             e_a, e_b = energies_a[order_a], energies_b[order_b]
@@ -1637,22 +1660,118 @@ class _Comparison:
             SLAB_WEIGHT_TOL,
             "left and right weights summed over clusters of levels within 1e-5 eV",
         )
-        crossings_a, crossings_b = (
-            slab_a.get("edge_crossings_at_fermi"),
-            slab_b.get("edge_crossings_at_fermi"),
+        self.compare_edge_crossings(
+            kind,
+            slab_a.get("edge_crossings_at_fermi") or {},
+            slab_b.get("edge_crossings_at_fermi") or {},
+            file_b,
+            EDGE_FACTOR * tolerance,
+            near_half,
         )
-        if crossings_a == crossings_b:
-            self.quantity("slab.edge_crossings_at_fermi", AGREE, detail=_brief(crossings_a))
-        elif near_half:
-            self.quantity(
+
+    def compare_edge_crossings(
+        self,
+        kind: str,
+        crossings_a: Mapping[str, Any],
+        crossings_b: Mapping[str, Any],
+        file_b: Mapping[str, Any],
+        tolerance: float,
+        near_half: bool,
+    ) -> None:
+        """The counts at E_F, then the status and the per-energy counts across the gap.
+
+        A reference of a nearest-energy driver is compared with that count recomputed
+        from the candidate's levels; it recorded no status or per-energy counts.
+        """
+        counts_a = {side: crossings_a.get(side) for side in ("left", "right")}
+        counts_b = {side: crossings_b.get(side) for side in ("left", "right")}
+        near = "a per-state edge weight, or a left + right sum, lies within 1e-6 of 1/2"
+        if self.rules.edge_crossings_rule == "nearest_energy":
+            recount = legacy_edge_crossings(
+                [np.asarray(row, float) for row in file_b.get("energies_eV") or []],
+                [np.asarray(row, float) for row in file_b.get("left_weight") or []],
+                [np.asarray(row, float) for row in file_b.get("right_weight") or []],
+                periodic=kind == "ribbon",
+                threshold=SLAB_EDGE_THRESHOLD,
+            )
+            self.discrete(
                 "slab.edge_crossings_at_fermi",
-                DOCUMENTED,
-                detail=f"{crossings_a} vs {crossings_b}: a per-state edge weight lies within 1e-6 of 1/2",
+                counts_a == recount,
+                near_half,
+                f"{_brief(counts_a)}: the nearest-energy count recomputed from the candidate's levels",
+                f"{counts_a} vs {recount} recomputed from the candidate's levels",
+                near,
+                convention=True,
+            )
+            for name in ("slab.edge_crossings_status", "slab.edge_crossings_per_energy"):
+                self.quantity(
+                    name,
+                    NOT_APPLICABLE,
+                    detail=f"the reference ({self.semantics.name}) counted by nearest energy and "
+                    "recorded no status or per-energy counts",
+                )
+            return
+        self.discrete(
+            "slab.edge_crossings_at_fermi",
+            counts_a == counts_b,
+            near_half,
+            _brief(counts_a),
+            f"{counts_a} vs {counts_b}",
+            near,
+        )
+        keys = ("status", "reason", "method", "threshold")
+        if "method" not in crossings_a and "method" not in crossings_b:
+            for name in ("slab.edge_crossings_status", "slab.edge_crossings_per_energy"):
+                self.quantity(
+                    name, NOT_APPLICABLE, detail="neither run recorded a status or per-energy counts"
+                )
+            return
+        status_a = {key: crossings_a.get(key) for key in keys}
+        status_b = {key: crossings_b.get(key) for key in keys}
+        self.discrete(
+            "slab.edge_crossings_status",
+            status_a == status_b,
+            near_half,
+            f"{status_a['status']} ({status_a['method']})",
+            _shorten(f"{status_a} vs {status_b}"),
+            near,
+        )
+        worst = _per_energy_difference(crossings_a, crossings_b)
+        if worst is None:
+            self.discrete(
+                "slab.edge_crossings_per_energy",
+                False,
+                near_half,
+                "",
+                _shorten(f"{crossings_a.get('per_energy')} vs {crossings_b.get('per_energy')}"),
+                near,
             )
         else:
-            self.quantity(
-                "slab.edge_crossings_at_fermi", UNEXPLAINED, detail=f"{crossings_a} vs {crossings_b}"
+            self.bounded(
+                "slab.edge_crossings_per_energy",
+                worst,
+                tolerance,
+                f"{len(crossings_a.get('per_energy') or [])} energies, the same nets; energies to 2 τ_E",
             )
+
+    def discrete(
+        self,
+        name: str,
+        equal: bool,
+        near_half: bool,
+        agreed: str,
+        differing: str,
+        near: str,
+        *,
+        convention: bool = False,
+    ) -> None:
+        """A count or label: equal agrees, a difference at a 1/2-weight decision is documented."""
+        if equal:
+            self.quantity(name, self.converted(AGREE) if convention else AGREE, detail=_shorten(agreed))
+        elif near_half:
+            self.quantity(name, DOCUMENTED, detail=_shorten(f"{differing}: {near}"))
+        else:
+            self.quantity(name, UNEXPLAINED, detail=_shorten(differing))
 
     # --------------------------------------------------------------- driver
     def run(self) -> None:
@@ -1788,6 +1907,24 @@ def _clusters(energies: np.ndarray, gap: float) -> list[tuple[int, int]]:
     breaks = np.flatnonzero(np.diff(energies) >= gap) + 1
     edges = [0, *breaks.tolist(), len(energies)]
     return list(zip(edges[:-1], edges[1:]))
+
+
+def _per_energy_difference(a: Mapping[str, Any], b: Mapping[str, Any]) -> float | None:
+    """The largest energy difference of two per-energy count tables, None unless shapes and nets agree."""
+    rows_a, rows_b = a.get("per_energy"), b.get("per_energy")
+    if not isinstance(rows_a, list) or not isinstance(rows_b, list) or len(rows_a) != len(rows_b):
+        return None
+    # A metal's gap is null: an empty list here, which a recorded gap never matches.
+    window_a, window_b = a.get("window_eV") or [], b.get("window_eV") or []
+    energies_a, energies_b = a.get("energies_eV") or [], b.get("energies_eV") or []
+    if len(window_a) != len(window_b) or len(energies_a) != len(energies_b):
+        return None
+    pairs = list(zip(window_a, window_b)) + list(zip(energies_a, energies_b))
+    for row_a, row_b in zip(rows_a, rows_b):
+        if any(row_a.get(key) != row_b.get(key) for key in ("left_net", "right_net", "bulk_net")):
+            return None
+        pairs.append((row_a.get("energy_eV"), row_b.get("energy_eV")))
+    return max((abs(float(x) - float(y)) for x, y in pairs), default=0.0)
 
 
 def _brief(value: Any) -> str:

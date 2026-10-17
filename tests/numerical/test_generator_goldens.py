@@ -67,3 +67,7 @@ def test_the_driver_golden_of_a_case_passes_against_queer(tmp_path, name):
     assert not report["inputs_verified_by_fingerprint"]
     parameters = next(item for item in report["preconditions"] if item["name"] == "parameters")
     assert parameters["detail"] == "identical parameter files (params_sha256)"
+    if CASES[name].step == "PYTHTB_SLAB":
+        kinds = {item["name"]: item["class"] for item in report["quantities"]}
+        for quantity in ("at_fermi", "status", "per_energy"):
+            assert kinds[f"slab.edge_crossings_{quantity}"] == AGREE
