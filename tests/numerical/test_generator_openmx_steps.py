@@ -276,6 +276,28 @@ def test_a_refinement_that_outgrows_its_budget_is_a_validation_failure(tmp_path,
     assert BUDGET_REFUSAL in document["error"]["message"]
 
 
+def test_a_refining_chern_grid_records_pyatbs_refined_sum(tmp_path):
+    refining = {"integrate_grid": [6, 6, 1], "adaptive_grid": [2, 2, 1], "adaptive_grid_threshold": 0.0}
+    payload = {**params("QUEER_CHERN_NUMBER", **refining), "self_convergence": True}
+    code, document = execute(tmp_path, payload)
+    assert code == EXIT_OK, document.get("error")
+    emulation = document["chern"]["pyatb_emulation"]["refined_grid"]
+    assert emulation["flagged"] == 36 and emulation["flagged_doubled"] == 144
+    assert emulation["doubled_grid"] == [12, 12, 1] and emulation["judged"].startswith(
+        "|occupied curvature . n|"
+    )
+    # Threshold 0 replaces every node by its 2 x 2 sub-grid half a coarse cell below: PyATB's sum
+    # is then the plain 12 x 12 plane grid starting at (-1/12, -1/12).
+    model = OpenMXModel.from_scfout(tmp_path / "scf.scfout")
+    shifted = chern_number(
+        model, grid=(12, 12, 1), k_start=[-1 / 12, -1 / 12, 0.0], fermi_energy=0.0, engine="direct"
+    )
+    assert emulation["printed"][0] == pytest.approx(float(shifted["chern_number"]), abs=1e-12)
+    assert emulation["e_P"][0] == pytest.approx(
+        abs(emulation["printed"][0] - emulation["printed_doubled"][0])
+    )
+
+
 def test_an_adaptive_integral_from_few_cells_warns(tmp_path):
     adaptive = {"integrate_mode": "Adaptive", "initial_grid": [4, 4, 1], "absolute_error": 50.0}
     code, document = execute(tmp_path, params(**adaptive))

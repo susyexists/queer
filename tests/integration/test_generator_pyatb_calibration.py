@@ -7,7 +7,11 @@ directory per case holding PyATB's ``Input``, ``Out/input.json``,
 ``Input`` names (``../test.scfout``). Each case's ``queer_params.json`` is built
 from its ``Input`` as the Generator builds it (the INPUT_PARAMETERS without
 ``package`` and ``scfout_route``, and the function block); the refining Grid cases
-also ask for the self-convergence estimate a comparison of them needs.
+also ask for the self-convergence estimate a comparison of them needs, and their
+emulation of PyATB's refined sum must refine exactly PyATB's nodes. The FHS scan's
+emulation of PyATB's links must reproduce PyATB's table at every energy. A metal
+relabelled to a refining Grid that refines nothing checks that PyATB's own grid
+error bounds a gap QUEER's alone cannot.
 ``QUEER_REAL_REPLAY_WORKERS`` sets the workers (default 4) and
 ``QUEER_PARITY_REPORT_DIR`` receives each report as JSON and Markdown.
 
