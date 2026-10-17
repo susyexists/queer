@@ -12,6 +12,7 @@ from scipy.linalg import eigh
 from tight_binding_models import cell_periodic_operators, haldane, kane_mele, qwz
 
 from queer.compat.generator import estimators
+from queer.compat.generator.slab import FoldedTable, slab_levels
 from queer.models.evaluation import states
 from queer.models.wannier import WannierModel
 from queer.observables.geometry import berry_plane, wilson_loop
@@ -279,18 +280,93 @@ def test_rotated_edge_weights_and_crossings_equal_the_generator(generator_core):
                 original = generator_core.edge_weights(vectors, cells, orbitals, edge, energies=levels)
                 for a, b in zip(port, original):
                     assert_array_equal(a, b)
-    for _ in range(20):
+    for _ in range(40):
         count = int(rng.integers(1, 12))
-        levels = [rng.normal(scale=0.3, size=int(rng.integers(0, 6))) for _ in range(count)]
+        levels = [rng.normal(scale=0.3, size=int(rng.integers(0, 9))) for _ in range(count)]
         left = [rng.uniform(0, 1, size=len(e)) for e in levels]
         right = [rng.uniform(0, 1, size=len(e)) for e in levels]
         for periodic in (False, True):
             for threshold in (0.3, 0.5):
-                assert estimators.edge_crossings(
-                    levels, left, right, periodic=periodic, threshold=threshold
-                ) == generator_core.edge_crossings(
-                    levels, left, right, periodic=periodic, threshold=threshold
-                )
+                for window, interior in ((None, True), (0.5, True), (0.4, False)):
+                    options = dict(periodic=periodic, threshold=threshold, window=window, interior=interior)
+                    port = estimators.edge_crossings(levels, left, right, **options)
+                    assert port == generator_core.edge_crossings(levels, left, right, **options)
+
+
+def ribbon_levels(model, cells, points, window=0.5, fermi=0.0):
+    """Levels and the driver's per-state edge weights of a ribbon cut along a2 (QUEER_SLAB's solve)."""
+    table = FoldedTable(model.translations, model.hopping_matrices, fermi, model.nbnd)
+    kpoints = np.zeros((points, 3))
+    kpoints[:, 0] = -0.5 + (np.arange(points) + 0.5) / points
+    rows = [slab_levels(table, 1, [0], cells, window, 2, k) for k in kpoints]
+    return [[row[index] for row in rows] for index in range(3)]
+
+
+@pytest.mark.parametrize(
+    ("case", "status"),
+    [
+        ("haldane_6", "resolved"),
+        ("haldane_20", "resolved"),
+        ("kane_mele", "resolved"),
+        ("qwz_thin", "unresolved"),
+        ("haldane_metal", "metal"),
+        ("haldane_4", "unresolved"),
+    ],
+)
+def test_edge_crossings_on_ribbons_equal_the_generator(generator_core, case, status):
+    """Chiral, helical, hybridized and metallic ribbons: the full result, status and per-energy table."""
+    model, cells, points, window, fermi = {
+        "haldane_6": (haldane(staggered=0.2), 6, 24, 0.5, 0.0),
+        "haldane_20": (haldane(staggered=0.2), 20, 60, 0.5, 0.0),
+        "kane_mele": (kane_mele(1.0), 12, 60, 0.5, 0.0),
+        "qwz_thin": (qwz(-1.8), 6, 80, 1.0, 0.0),
+        "haldane_metal": (haldane(staggered=0.2), 12, 40, 0.5, 0.9),
+        "haldane_4": (haldane(staggered=0.2), 4, 24, 0.5, 0.0),
+    }[case]
+    energies, left, right = ribbon_levels(model, cells, points, window, fermi)
+    interior = cells > 4
+    for periodic in (True, False):
+        options = dict(periodic=periodic, window=window, interior=interior)
+        port = estimators.edge_crossings(energies, left, right, **options)
+        assert port == generator_core.edge_crossings(energies, left, right, **options)
+        assert port["status"] == (status if periodic else "open_path")
+    port = estimators.edge_crossings(energies, left, right, periodic=True, window=window, interior=interior)
+    assert port["energies_eV"] == [row["energy_eV"] for row in port["per_energy"]]
+    if status == "resolved":
+        assert {(r["left_net"], r["right_net"], r["bulk_net"]) for r in port["per_energy"]} == {
+            (port["left"]["net"], port["right"]["net"], 0)
+        }
+
+
+def test_two_edges_crossing_each_other_keep_their_crossings_as_in_the_generator(generator_core):
+    # By energy order alone nothing crossed; the exchanged edges say both levels did.
+    energies = [np.array([-0.05, 0.05]), np.array([-0.07, 0.07])]
+    left = [np.array([1.0, 0.0]), np.array([0.0, 1.0])]
+    right = [np.array([0.0, 1.0]), np.array([1.0, 0.0])]
+    port = estimators.edge_crossings(energies, left, right, periodic=True)
+    assert port == generator_core.edge_crossings(energies, left, right, periodic=True)
+    assert port["left"] == {"up": 1, "down": 1, "net": 0} and port["right"] == port["left"]
+    port = estimators.edge_crossings(energies, left, right)
+    assert port["left"] == {"up": 1, "down": 0, "net": 1}
+    assert port["right"] == {"up": 0, "down": 1, "net": -1}
+
+
+def test_the_legacy_count_keeps_the_nearest_energy_rule():
+    # Up to core 56fda912 the driver matched each edge state to the nearest-energy state of
+    # the same edge: unbounded, many to one. A far jump counted as a crossing.
+    levels = np.array([-0.459, -0.2, 0.084, 0.2])
+    energies = [levels, levels + 0.001]
+    left = [np.array([0.9, 0.1, 0.1, 0.1]), np.array([0.1, 0.1, 0.9, 0.1])]
+    right = [np.full(4, 0.1), np.full(4, 0.1)]
+    legacy = estimators.legacy_edge_crossings(energies, left, right)
+    assert legacy == {"left": {"up": 1, "down": 0, "net": 1}, "right": {"up": 0, "down": 0, "net": 0}}
+    current = estimators.edge_crossings(energies, left, right)
+    assert current["left"] == {"up": 0, "down": 0, "net": 0}
+    # Two states sharing one match both count.
+    energies = [np.array([-0.3, -0.2]), np.array([0.25])]
+    left = [np.array([1.0, 1.0]), np.array([1.0])]
+    right = [np.zeros(2), np.zeros(1)]
+    assert estimators.legacy_edge_crossings(energies, left, right)["left"] == {"up": 2, "down": 0, "net": 2}
 
 
 @pytest.mark.parametrize("case", ["haldane", "pt_kane_mele"])

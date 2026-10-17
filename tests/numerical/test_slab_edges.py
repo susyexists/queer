@@ -58,9 +58,14 @@ def test_haldane_ribbon_carries_one_chiral_mode_on_each_edge(phase):
     assert abs(chern) == 1
     spectrum = slab_edge_spectrum(model, ribbon_kpoints(60), finite_axis=1, cells=20, window=0.5)
     energies, left, right = ragged(spectrum)
-    tally = edge_crossings(energies, left, right, periodic=True)
+    tally = edge_crossings(energies, left, right, periodic=True, window=0.5)
     assert tally["left"]["net"] == -tally["right"]["net"] and abs(tally["left"]["net"]) == 1
     assert tally["left"]["up"] + tally["left"]["down"] == 1
+    # The same chiral pair at every energy across the gap the ribbon's window shows.
+    assert tally["status"] == "resolved", tally["reason"]
+    assert {(row["left_net"], row["right_net"], row["bulk_net"]) for row in tally["per_energy"]} == {
+        (tally["left"]["net"], tally["right"]["net"], 0)
+    }
     # Reversing the Chern number reverses the chirality on each edge.
     assert tally["left"]["net"] == (1 if chern == -1 else -1)
 
@@ -69,8 +74,8 @@ def test_trivial_haldane_ribbon_has_no_edge_crossings_in_serial_or_parallel_runs
     model = haldane(staggered=1.0)
     assert abs(float(chern_number(model, grid=(12, 12, 1))["chern_number"])) < 1e-10
     spectrum = slab_edge_spectrum(model, ribbon_kpoints(40), finite_axis=1, cells=20, window=0.5)
-    tally = edge_crossings(*ragged(spectrum), periodic=True)
-    assert tally["left"]["net"] == tally["right"]["net"] == 0
+    tally = edge_crossings(*ragged(spectrum), periodic=True, window=0.5)
+    assert tally["left"]["net"] == tally["right"]["net"] == 0 and tally["status"] == "resolved"
     options = ExecutionOptions(workers=2, batch_size=4)
     parallel = slab_edge_spectrum(
         model, ribbon_kpoints(40), finite_axis=1, cells=20, window=0.5, execution=options

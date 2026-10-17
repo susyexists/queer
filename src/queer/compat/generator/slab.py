@@ -20,11 +20,15 @@ cutoffs):
   first and on the last ``edge_cells`` cells is the driver's per-state value,
   after each degenerate cluster is rotated to diagonalize the first-edge
   projector (:func:`~queer.compat.generator.estimators.edge_weights`);
-- ``edge_crossings_at_fermi`` counts edge-localized levels (weight >= 1/2)
-  crossing E_F between neighbouring k-points, edge by edge, the last ribbon
-  point paired with the first
-  (:func:`~queer.compat.generator.estimators.edge_crossings`). The counts are
-  informational; the bulk Chern number is the invariant.
+- ``edge_crossings_at_fermi`` counts the levels crossing E_F between
+  neighbouring k-points by rank continuity, the last ribbon point paired with
+  the first, each crossing on the edge holding at least half of its endpoints'
+  mean weight (:func:`~queer.compat.generator.estimators.edge_crossings`), and
+  checks the counts at 9 energies across the gap the bulk-like levels leave
+  around E_F: ``status`` is ``resolved``, ``unresolved`` (hybridized edges, or
+  no cell between the two edge regions), ``metal`` or, for a slab's open
+  surface path, ``open_path``. The counts are informational; the bulk Chern
+  number is the invariant.
 
 The step writes ``Out/ribbon_bands.json`` or ``Out/slab_bands.json``
 (``k_distance``, fractional for a ribbon and in 1/Å with 2 pi for a slab;
@@ -42,6 +46,7 @@ from typing import Any
 import numpy as np
 
 from ...observables.surface import slab_eigensystem
+from ...physics.slab import edge_cells_used
 from .estimators import edge_crossings, edge_weights, k_distance, surface_path
 from .memory import pmap
 from .plots import new_figure, save_figure, tick_marks
@@ -141,7 +146,15 @@ def run_slab(context: WannierStepContext) -> None:
     energies = [row[0] for row in rows]
     left = [row[1] for row in rows]
     right = [row[2] for row in rows]
-    crossings = edge_crossings(energies, left, right, periodic=kind == "ribbon")
+    # Without a cell between the two edge regions no level can be bulk-like.
+    crossings = edge_crossings(
+        energies,
+        left,
+        right,
+        periodic=kind == "ribbon",
+        window=window,
+        interior=cells > 2 * edge_cells_used(edge_cells, cells),
+    )
     if kind == "ribbon":
         # A ribbon's x axis is its 1D crystal momentum, in units of 2 pi / a.
         distance = kpoints[:, periodic[0]].copy()
@@ -160,7 +173,7 @@ def run_slab(context: WannierStepContext) -> None:
     }
     context.log(
         f"{kind}: {cells} cells along a{finite + 1}, net edge crossings "
-        f"left {crossings['left']['net']:+d}, right {crossings['right']['net']:+d}"
+        f"left {crossings['left']['net']:+d}, right {crossings['right']['net']:+d} ({crossings['status']})"
     )
     data_file = f"{OUT_DIR}/{kind}_bands.json"
     write_json_atomic(

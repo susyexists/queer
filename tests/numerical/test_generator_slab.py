@@ -121,6 +121,7 @@ def test_a_haldane_ribbon_has_one_chiral_mode_per_edge_exactly_as_the_driver(
     # The Haldane layer's C = -1 puts a left-moving mode on the first edge.
     assert crossings["left"]["net"] == net and crossings["right"]["net"] == -net
     assert crossings["left"]["up"] + crossings["left"]["down"] == abs(net)
+    assert crossings["status"] == "resolved" and crossings["method"] == "rank_continuity"
     produced = assert_matches_the_driver(generator_core, monkeypatch, tmp_path, document, values)
     # 41 points round up to 42, half a step off -1/2, 0 and 1/2.
     k = np.asarray(produced["kpoints_frac"])
@@ -166,6 +167,8 @@ def test_a_crystal_slab_follows_the_surface_path_exactly_as_the_driver(generator
         24,
     )
     produced = assert_matches_the_driver(generator_core, monkeypatch, tmp_path, document, values)
+    # A surface path is open: its counts are informational.
+    assert slab["edge_crossings_at_fermi"]["status"] == "open_path"
     path = generator_core.surface_path(np.asarray(document["model"]["lattice"]), 0, 1, 25)
     assert produced["kpoints_frac"] == to_jsonable(path["kpoints"])
     assert produced["tick_labels"] == ["G", "M", "K", "G", "M'", "M''", "G"]

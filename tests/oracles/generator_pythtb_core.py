@@ -1384,6 +1384,122 @@ def edge_weights(
     return cells[:edge].sum(axis=0), cells[-edge:].sum(axis=0)
 
 
+# Edge crossings: the rank offsets tried per k-step, the ranks around the
+# reference energy they compare, and the energies sampled across a ribbon's gap
+# besides E_F (one tenth of the gap apart and from its edges).
+CROSSING_MAX_OFFSET = 3
+CROSSING_RANKS = (-3, 2)
+CROSSING_GAP_SAMPLES = 9
+CROSSING_METHOD = "rank_continuity"
+
+
+def _edge_of(wl: float, wr: float, threshold: float) -> str:
+    """The edge holding at least ``threshold`` of a state or crossing, else ``"bulk"``."""
+    if wl >= threshold:
+        return "left"
+    if wr >= threshold:
+        return "right"
+    return "bulk"
+
+
+def _step_crossings(
+    a: np.ndarray,
+    b: np.ndarray,
+    wa: Tuple[np.ndarray, np.ndarray],
+    wb: Tuple[np.ndarray, np.ndarray],
+    e_ref: float,
+    threshold: float,
+) -> List[Tuple[str, int, bool]]:
+    """Levels crossing ``e_ref`` from k_j (ascending ``a``) to k_j+1 (``b``).
+
+    Returns ``(edge, +1 up or -1 down, bulk_like)`` per crossing; ``wa`` and
+    ``wb`` are the (left, right) weights of the levels.
+    """
+    i0 = int(np.searchsorted(a, e_ref))
+    j0 = int(np.searchsorted(b, e_ref))
+
+    def present(r: int, o: int) -> bool:
+        return 0 <= i0 + r < len(a) and 0 <= j0 + r + o < len(b)
+
+    best: Optional[Tuple[Tuple[float, int, int], int]] = None
+    for o in range(-CROSSING_MAX_OFFSET, CROSSING_MAX_OFFSET + 1):
+        crossed = range(-o, 0) if o > 0 else range(0, -o)
+        if not all(present(r, o) for r in crossed):
+            continue
+        ranks = [
+            r for r in range(CROSSING_RANKS[0], CROSSING_RANKS[1] + 1) if present(r, o)
+        ]
+        if not ranks:
+            continue
+        idx = np.array(ranks)
+        cost = float(np.mean(np.abs(a[i0 + idx] - b[j0 + idx + o])))
+        key = (cost, abs(o), o)
+        if best is None or key < best[0]:
+            best = (key, o)
+    if best is None:
+        return []
+    o = best[1]
+    # The crossed ranks and one neighbour on each side. Two neighbouring
+    # pairs whose dominant edges are exchanged are two edges' levels crossing
+    # each other: they swap partners.
+    pairs = [
+        (i0 + r, j0 + r + o)
+        for r in range(min(-1, -1 - o), max(0, -o) + 1)
+        if present(r, o)
+    ]
+    q = 0
+    while q + 1 < len(pairs):
+        (i, i1), (n, n1) = pairs[q], pairs[q + 1]
+        x0 = _edge_of(wa[0][i], wa[1][i], threshold)
+        y1 = _edge_of(wb[0][i1], wb[1][i1], threshold)
+        y0 = _edge_of(wa[0][n], wa[1][n], threshold)
+        x1 = _edge_of(wb[0][n1], wb[1][n1], threshold)
+        if x0 == x1 and y0 == y1 and x0 != y0 and "bulk" not in (x0, y0):
+            pairs[q], pairs[q + 1] = (i, n1), (n, i1)
+            q += 2
+        else:
+            q += 1
+    out = []
+    for i, i1 in pairs:
+        if (a[i] < e_ref) == (b[i1] < e_ref):
+            continue
+        wl = 0.5 * (float(wa[0][i]) + float(wb[0][i1]))
+        wr = 0.5 * (float(wa[1][i]) + float(wb[1][i1]))
+        out.append(
+            (
+                _edge_of(wl, wr, threshold),
+                1 if b[i1] >= e_ref else -1,
+                wl + wr < threshold,
+            )
+        )
+    return out
+
+
+def _crossings_at(
+    levels: Sequence[np.ndarray],
+    weights: Sequence[Tuple[np.ndarray, np.ndarray]],
+    pairs: Sequence[Tuple[int, int]],
+    e_ref: float,
+    threshold: float,
+) -> Tuple[Dict[str, Dict[str, int]], int]:
+    """Per-edge crossings of ``e_ref`` over the k-steps ``pairs``, and the bulk-like ones."""
+    tally = {side: {"up": 0, "down": 0} for side in ("left", "right", "bulk")}
+    bulk_like = 0
+    for j, j1 in pairs:
+        for side, sign, bulky in _step_crossings(
+            levels[j], levels[j1], weights[j], weights[j1], e_ref, threshold
+        ):
+            tally[side]["up" if sign > 0 else "down"] += 1
+            bulk_like += int(bulky)
+    for side in tally:
+        tally[side]["net"] = tally[side]["up"] - tally[side]["down"]
+    return tally, bulk_like
+
+
+def _net_values(values: Sequence[int]) -> str:
+    return "/".join(f"{v:+d}" if v else "0" for v in sorted(set(values)))
+
+
 def edge_crossings(
     energies: Sequence[np.ndarray],
     left: Sequence[np.ndarray],
@@ -1391,36 +1507,133 @@ def edge_crossings(
     *,
     periodic: bool = False,
     threshold: float = 0.5,
+    window: Optional[float] = None,
+    interior: bool = True,
 ) -> Dict[str, Any]:
-    """Count edge-localised states crossing E_F between neighbouring k-points.
+    """Count edge states crossing E_F (energies relative to it), checked across the gap.
 
-    Edge states are followed edge by edge: a state localised on one edge at k_j
-    is matched to the nearest-energy state localised on the SAME edge at
-    k_j+1, so two chiral modes crossing each other at E_F (one per edge) are not
-    swapped. A sign change of the energy is a crossing, its direction the sign
-    of the step. ``periodic`` also compares the last k-point with the first (a
-    ribbon's 1D zone). Informational: the bulk invariant stays the authority.
+    Rank continuity: per step k_j -> k_j+1 (the last point back to the first
+    when ``periodic``, a ribbon's 1D zone), the levels are ranked from a
+    reference energy (rank 0 = lowest at or above it), and the offset o in
+    [-3, 3] that minimises the mean |E_r(k_j) - E_r+o(k_j+1)| over the ranks
+    r in [-3, 2] present at both is taken; the |o| levels an offset says
+    crossed must be present at both. o > 0: ranks -1..-o crossed upwards;
+    o < 0: ranks 0..|o|-1 downwards. Two neighbouring pairs whose dominant
+    edges are exchanged (two edges' levels crossing each other) swap
+    partners. A crossing's left and right weights are its endpoints' means;
+    it belongs to the edge holding at least ``threshold`` of it, else to the
+    bulk, and is bulk-like when left + right < ``threshold``.
+
+    The counts at E_F are ``left`` and ``right`` (up, down, net). Levels with
+    left + right < ``threshold`` bound the gap around E_F: ``window_eV`` is
+    the highest such level below E_F and the lowest at or above it over all
+    k (-``window`` or ``window`` on a side without one; without a ``window``
+    the largest |E| stored). A bulk-like crossing at E_F leaves no gap:
+    ``metal``. Otherwise the nets are
+    evaluated at E_F and at 9 energies across the gap, a tenth of it apart
+    and from its edges (``per_energy``): ``resolved`` when every energy gives
+    the same nets with left = -right and no bulk net, else ``unresolved`` (the
+    edges hybridise; more cells separate them). A ribbon without cells
+    between its two edge regions (``interior`` false) is ``unresolved``, and
+    an open path (a slab's surface path) is ``open_path``: informational.
     """
-    tally = {"left": {"up": 0, "down": 0}, "right": {"up": 0, "down": 0}}
-    count = len(energies)
+    levels, weights = [], []
+    for e, wl, wr in zip(energies, left, right):
+        e = np.asarray(e, float)
+        order = np.argsort(e, kind="stable")
+        levels.append(e[order])
+        weights.append((np.asarray(wl, float)[order], np.asarray(wr, float)[order]))
+    count = len(levels)
     pairs = [(j, j + 1) for j in range(count - 1)]
     if periodic and count > 1:
         pairs.append((count - 1, 0))
-    for side, weights in (("left", left), ("right", right)):
-        for j, j1 in pairs:
-            on0 = np.asarray(weights[j]) >= threshold
-            on1 = np.asarray(weights[j1]) >= threshold
-            if not on0.any() or not on1.any():
-                continue
-            here = np.asarray(energies[j])[on0]
-            there = np.asarray(energies[j1])[on1]
-            for e in here:
-                match = there[int(np.argmin(np.abs(there - e)))]
-                if (e < 0.0) != (match < 0.0):
-                    tally[side]["up" if match > e else "down"] += 1
-    for side in ("left", "right"):
-        tally[side]["net"] = tally[side]["up"] - tally[side]["down"]
-    return tally
+    at_fermi, bulk_like = _crossings_at(levels, weights, pairs, 0.0, threshold)
+    rows = []
+
+    def row(energy: float, tally: Dict[str, Dict[str, int]]) -> Dict[str, Any]:
+        return {
+            "energy_eV": energy,
+            "left_net": tally["left"]["net"],
+            "right_net": tally["right"]["net"],
+            "bulk_net": tally["bulk"]["net"],
+        }
+
+    gap: Optional[List[float]] = None
+    if bulk_like:
+        rows.append(row(0.0, at_fermi))
+    else:
+        lo: Optional[float] = None
+        hi: Optional[float] = None
+        for e, (wl, wr) in zip(levels, weights):
+            bulk = wl + wr < threshold
+            below, above = e[bulk & (e < 0.0)], e[bulk & (e >= 0.0)]
+            if below.size:
+                lo = float(below.max()) if lo is None else max(lo, float(below.max()))
+            if above.size:
+                hi = float(above.min()) if hi is None else min(hi, float(above.min()))
+        if window is not None:
+            span = float(window)
+        else:
+            span = max((float(np.abs(e).max()) for e in levels if e.size), default=0.0)
+        gap = [-span if lo is None else lo, span if hi is None else hi]
+        step = gap[1] - gap[0]
+        samples = {
+            gap[0] + step * i / (CROSSING_GAP_SAMPLES + 1)
+            for i in range(1, CROSSING_GAP_SAMPLES + 1)
+        }
+        for energy in sorted(samples | {0.0}):
+            tally = (
+                at_fermi
+                if energy == 0.0
+                else _crossings_at(levels, weights, pairs, energy, threshold)[0]
+            )
+            rows.append(row(energy, tally))
+    nets = {
+        side: [r[f"{side}_net"] for r in rows] for side in ("left", "right", "bulk")
+    }
+    if not periodic:
+        status = "open_path"
+        reason = "an open path, not a closed loop: the counts are informational"
+    elif gap is None:
+        status = "metal"
+        reason = (
+            f"bulk-like levels cross E_F ({bulk_like} crossings): no gap around E_F"
+        )
+    elif not interior:
+        status = "unresolved"
+        reason = "no cell lies between the two edge regions: use more slab_cells"
+    else:
+        span_meV = f"[{gap[0] * 1e3:+.1f}, {gap[1] * 1e3:+.1f}] meV"
+        stable = all(len(set(values)) == 1 for values in nets.values())
+        if stable and nets["left"][0] == -nets["right"][0] and nets["bulk"][0] == 0:
+            status = "resolved"
+            reason = (
+                f"the same counts at {len(rows)} energies across the gap {span_meV}"
+            )
+        else:
+            status = "unresolved"
+            sides = [s for s in ("left", "right") if len(set(nets[s])) > 1]
+            sides = sides or ["left", "right"]
+            who = " and ".join(sides) + (" edge" if len(sides) == 1 else " edges")
+            if any(nets["bulk"]):
+                who += " and the bulk"
+            reason = (
+                f"counts at {len(rows)} energies across the gap {span_meV}: left net "
+                f"{_net_values(nets['left'])}, right net {_net_values(nets['right'])}, "
+                f"bulk net {_net_values(nets['bulk'])}; states of the {who} hybridise: "
+                "use more slab_cells"
+            )
+    return {
+        "left": at_fermi["left"],
+        "right": at_fermi["right"],
+        "status": status,
+        "reason": reason,
+        "method": CROSSING_METHOD,
+        "window_eV": gap,
+        "energies_eV": [r["energy_eV"] for r in rows],
+        "per_energy": rows,
+        "threshold": threshold,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -3182,7 +3395,16 @@ def run_slab(ctx: Context) -> None:
     energies = [p[0] for p in parts]
     left = [p[1] for p in parts]
     right = [p[2] for p in parts]
-    crossings = edge_crossings(energies, left, right, periodic=kind == "ribbon")
+    # Without a cell between the two edge regions no level can be bulk-like.
+    edge = max(1, min(_STATE["edge_cells"], cells // 2))
+    crossings = edge_crossings(
+        energies,
+        left,
+        right,
+        periodic=kind == "ribbon",
+        window=_STATE["slab_window"],
+        interior=cells > 2 * edge,
+    )
     if kind == "ribbon":
         # The x axis of a ribbon is its 1D crystal momentum (units of 2 pi / a).
         dist = path["kpoints"][:, periodic[0]].copy()

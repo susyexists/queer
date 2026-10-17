@@ -315,11 +315,30 @@ driver, E_F taken off the home-cell block). `slab_edge_spectrum` adds each
 degenerate cluster's total probability on the first and last edge cells. That
 cluster sum is the physical edge weight and does not depend on the basis inside
 the cluster. The Generator's per-state weights first rotate each cluster (levels
-closer than 1e-5 eV) to diagonalize the first-edge projector, and its crossing
-count follows states with weight ≥ 0.5 edge by edge to the nearest-energy state
-at the next k. Both are historical semantics in
-`queer.compat.generator.estimators`: inside a cluster whose edge projector is
-degenerate they still depend on the basis.
+closer than 1e-5 eV) to diagonalize the first-edge projector; inside a cluster
+whose edge projector is degenerate they still depend on the basis.
+
+The Generator's edge-crossing count (`queer.compat.generator.estimators.edge_crossings`,
+the driver's rule since core 93167386…) follows levels by rank continuity. Per step
+k_j → k_j+1 (a ribbon's last point back to its first) the levels are ranked from the
+reference energy (rank 0 = the lowest at or above it), and the offset o in [-3, 3]
+that minimizes the mean |E_r(k_j) - E_r+o(k_j+1)| over the ranks r in [-3, 2] present
+at both says that |o| levels crossed, upwards for o > 0; those |o| levels must be
+present at both points. Two neighbouring pairs whose dominant edges are exchanged
+are two edges' levels crossing each other and swap partners, so two chiral modes
+crossing at E_F within one step keep one crossing each. A crossing belongs to the
+edge holding ≥ 1/2 of its endpoints' mean weight, else to the bulk. Levels with
+left + right < 1/2 bound the gap around E_F (± the energy window on a side without
+one); the nets are counted again at 9 energies a tenth of the gap apart and from its
+edges. The status is `resolved` when every energy gives the same nets with
+left = -right and no bulk net, `unresolved` otherwise or when no cell lies between
+the two edge regions, `metal` when a bulk-like level crosses E_F, and `open_path` for
+a slab's surface path. Validated on the 12-cell ribbon of a C = -1 MnBi2Te4 film
+(`unresolved`, where the old count gave 8 and 9), Haldane ribbons (`resolved`, ±1),
+trivial ribbons (`resolved`, 0), Kane-Mele (`resolved`, one mode each way per edge)
+and a 6-cell QWZ ribbon (`unresolved`). The drivers up to core 56fda912… matched each
+edge state to the nearest-energy state of the same edge, unbounded and many to one;
+`legacy_edge_crossings` keeps that rule for comparing their references.
 
 `queer.compat.generator.estimators` keeps the Generator's own estimators with
 their exact semantics. The DOS histograms the eigenvalues on bins from
