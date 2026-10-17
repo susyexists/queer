@@ -904,8 +904,9 @@ Grid, its points and the doubled grid with `self_convergence`) and
 zero-based `band_pair`, `scissors_eV`), `grid`, `convention` (`lattice_handedness`,
 `export_sign`, `pyatb_spin_factor`, `pyatb_nspin`, `pyatb_constant_ratio`),
 `legacy_single_channel` (a collinear SCF: `spin_factor`, `sigma_uA_V2`,
-`binned_uA_V2`), `build` (`shift_source_sha256`: the SHA-256 of the source files
-of this computation, `openmx_shift.SHIFT_SOURCES`) and `diagnostics`, evaluated on
+`binned_uA_V2`), `build` (`queer_source_sha256`: the SHA-256 of every `.py` file
+of the installed queer package, sorted relative paths and bytes,
+`results.package_source_sha256`) and `diagnostics`, evaluated on
 the model PyATB reads with QUEER's own transitions: `min_pair_gap_eV` (the
 smallest spacing, scissored as PyATB's derivatives see them, between a band of a
 pair PyATB selects at a k-point and any other level not exactly degenerate with
@@ -913,8 +914,10 @@ it), `exact_degenerate_kpoints`, `kpoints_at_pyatb_threshold` (those with such a
 spacing within 1e-4 eV), `regularisation` (`method 1`: at those k-points QUEER's
 spectrum minus its spectrum with its degeneracy tolerance raised to 1e-4 eV,
 `shift_uA_V2` and `binned_shift_uA_V2` in PyATB's conventions, with
-`flagged_kpoints`, `emulated_kpoints`, `not_emulated_kpoints` and the largest
-`listed`), `transition_bounds` (`abs_weight_uA_V2_eV` and its parts below and above
+`flagged_kpoints`, `emulated_kpoints`, `not_emulated_kpoints`, the largest
+`listed`, QUEER's spectrum over the other k-points `sigma_unflagged_uA_V2` (and
+`binned_unflagged_uA_V2`) in the same conventions, and `abs_weight_flagged_uA_V2_eV`,
+the absolute weight of the cut's transitions at the flagged k-points), `transition_bounds` (`abs_weight_uA_V2_eV` and its parts below and above
 PyATB's window, `max_abs_energy_eV`, with a Gaussian `abs_slope_uA_V2_per_eV`, sum
 `abs(w) abs(G'(w_i - E))`, without smearing `bin_moves_uA_V2`, the weight of the
 transitions QUEER's and PyATB's bins place apart), `transitions` (`count`, `inside_window`, `below_window`, `above_window`, their
@@ -948,20 +951,31 @@ that may explain a difference, never stand in for agreement. In order:
    comparison fails whatever PyATB printed): the emulation and QUEER's value sum the
    same transitions, so `abs(emulation - r (sigma_Q - shift))` must stay within the
    bound `consistency_bound` derives from PyATB's constants and the candidate's
-   `transition_bounds`: PyATB's Hartree scale `s` moves a transition by
-   `abs(s - 1) E` (`abs(s - 1) E_max abs_slope + (abs(s - 1) E_max)^2 2/(eta^3
-   sqrt(pi)) abs_weight`), its truncation drops rows farther than `int(5 eta/domega)
-   domega` (`G(that) abs_weight`), its window drops the transitions outside it
-   (`G(w_i - w_0) below + G(end - w_i) above`), and its bins place `bin_moves`
-   elsewhere; `r` is PyATB's constant ratio, `sigma_Q` QUEER's value in PyATB's
-   conventions and `shift` the measured cut. The weights must bound QUEER's own
-   table. On the analytic models the bound is within a factor 1.1 of the measured
-   difference with a Gaussian.
+   `transition_bounds`: PyATB's Hartree scale `s` moves a transition by `abs(s - 1) E`
+   (`energy_scale_bound`, row by row: `d_i abs_slope_i + d_i^2 2/(eta^3 sqrt(pi))
+   abs_weight + G(6 eta - d_i) abs_weight` with `d_i = abs(s - 1) (abs(w_i) + 6 eta)`,
+   so no energy the candidate reports enters), its truncation drops rows farther than
+   `int(5 eta/domega) domega` (`G(that) abs_weight`), its window drops the transitions
+   outside it (`G(w_i - w_0) below + G(end - w_i) above`), and its bins place
+   `bin_moves` elsewhere; `r` is PyATB's constant ratio, `sigma_Q` QUEER's value in
+   PyATB's conventions and `shift` the measured cut. The weights must bound QUEER's own
+   table. On the analytic models the measured difference reaches 0.89 to 0.97 of the
+   bound with a Gaussian (eta 0.1 to 0.01). The bounds the candidate supplies must lie within the
+   caps derived for them (`transition_bounds`): `abs_slope` within `abs_weight` times
+   the largest `abs(G')` over the transitions' range (`slope_cap`, at most `sqrt(2)
+   e^(-1/2)/(eta^2 sqrt(pi))`), the window's weights within the whole weight and only
+   where the transitions lie, `bin_moves` within twice the weight on a row and four
+   times over all rows. The `regularisation` record must agree with the grid, the pair
+   spacings (a k-point is flagged exactly when a spacing lies within 1e-4 eV), the
+   value (no flagged k-point: no shift, and the value without the flagged k-points is
+   the value) and the cut's transition weight at the flagged k-points, which bounds
+   the cut's own spectrum there (`regularisation_record`). A candidate that contradicts
+   itself in any of these or in its own file fails: no cause explains its differences.
 3. *Symmetry gate* (`differs_unexplained`): the components above 1e-4 of the table's
    largest value and the signs of their integrals over omega (where both exceed
    1e-4 of the component's integrated magnitude) are the same, against QUEER's
-   value, QUEER's value with PyATB's cut, or the emulation when step 2 holds; a
-   difference counts only beyond the component's tolerance.
+   value, QUEER's value with PyATB's cut while the cut is bounded, or the emulation
+   when step 2 holds; a difference counts only beyond the component's tolerance.
 4. *Clean control*, from the data: scissors 0, smearing 1, `method 1`, PyATB's
    truncated tail `exp(-(int(5 eta/domega) domega/eta)^2) <= 1e-6`, at least 5 eta
    between the extreme transitions and the first and last photon energy with no
@@ -972,28 +986,60 @@ that may explain a difference, never stand in for agreement. In order:
    agree directly (step 5) or every component is `differs_unexplained`. Every
    `differs_documented` needs a passed clean-control report of this build
    (`--clean-control FILE`, `clean_control=`): the same `queer_version`,
-   `queer_record_sha256`, `build_sha`, `shift_current.build.shift_source_sha256`
-   and the comparator's own `comparator_sha256` (`rules.build` of the report).
-   Without one a comparison that does not agree directly is `not_comparable` ("no
-   passed clean control for this build"), unless the candidate contradicts itself
-   (step 2, its own file), which fails. A failed report of this build makes every
-   component `differs_unexplained`; a report of another build is `not_applicable`.
+   `queer_record_sha256`, `build_sha`, `shift_current.build.queer_source_sha256` (every
+   `.py` file of the package that ran the candidate) and the comparator's own
+   `comparator_sha256` (the same digest of the package it runs from; `rules.build` of
+   the report). Without one a comparison that does not agree directly is
+   `not_comparable` ("no passed clean control for this build"), unless the candidate
+   contradicts itself (step 2, its own file), which fails. A failed report of this
+   build makes every component `differs_unexplained`; a report of another build is
+   `not_applicable`.
 5. *Classes* per component with `tol = 1e-4 max abs(sigma_P) + 5.01e-7 abs(sigma_P)`
    (the print) `+` the edge allowance: `agree` when PyATB meets QUEER's value
    (`agree_after_convention` for `legacy_single_channel`, a left-handed lattice or
-   the bin weights). Otherwise `differs_documented`, with the measured physical gap
-   as its metric, when PyATB meets QUEER's value minus the measured shift of its
-   `method 1` cut (every flagged k-point emulated); or meets the emulation while
-   step 2 holds (PyATB's scheme; where the step-2 bound stays below 1 % of the
-   component's largest value only on rows holding less than a tenth of its
-   integrated size, as with `int(5 eta/domega) = 0`, the run cannot check QUEER's
-   value: `not_comparable`, `pyatb_scheme_resolution`); or an unbounded cause is
-   active (a nonzero scissors, `method 0`'s regularization of every denominator,
-   `smearing_method 2`, a flagged k-point whose cut could not be measured) with the
-   symmetry gate and *self-convergence*: `abs(sigma_Q(N) - sigma_Q(2N))_inf <= 0.1
-   max abs(sigma_Q(2N))` and `max abs(sigma_Q)` within a factor 10 of `max
-   abs(sigma_P)` either way; otherwise `not_comparable` (`queer_unconverged`, or no
-   estimate: run with `self_convergence: true`). Otherwise `differs_unexplained`.
+   the bin weights), and `agree_after_convention` when it meets it only within `tol`
+   plus, row by row, the derived effect of PyATB's Hartree scale and constant ratio
+   (`r energy_scale_bound + abs(1 - r) abs(sigma_Q)` with its Gaussian): PyATB's
+   27.211324570273 eV moves every transition by 2.3e-6 of its energy, which moves a
+   correct table by 1.7e-4 of its peak at eta 0.02 and 3.6e-4 at eta 0.01, so a clean
+   control at PyATB's default broadening agrees this way; the 1e-4 itself stays.
+   Otherwise `differs_documented`, with the measured physical gap as its metric,
+   through a bounded cause: PyATB's `method 1` cut (every flagged k-point emulated,
+   the record consistent) while the measured shift stays within the flagged k-points'
+   share of the transition weights at the kernel's peak, `B = (n_f/N_k) abs_weight K`
+   (`K = 1/(eta sqrt(pi))`, 1 for bins), with PyATB meeting `sigma_Q - shift` within
+   `tol` and the Hartree term, the physical gap within that and `B`, and QUEER's value
+   without the flagged k-points meeting PyATB's within that and the cut's own weight
+   there (`abs_weight_flagged K`): an error confined to the flagged k-points moves the
+   value and the shift together, but not `B`; or PyATB's scheme, when PyATB meets the
+   emulation while step 2 holds and any cut is bounded (where the step-2 bound stays
+   below 1 % of the component's largest value only on rows holding less than a tenth
+   of its integrated size, as with `int(5 eta/domega) = 0`, the run cannot check
+   QUEER's value: `not_comparable`, `pyatb_scheme_resolution`). Or through an
+   unbounded cause (a nonzero scissors, `method 0`'s regularization of every
+   denominator, `smearing_method 2`, a flagged k-point whose cut could not be
+   measured, a cut beyond `B`) with the symmetry gate and *self-convergence*:
+   `abs(sigma_Q(N) - sigma_Q(2N))_inf <= 0.1 max abs(sigma_Q(2N))` and `max
+   abs(sigma_Q)` within a factor 10 of `max abs(sigma_P)` either way; otherwise
+   `not_comparable` (`queer_unconverged`, or no estimate: run with
+   `self_convergence: true`). Otherwise `differs_unexplained`.
+
+   **Deviation from the plan, awaiting the user's approval.** The plan's step 6 reads
+   "`differs_documented` only if gates 2, 3 and 5 pass and at least one unbounded
+   cause is active". This rule also documents a difference that a *bounded* cause
+   explains in full (PyATB's scheme within the step-2 bound, PyATB's cut within its
+   share), with no unbounded cause active and no self-convergence estimate. Reason:
+   both explain the difference on the same grid by a bound derived here from PyATB's
+   constants and the candidate's checked transition weights, so a self-convergence
+   estimate (which measures the grid error, not PyATB's scheme) would add nothing,
+   while the plan's wording would fail every windowed or near-degenerate comparison
+   although PyATB's scheme accounts for the difference. Until the user approves, read
+   such a `pass_with_documented_differences` as this deviation's verdict: the plan's
+   wording would class those components `differs_unexplained`.
+   The cut's share `B` is not a rigorous bound on QUEER's own near-degenerate
+   terms, only on what a correct cut plausibly carries: on the split model QUEER's
+   shift is 0.10 of `B` at eta 0.1, 0.49 at 0.02 and 0.97 at 0.01 (it grows as
+   `1/eta`), so beyond `B` the cut becomes an unbounded cause, never a failure.
 6. *Literature anchor*, on its own: `literature_anchor(run, anchor)` takes GaAs
    sigma^xyz of Ibanez-Azpiroz, Tsirkin and Souza, PRB 97, 245143 (2018) at the
    paper's scissors and broadening and passes a peak within 2 eta and a height
