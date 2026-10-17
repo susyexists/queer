@@ -348,6 +348,14 @@ def translate_openmx(params: Mapping[str, Any], step: str | None = None) -> Open
         {k: v for k, v in function.items() if k in FUNCTION_KEYS[resolved]}, _function_value, "parameters"
     )
     problems += found
+    if function.get("integrate_mode") == "Adaptive":
+        for key in ("relative_error", "absolute_error"):
+            if function.get(key) == 0:
+                problems.append(
+                    f"parameters.{key} = 0: an adaptive integral never meets a zero tolerance (PyATB runs to "
+                    "its generation cap, QUEER's cubature would refine until its budget runs out); give a "
+                    "positive value"
+                )
     workers = params.get("workers")
     if workers is not None:
         try:

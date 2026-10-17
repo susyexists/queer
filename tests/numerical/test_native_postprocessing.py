@@ -79,6 +79,40 @@ def test_embedded_cubature_and_threshold_have_normalized_cell_weights():
         integrate_unit_box(polynomial, [2, 2], {"method": "cubature"}, active_axes=[0])
 
 
+def test_threshold_subgrids_are_evaluated_in_batches_with_the_cell_by_cell_sum(monkeypatch):
+    import queer.observables.integration as integration
+
+    calls = []
+
+    def polynomial(points):
+        calls.append(len(points))
+        x, y = points[:, 0], points[:, 1]
+        return (x * x + 3 * x * y - y * y * y)[:, None]
+
+    controls = {"method": "threshold", "threshold": 0.5, "subdivision": [3, 3]}
+    result = integrate_unit_box(polynomial, [6, 6], controls)
+    refined = result.metadata["refined_cells"]
+    # One call for the cell midpoints and one for every refined cell's sub-grid, not one per cell.
+    assert 2 < refined < 36 and calls == [36, refined * 9]
+    width = np.full(2, 1 / 6)
+    offsets = np.array([[(a + 0.5) / 3, (b + 0.5) / 3] for a in range(3) for b in range(3)])
+    expected = np.zeros(1)
+    for i in range(6):
+        for j in range(6):
+            lower = np.array([i, j], float) / 6
+            value = polynomial((lower + width / 2)[None])[0]
+            if np.linalg.norm(value) >= 0.5:
+                value = polynomial(lower + offsets * width).mean(axis=0)
+            expected += value * np.prod(width)
+    # The same sum, cell by cell, to the last bit.
+    np.testing.assert_array_equal(result.value, expected)
+    monkeypatch.setattr(integration, "SUBGRID_BATCH_POINTS", 20)
+    calls.clear()
+    batched = integrate_unit_box(polynomial, [6, 6], controls)
+    assert calls[0] == 36 and calls[1:-1] == [18] * (len(calls) - 2) and sum(calls[1:]) == refined * 9
+    np.testing.assert_array_equal(batched.value, result.value)
+
+
 def test_local_quadrature_resume_reuses_immutable_cells(tmp_path):
     config = config_from_mapping(
         {"workflow": "ahc", "inputs": {"material_dir": tmp_path}, "parameters": {"grid": [1, 1, 1]}}

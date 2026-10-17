@@ -32,7 +32,11 @@ sample the same point (both values are recorded).
   PyATB's tolerances. Their nodes differ from PyATB's, so a comparison needs an
   error estimate: ``self_convergence: true`` adds the same integration on the
   doubled grid and records ``e_Q = |sigma(N) - sigma(2N)|``; a cubature also
-  records its own embedded error estimate.
+  records its own embedded error estimate. Their cell and point budgets come
+  from the requested grid and sub-grid and from the job's memory
+  (:func:`quadrature_budget`): a grid this process cannot hold is refused before
+  the model is read (``queer_bad_params``) and a refinement that outgrows its
+  budget stops with ``queer_validation_failed``.
 - The FHS engine: QUEER's FHS plaquette scan over PyATB's energies (the
   ``fhs_energy_window`` offsets, upper end excluded). ``fhs_dimension 0`` evaluates
   the k1-k2 plane only.
@@ -69,8 +73,16 @@ from ...observables._sampling import kmesh
 from ...physics.constants import E2_H, E_CHARGE, HBAR
 from ...physics.geometry import band_curvatures
 from ...physics.statistics import occupations
-from .memory import ParallelPlanner, chunks, model_fixed_bytes, plan_parallelism, pmap
-from .openmx_params import STEP_AHC, STEP_CHERN, OpenMXStepParameters
+from .memory import (
+    MEMORY_FRACTION,
+    ParallelPlanner,
+    available_memory_bytes,
+    chunks,
+    model_fixed_bytes,
+    plan_parallelism,
+    pmap,
+)
+from .openmx_params import BUDGET_REFUSAL, STEP_AHC, STEP_CHERN, OpenMXStepParameters
 from .pyatb_conventions import (
     FERMI_TOLERANCE_HARTREE,
     HARTREE_EV,
@@ -88,6 +100,7 @@ from .pyatb_files import (
 )
 from .results import (
     CHERN_INTEGER_TOL,
+    ERR_BAD_PARAMS,
     ERR_MISSING_INPUT,
     ERR_VALIDATION,
     WARN_CHERN_NOT_INTEGER,
@@ -117,6 +130,48 @@ WARN_SELF_CONVERGENCE_SKIPPED = "self_convergence_skipped"
 WARN_ADAPTIVE_COARSE = "adaptive_initial_grid_coarse"
 WARN_CHERN_METALLIC = "chern_plane_metallic"
 ADAPTIVE_MIN_CELLS = 512
+# Bytes QUEER's local quadrature keeps per cell in this process (cell bounds, nodes,
+# values and their containers), and the share of the planned memory its cells may use.
+QUADRATURE_CELL_BYTES = 1024
+QUADRATURE_MEMORY_SHARE = 0.5
+
+
+def cell_capacity(memory_bytes: float) -> int:
+    """Quadrature cells this process can hold: its share of the planned fraction of ``memory_bytes``."""
+    return int(QUADRATURE_MEMORY_SHARE * MEMORY_FRACTION * float(memory_bytes) // QUADRATURE_CELL_BYTES)
+
+
+def quadrature_budget(
+    integration: Mapping[str, Any],
+    grid: Sequence[int],
+    capacity: int,
+    active_axes: Sequence[int] | None = None,
+) -> dict[str, int]:
+    """``max_cells`` and ``max_points`` of a threshold or cubature integration on ``grid``.
+
+    A threshold quadrature may refine every cell: its cells are bounded by that
+    worst case and by ``capacity``, its points only by the worst case. A cubature
+    has no worst case: ``capacity`` cells, and enough points that the cells bind
+    first (each bisection evaluates two cells of ``2^d + 1`` nodes).
+    """
+    mesh = [int(value) for value in grid]
+    axes = [axis for axis in range(len(mesh)) if mesh[axis] > 1] if active_axes is None else list(active_axes)
+    axes = axes or list(range(len(mesh)))
+    coarse = int(np.prod(mesh))
+    if integration.get("method") == "threshold":
+        subdivision = [int(value) for value in integration.get("subdivision") or [4] * len(mesh)]
+        refined = int(np.prod([subdivision[axis] for axis in axes]))
+        return {
+            "max_cells": max(coarse, min(capacity, coarse * refined)),
+            "max_points": coarse * (1 + refined),
+        }
+    cells = max(coarse, capacity)
+    return {"max_cells": cells, "max_points": (2 ** len(axes) + 1) * 2 * cells}
+
+
+def _budget_exhausted(error: RuntimeError) -> bool:
+    text = str(error)
+    return "exhausted max_" in text or "exceeds max_cells" in text
 
 
 # ---------------------------------------------------------------------------
@@ -261,16 +316,57 @@ class OpenMXStepContext:
             params.workers, None, log, records=record.parallel, memory_bytes=memory_bytes
         )
         self.cap = params.input_parameters.get("max_kpoint_num")
+        self.capacity: int | None = None
+
+    # ------------------------------------------------------------ budget
+    def plan_budget(self) -> None:
+        """Size the quadrature from the requested grids and the job's memory, before any model is read.
+
+        A threshold or cubature integration whose coarse grid (and doubled grid,
+        with ``self_convergence``) holds more cells than this process can keep is
+        refused with ``queer_bad_params``.
+        """
+        native = self.params.recipe(fermi_energy=0.0)["parameters"]
+        if native.get("integration") is None:
+            return
+        memory = available_memory_bytes() if self.memory_bytes is None else float(self.memory_bytes)
+        self.capacity = cell_capacity(memory)
+        active = (0, 1) if self.params.step == STEP_CHERN else None
+        grids = [("integration grid", [int(value) for value in native["grid"]])]
+        if self.params.self_convergence:
+            grids.append(("doubled self-convergence grid", _doubled(native["grid"], active)))
+        for label, grid in grids:
+            cells = int(np.prod(grid))
+            if cells > self.capacity:
+                raise RunnerError(
+                    ERR_BAD_PARAMS,
+                    f"the {label} {'x'.join(str(value) for value in grid)} ({cells:,} cells) {BUDGET_REFUSAL} "
+                    f"of {self.capacity:,} cells in this job's memory ({memory / 1024**3:.1f} GiB available): "
+                    "lower the grid, run without self_convergence, or give the job more memory",
+                )
+
+    def quadrature(self, grid: Sequence[int], active_axes: Sequence[int] | None = None) -> dict[str, Any]:
+        """The integration options of the step on ``grid`` with this job's budgets."""
+        integration = dict(self.recipe["parameters"]["integration"])
+        capacity = self.capacity if self.capacity is not None else cell_capacity(available_memory_bytes())
+        return {**integration, **quadrature_budget(integration, grid, capacity, active_axes)}
 
     # ------------------------------------------------------------ model
-    def build_model(self) -> None:
+    def stage_scfout(self) -> Any:
+        """The staged scfout's path, its size and SHA-256 recorded; ``queer_missing_input`` when absent."""
         name = self.params.scfout
         path = self.record.workspace / name
         if not path.is_file():
             raise RunnerError(
                 ERR_MISSING_INPUT, f"{name} was not staged; bind it from the OpenMX SCF job (scf.scfout)"
             )
-        self.record.record_input(name)
+        if name not in self.record.inputs:
+            self.record.record_input(name)
+        return path
+
+    def build_model(self) -> None:
+        name = self.params.scfout
+        path = self.stage_scfout()
         try:
             model = OpenMXModel.from_scfout(path)
         except (OSError, ValueError, struct.error) as error:
@@ -426,15 +522,21 @@ def _ahc_integrated(
 
     stage = f"AHC {native['integration']['method']} ({label}, grid {list(grid)})"
     options = context.options(stage, model, int(np.prod(grid)))
-    result = ahc(
-        model,
-        grid=list(grid),
-        chemical_potentials=[context.mu],
-        engine=native["engine"],
-        dimension=3,
-        integration=dict(native["integration"]),
-        execution=options,
-    )
+    integration = context.quadrature(grid)
+    try:
+        result = ahc(
+            model,
+            grid=list(grid),
+            chemical_potentials=[context.mu],
+            engine=native["engine"],
+            dimension=3,
+            integration=integration,
+            execution=options,
+        )
+    except RuntimeError as error:
+        if _budget_exhausted(error):
+            raise _budget_refusal(stage, error, integration) from error
+        raise
     metadata = dict(result.metadata.get("integration") or {})
     return {
         "sigma": _vector(np.asarray(result["ahc"])),
@@ -445,8 +547,19 @@ def _ahc_integrated(
             "node_placement": "cell_midpoints",
             "error_estimate": metadata.get("error_estimate"),
             "quadrature": metadata,
+            "budget": {key: integration[key] for key in ("max_cells", "max_points")},
         },
     }
+
+
+def _budget_refusal(stage: str, error: RuntimeError, integration: Mapping[str, Any]) -> RunnerError:
+    """``queer_validation_failed`` for a quadrature that ran out of its cell or point budget."""
+    return RunnerError(
+        ERR_VALIDATION,
+        f"{stage}: the refinement {BUDGET_REFUSAL} ({error}; at most {integration['max_cells']:,} cells and "
+        f"{integration['max_points']:,} points in this job's memory): raise adaptive_grid_threshold or the "
+        "tolerances, lower the grid, or give the job more memory",
+    )
 
 
 def _fhs_vectors(model: Any, cherns: np.ndarray) -> np.ndarray:
@@ -733,6 +846,9 @@ def _chern_integrated(
     start, spans, _ = _plane(native)
     stage = f"Chern {native['integration']['method']} ({label}, grid {list(grid)})"
     options = context.options(stage, model, int(np.prod(grid)))
+    integration = context.quadrature([int(value) for value in grid][:2], active_axes=(0, 1))
+    # chern_number checks the occupied rank at one extra point.
+    integration = {**integration, "max_points": integration["max_points"] + 1}
     try:
         result = chern_number(
             model,
@@ -742,15 +858,21 @@ def _chern_integrated(
             occupied_bands=native.get("occupied_bands"),
             fermi_energy=context.mu,
             engine=native["engine"],
-            integration=dict(native["integration"]),
+            integration=integration,
             execution=options,
         )
     except ValueError as error:
+        if "occupied rank" not in str(error):
+            raise
         raise RunnerError(
             ERR_VALIDATION,
             f"QUEER refines a Chern-number integral only on a gapped plane: {error}. Use integrate_mode Grid "
             "with adaptive_grid_threshold 1e30 for the Fermi-sea flux of a metallic plane",
         ) from error
+    except RuntimeError as error:
+        if _budget_exhausted(error):
+            raise _budget_refusal(stage, error, integration) from error
+        raise
     metadata = dict(result.metadata.get("integration") or {})
     return {
         "value": float(result["chern_number"]),
@@ -763,6 +885,7 @@ def _chern_integrated(
             "node_placement": "cell_midpoints",
             "error_estimate": metadata.get("error_estimate"),
             "quadrature": metadata,
+            "budget": {key: integration[key] for key in ("max_cells", "max_points")},
         },
     }
 
@@ -880,7 +1003,9 @@ STEP_FUNCTIONS: Mapping[str, Callable[[OpenMXStepContext], None]] = {STEP_AHC: r
 
 
 def openmx_step_body(parameters: OpenMXStepParameters, record: RunRecord, log: Callable[[str], None]) -> None:
-    """Build the model of the step, then run it: the body :func:`~.runner.run` executes."""
+    """Plan the quadrature budget, build the model of the step, then run it: the body :func:`~.runner.run` executes."""
     context = OpenMXStepContext(parameters, record, log)
+    context.stage_scfout()
+    context.plan_budget()
     context.build_model()
     STEP_FUNCTIONS[parameters.step](context)

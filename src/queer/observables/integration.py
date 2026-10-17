@@ -18,6 +18,8 @@ from .checkpoints import Checkpoint
 from .convergence import convergence_diagnostic, refined_grid
 
 _CHECKPOINT: ContextVar[Checkpoint | None] = ContextVar("queer_quadrature_checkpoint", default=None)
+# Sub-grid nodes of refined threshold cells evaluated in one call (whole cells per call).
+SUBGRID_BATCH_POINTS = 65536
 
 
 def quadrature_checkpoint(store):
@@ -241,21 +243,37 @@ def integrate_unit_box(
             raise ValueError("integration.subdivision must contain one positive integer per axis")
         subdivision = subdivision.astype(int)
         subdivision[np.setdiff1d(np.arange(len(mesh)), axes)] = 1
-        selected, leaf_cells = 0, len(cells)
-        for (lower, width), value in zip(cells, coarse, strict=True):
-            cell_measure = measure(width)
-            magnitude = (
+        threshold = opts.get("threshold", 50.0)
+        flagged = [
+            number
+            for number, value in enumerate(coarse)
+            if float(
                 np.linalg.norm(np.ravel(value)) if threshold_selector is None else threshold_selector(value)
             )
-            if float(magnitude) >= opts.get("threshold", 50.0):
-                leaf_cells += int(np.prod(subdivision)) - 1
-                if leaf_cells > max_cells:
-                    raise RuntimeError("Threshold integration exhausted max_cells during subdivision")
-                offsets = np.array(list(product(*((np.arange(n) + 0.5) / n for n in subdivision))))
-                refined = evaluate(lower + offsets * width, "subgrid").mean(axis=0)
+            >= threshold
+        ]
+        per_cell = int(np.prod(subdivision))
+        leaf_cells = len(cells) + len(flagged) * (per_cell - 1)
+        if leaf_cells > max_cells:
+            raise RuntimeError("Threshold integration exhausted max_cells during subdivision")
+        offsets = np.array(list(product(*((np.arange(n) + 0.5) / n for n in subdivision))))
+        # Sub-grids are evaluated in batches of whole cells (one evaluation call per batch,
+        # not per cell); each cell's mean is then added in cell order as before.
+        means: dict[int, np.ndarray] = {}
+        batch = max(1, SUBGRID_BATCH_POINTS // per_cell)
+        for start in range(0, len(flagged), batch):
+            group = flagged[start : start + batch]
+            points = np.concatenate([cells[number][0] + offsets * cells[number][1] for number in group])
+            values = evaluate(points, "subgrid")
+            for position, number in enumerate(group):
+                means[number] = values[position * per_cell : (position + 1) * per_cell].mean(axis=0)
+        selected = len(flagged)
+        for number, ((lower, width), value) in enumerate(zip(cells, coarse, strict=True)):
+            cell_measure = measure(width)
+            if number in means:
+                refined = means[number]
                 answer += refined * cell_measure
                 error += np.abs(refined - value) * cell_measure
-                selected += 1
             else:
                 answer += value * cell_measure
         return QuadratureResult(

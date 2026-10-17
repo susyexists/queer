@@ -499,8 +499,10 @@ python -m queer generator run --step QUEER_AHC --params queer_params.json
 | `self_convergence` | `true` also evaluates a refining integration on the doubled grid |
 
 Unknown keys, `package`, `scfout_route` and values PyATB refuses fail with
-`queer_bad_params` before any calculation, as does an `nspin` the scfout's
-`SpinP_switch` contradicts (4 with spin-orbit coupling, else 1).
+`queer_bad_params` before any calculation, as do an `nspin` the scfout's
+`SpinP_switch` contradicts (4 with spin-orbit coupling, else 1) and a zero
+`relative_error` or `absolute_error` of an `Adaptive` integral (PyATB never meets
+a zero tolerance and runs to its generation cap).
 `params_from_pyatb_input` builds the file from a parsed PyATB `Input` (or, with
 `echo=True`, from PyATB's resolved `Out/input.json`) and always writes
 `hall_convention`: a missing key is `auto` in an `Input` and `pyatb` in an echo,
@@ -540,7 +542,16 @@ Adaptive integral QUEER's cubature with PyATB's tolerances (`absolute_error` in
 S/cm). Their nodes differ from PyATB's, so their comparison needs
 `self_convergence: true`, which records `e_Q = |sigma(N) - sigma(2N)|` (the grid
 doubled on its active axes; 4 or 8 times the cost); a cubature also records its own
-embedded error estimate. The FHS engine scans PyATB's energies (the window
+embedded error estimate. Their budgets come from the request and the job's memory
+(cgroup-aware, as for the Wannier steps): the quadrature keeps about 1 kB per cell,
+so it may hold `0.5 * 0.6 * available memory / 1024` cells. A threshold quadrature
+gets `max_cells = min(that, coarse cells x sub-grid cells)` and enough points for
+every cell to be refined; a cubature gets all of it. A coarse grid, or with
+`self_convergence` its double, that needs more cells is refused before the model is
+read (`queer_bad_params`, "exceeds QUEER's integration budget"), and a refinement
+that outgrows its budget stops with `queer_validation_failed`; PyATB has no such
+limit, so a comparison of either is `not_comparable`. The refined cells' sub-grids
+are evaluated in batches of whole cells. The FHS engine scans PyATB's energies (the window
 offsets, upper end excluded) with QUEER's FHS plaquettes; `fhs_dimension 0`
 evaluates the k1-k2 plane only. A Chern number on a plane that is metallic at E_F
 is the Fermi-sea flux over 2π (PyATB's definition) with the warning
@@ -562,10 +573,11 @@ refinement, grid, threshold in Å², node placement, points, error estimate,
 workspace also receives PyATB's `Out/AHC/ahc.dat` or `Out/Chern_Num/chern_number.dat`
 in PyATB's layout and requested sign, and neither `pyatb_results.json` nor
 `manifest.json`. Failures write the same document with `status: failed` and
-`error {code, message}`: `queer_bad_params`, `queer_missing_input` (the scfout is
-missing or cannot be read), `queer_validation_failed` (a refining Chern integral on
-a metallic plane), `queer_env_missing`, `queer_oom` and `queer_internal_error`, with
-exit codes 2, 2, 2, 2, 3 and 1.
+`error {code, message}`: `queer_bad_params` (also an integration larger than the
+job's memory allows), `queer_missing_input` (the scfout is missing or cannot be
+read), `queer_validation_failed` (a refining Chern integral on a metallic plane, a
+refinement that outgrew its budget), `queer_env_missing`, `queer_oom` and
+`queer_internal_error`, with exit codes 2, 2, 2, 2, 3 and 1.
 
 **Parity.** `compare` reaches `queer.compat.generator.parity_pyatb` for the
 `AHC` and `CHERN_NUMBER` families. The reference is a PyATB run directory: `Input`,

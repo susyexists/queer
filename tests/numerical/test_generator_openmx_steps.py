@@ -213,6 +213,58 @@ def test_a_refining_grid_records_its_self_convergence_or_warns(tmp_path):
     assert "self_convergence_skipped" not in document["warning_codes"]
 
 
+def test_budgets_come_from_the_requested_grid_and_sub_grid():
+    from queer.compat.generator.openmx_steps import cell_capacity, quadrature_budget
+
+    plenty = cell_capacity(256 * 1024**3)
+    assert plenty > 8_000_000
+    # A production 3D preset: 100^3 cells, 20^3 sub-grids, refinement on.
+    production = {"method": "threshold", "subdivision": [20, 20, 20], "threshold": 50.0}
+    budget = quadrature_budget(production, [100, 100, 100], plenty)
+    assert budget == {"max_cells": plenty, "max_points": 100**3 * (1 + 20**3)}
+    assert quadrature_budget(production, [200, 200, 200], plenty)["max_cells"] >= 200**3
+    sheet = {"method": "threshold", "subdivision": [2, 2, 1], "threshold": 10.0}
+    assert quadrature_budget(sheet, [100, 100, 1], plenty) == {"max_cells": 40_000, "max_points": 50_000}
+    cubature = quadrature_budget({"method": "cubature"}, [8, 8, 8], plenty)
+    assert cubature == {"max_cells": plenty, "max_points": 9 * 2 * plenty}
+    assert quadrature_budget({"method": "cubature"}, [8, 8, 1], 10)["max_cells"] == 64
+
+
+def test_an_integration_larger_than_the_jobs_memory_is_refused_up_front(tmp_path, monkeypatch):
+    import queer.compat.generator.openmx_steps as steps
+    from queer.compat.generator.openmx_params import BUDGET_REFUSAL
+
+    monkeypatch.setattr(steps, "available_memory_bytes", lambda: 64 * 1024**2)
+    assert 10_000 < steps.cell_capacity(64 * 1024**2) < 40_000
+    refining = {"integrate_grid": [100, 100, 1], "adaptive_grid": [2, 2, 1], "adaptive_grid_threshold": 0.0}
+    code, document = execute(tmp_path / "doubled", {**params(**refining), "self_convergence": True})
+    assert code == EXIT_FAILED and document["error"]["code"] == "queer_bad_params"
+    message = document["error"]["message"]
+    assert BUDGET_REFUSAL in message and "200x200x1 (40,000 cells)" in message, message
+    # Refused before the model was read; the scfout is recorded for a comparison.
+    assert "model" not in document and document["provenance"]["inputs"]["scf.scfout"]["sha256"]
+
+
+def test_a_refinement_that_outgrows_its_budget_is_a_validation_failure(tmp_path, monkeypatch):
+    import queer.compat.generator.openmx_steps as steps
+    from queer.compat.generator.openmx_params import BUDGET_REFUSAL
+
+    monkeypatch.setattr(steps, "available_memory_bytes", lambda: 4 * 1024**2)
+    capacity = steps.cell_capacity(4 * 1024**2)
+    assert 144 < capacity < 144 * 16
+    # Every cell is refined (threshold 0) into 16 sub-cells: more cells than the budget holds.
+    refining = {"integrate_grid": [12, 12, 1], "adaptive_grid": [4, 4, 1], "adaptive_grid_threshold": 0.0}
+    code, document = execute(tmp_path / "ahc", params(**refining))
+    assert code == EXIT_FAILED and document["error"]["code"] == "queer_validation_failed"
+    assert (
+        BUDGET_REFUSAL in document["error"]["message"]
+        and f"{capacity:,} cells" in document["error"]["message"]
+    )
+    code, document = execute(tmp_path / "chern", params("QUEER_CHERN_NUMBER", **refining))
+    assert code == EXIT_FAILED and document["error"]["code"] == "queer_validation_failed"
+    assert BUDGET_REFUSAL in document["error"]["message"]
+
+
 def test_an_adaptive_integral_from_few_cells_warns(tmp_path):
     adaptive = {"integrate_mode": "Adaptive", "initial_grid": [4, 4, 1], "absolute_error": 50.0}
     code, document = execute(tmp_path, params(**adaptive))

@@ -385,6 +385,23 @@ def test_a_capability_refusal_is_not_comparable_and_other_failures_fail(runs, tm
     assert report["verdict"] == NOT_COMPARABLE and _preconditions(report) == {"parameters"}
 
 
+def test_a_budget_refusal_of_a_real_run_is_not_comparable(runs, tmp_path, monkeypatch):
+    import queer.compat.generator.openmx_steps as steps
+
+    # 256 KiB holds 76 cells: the 6x6 grid fits, its 12x12 self-convergence double does not.
+    monkeypatch.setattr(steps, "available_memory_bytes", lambda: 256 * 1024)
+    refused = tmp_path / "refused"
+    refused.mkdir()
+    qwz_spinor_scfout(refused / "scf.scfout")
+    write(refused / "queer_params.json", read(runs["refining"] / "queer_params.json"))
+    assert run(None, refused / "queer_params.json", refused, log=lambda line: None) == 2
+    assert read(refused / "queer_results.json")["error"]["code"] == "queer_bad_params"
+    report = compare("AHC", reference_from(tmp_path / "reference", runs["refining"]), refused)
+    assert report["verdict"] == NOT_COMPARABLE and _preconditions(report) == {"capability"}, render_markdown(
+        report
+    )
+
+
 def test_a_metallic_chern_refinement_refused_by_queer_is_not_comparable(runs, tmp_path):
     directory = tmp_path / "metal-refining"
     directory.mkdir()

@@ -114,6 +114,16 @@ def test_params_from_the_generator_input_file():
     assert translate_openmx(params).step == STEP_CHERN
 
 
+@pytest.mark.parametrize("key", ["relative_error", "absolute_error"])
+def test_a_zero_adaptive_tolerance_is_refused(key):
+    adaptive = {"integrate_mode": "Adaptive", "initial_grid": [8, 8, 8], key: 0}
+    with pytest.raises(RunnerError, match=f"parameters.{key} = 0") as raised:
+        translate_openmx(ahc_params(**adaptive))
+    assert raised.value.code == "queer_bad_params"
+    # A Grid ignores the adaptive tolerances, so a zero there is harmless.
+    assert translate_openmx(ahc_params(**{key: 0})).parameters[key] == 0.0
+
+
 def test_a_key_less_echo_is_a_pre_key_pyatb_with_its_native_sign():
     # PyATB resolves hall_convention before it writes Out/input.json, so an echo
     # without the key comes from a build older than the key: the native sign.
