@@ -341,9 +341,10 @@ The in-plane mesh is offset by half a step and never samples k∥ = 0 or 1/2, so
 extremum between samples lies beyond them (`bulk_overshoot`). Near an extremum a band is
 convex or concave: over the half step to it a band changes by at most half its larger
 step to a neighbouring sample, and a sample's bound adds both axes. The steps show only
-the hoppings the mesh resolves (fewer than half its points per period); the rest add their
-Weyl bound 2π Σ|R| ‖H(R)‖ per point (`bulk_aliasing`; on 2 in-plane points every
-nearest-neighbour hop). `overshoot_eV` is [valence, conduction], the most any band below
+the hoppings the mesh resolves (more than 8 points per period of their Bloch phase,
+`CROSSING_ALIAS_POINTS`: with fewer, a band can turn between samples by more than its
+steps to the neighbouring samples show); the rest add their Weyl bound 2π Σ|R| ‖H(R)‖ per
+point (`bulk_aliasing`; on 8 or fewer in-plane points every nearest-neighbour hop). `overshoot_eV` is [valence, conduction], the most any band below
 E_F can rise above the highest sample below it and any band above fall below the lowest
 sample above it; `local_overshoot_eV` is [steps, gap] of the band pair across E_F whose
 bounds at one point come closest to half their own gap there. The mesh resolves the gap
@@ -388,10 +389,11 @@ the window (`window_eV`), a reach inside the sampled edges, past the ribbon's ow
 there (`per_energy`: `left_flow`, `right_flow`, `bulk_flow`, the last weighted by I); a
 sample within 1e-5 eV of E_F is E_F's row. The status is `resolved` when every flow lies
 within 0.1 (`tolerance`) of the same integer and that integer is the bulk Chern number: a
-pair of edge modes then holds at most 5% of its weight on the far half. A gap that holds
-no edge level, which nothing crosses, is `resolved` on a trusted bulk Chern number of 0
-(the mesh resolves the gap and the Berry-phase step is below π/2): "the bulk Chern number
-is 0 and no level crosses the gap"; a nonzero count is never certified from absence. It
+pair of edge modes then holds at most 5% of its weight on the far half. No count is
+certified from absence: a gap that holds no edge level stays `unresolved` even when the
+bulk Chern number is 0, because a Chern number from the ribbon's own mesh can be wrong
+while the mesh looks resolved (an engineered C = 2 ribbon with strongly anisotropic Dirac
+points read 0 at the default 200 k-points). It
 is `metal` when the bulk bands cross E_F, `open_path` for a slab's surface path, and
 `unresolved` otherwise, with a `reason` and the failed `checks`, each with the energies it
 failed at (none for a check of the whole gap): `k_mesh` (the bulk mesh does not resolve
@@ -401,10 +403,9 @@ halves, `talking_levels`: inside a bulk gap only edge states live, so the edges 
 across the ribbon; the reason gives the finite-size gap they open where sampled), `chern`
 (a clean flow other than the bulk Chern number: a mode hybridized out of the gap, which
 leaves nothing in it to see), `berry_step` (a Chern number the bulk mesh does not
-resolve), `gap_edge`, `absence` (no edge level in the gap without a trusted bulk Chern
-number of 0), `strays` and `loose` (a level entering the window beside the levels
+resolve), `gap_edge`, `absence` (no edge level in the gap), `strays` and `loose` (a level entering the window beside the levels
 crossing), `touches`, `open_loops`, `fractional`, `varying`, `interior`, `empty_window`
-(certified only on a trusted bulk Chern number of 0) and `unfollowed`. `left` and `right`
+and `unfollowed`. `left` and `right`
 hold the crossings at E_F and `net` the rounded flow, certified only when `resolved`.
 
 Validated on numpy ribbons against the FHS Chern number on fine meshes (analytic where
@@ -421,8 +422,14 @@ core d75fb8fc… still certified wrongly: two Dirac points of one sign on a line
 never samples (QWZ cut along (1, 1) at m = -9 meV with 3 eV hops, whose sampled gap was
 ±47.9 meV for a true ±9 meV and whose winding missed a unit; QWZ with a two-cell hop; an
 armchair Haldane ribbon), 2 in-plane points and a pocket between samples, all `k_mesh`;
-the (1, 1) cut resolves -1 from 200 k-points at m = -50 meV and from 400 at -30 meV. A
-trivial gap with no level in it now resolves 0 on a trusted bulk Chern number. QWZ at
+the (1, 1) cut resolves -1 from 200 k-points at m = -50 meV and from 400 at -30 meV. Core
+f4a73779… also certified an empty gap on a bulk Chern number of 0 and counted a hopping as
+resolved from 2 points per period, which let 105 coarse or clipped ribbons (4 to 8 cells,
+or 4 to 6 in-plane points) and the engineered C = 2 ribbon read a wrong 0; they are
+unresolved now, and the sweeps resolve 2466 of 5016 plain and 1035 of 2400 random
+ribbons, all with the right count. Still missed: on a mesh far below the default, a band
+that turns between samples by more than its steps show (a 4-band C = 1 model read 0 at 20
+in-plane points; it is unresolved at 200 and resolves +1 at 400). QWZ at
 m = -1.9 still resolves from 34 cells at 200 k-points. The drivers up to core 56fda912…
 matched each edge state to the nearest-energy state of the same edge, unbounded and many
 to one; `legacy_edge_crossings` keeps that rule for comparing their references, and

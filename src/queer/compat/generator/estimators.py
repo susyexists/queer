@@ -645,13 +645,20 @@ def bulk_row(
     return row
 
 
+# Points per period of a hopping's Bloch phase from which a mesh counts it as resolved:
+# with fewer, a band can turn between samples by more than its steps to the neighbouring
+# samples show, so the overshoot bound misses it.
+CROSSING_ALIAS_POINTS = 8
+
+
 def bulk_aliasing(translations, hopping_matrices, axes: Sequence[int], points: Sequence[int]) -> list[float]:
     """Per axis, the most the hoppings its mesh cannot resolve change a band over one step; the driver's.
 
     A hopping R adds the Bloch phase exp(2 pi i k.R); ``points`` per period along an axis
-    resolve it only while they exceed 2 |R_axis| (more than two points per period of the
-    phase), and a band's steps between neighbouring points show its change between them
-    only for the hoppings they resolve. By Weyl's inequality a band moves between k and k'
+    resolve it only while they exceed CROSSING_ALIAS_POINTS |R_axis| (at least that many
+    points per period of the phase: with fewer, a band can turn between samples by more
+    than its steps to the neighbouring samples show), and a band's steps between
+    neighbouring points bound its change between them only for the hoppings they resolve. By Weyl's inequality a band moves between k and k'
     by at most ||H(k) - H(k')||, which the hoppings left unresolved bound over a step 1 / n
     by 2 pi sum |R_axis| ||H(R)|| / n (the Frobenius norm bounding each block's): 0 when the
     mesh resolves every hopping, as a nearest-neighbour model's does from 3 points on.
@@ -661,7 +668,7 @@ def bulk_aliasing(translations, hopping_matrices, axes: Sequence[int], points: S
     out = []
     for axis, n in zip(axes, points):
         cells = np.abs(R[:, axis]).astype(float)
-        unresolved = 2 * cells >= int(n)
+        unresolved = CROSSING_ALIAS_POINTS * cells >= int(n)
         out.append(float(2 * np.pi * (cells * norms)[unresolved].sum() / max(1, int(n))))
     return out
 
@@ -1223,9 +1230,10 @@ def edge_crossings(
     0.1 (``tolerance``) of the same integer, that integer is the bulk Chern
     number (``bulk["chern"]``, of the bands below E_F with the periodic axis
     first, where the bulk check has one) and nothing below undermines it; a
-    gap that holds no edge level is ``resolved`` only on a trusted bulk Chern
-    number of 0 (the bulk mesh resolves the gap and its Berry phase steps
-    below pi/2) with no level crossing it, never a nonzero count from absence.
+    gap that holds no edge level is never ``resolved``, not even on a bulk
+    Chern number of 0, because a bulk Chern number from the ribbon's own mesh
+    can be wrong while it looks resolved, and a count of 0 would then rest on
+    absence.
     ``metal`` when the bulk bands cross E_F (``bulk["metal"]``; without
     ``bulk``, when a bulk-like level crosses E_F); ``open_path`` for a slab's
     open surface path, informational; otherwise ``unresolved``. ``reason``
@@ -1240,8 +1248,8 @@ def edge_crossings(
     flow other than the bulk Chern number (a mode hybridised out of the gap),
     or ``berry_step``, a Chern number the bulk mesh does not resolve;
     ``gap_edge``, a bulk band edge or the window edge within a reach of E_F;
-    ``absence``, no level in the gap without a trusted bulk Chern number of 0
-    (a count of 0 would rest on absence); ``strays`` and ``loose``, levels
+    ``absence``, no edge level in the gap (a count of 0 would rest on
+    absence); ``strays`` and ``loose``, levels
     appearing or vanishing inside the window (coarse k or a small window);
     ``touches``, a bulk-like level taking part in a crossing; ``open_loops``,
     crossings that do not close around the zone; ``fractional`` and
@@ -1356,9 +1364,6 @@ def edge_crossings(
     chern = None if bulk is None else bulk.get("chern")
     step = float((bulk or {}).get("berry_phase_step") or 0.0)
     mesh_text = None if mesh is None else mesh[2]
-    # The bulk Chern number is trusted where the bulk mesh resolves the bulk gap
-    # and its Berry phase steps below the bound between neighbouring k-points.
-    trusted = chern is not None and mesh is not None and mesh_text is None and step < CROSSING_BERRY_STEP
     mesh_name = "x".join(str(n) for n in (bulk or {}).get("k_points") or [])
     # Each reason: the check that failed, the energies it failed at (none for a
     # check of the whole gap) and its text.
@@ -1389,27 +1394,20 @@ def edge_crossings(
             )
         )
     elif not any(e.size for e in levels):
-        if trusted and chern == 0 and gap[0] < 0.0 < gap[1]:
-            status = "resolved"
-            reason = (
-                "the bulk Chern number is 0 and no level crosses the gap: no level "
-                f"lies within the window at any k, in {bounds} {span_mev}"
+        status = "unresolved"
+        problems.append(
+            (
+                "empty_window",
+                [],
+                "no level lies within the window at any k: nothing to count, and "
+                "a count of 0 would rest on absence"
+                + ("" if chern is None else f"; the bulk Chern number is {chern:+d}"),
             )
-        else:
-            status = "unresolved"
-            problems.append(
-                (
-                    "empty_window",
-                    [],
-                    "no level lies within the window at any k: nothing to count, and "
-                    "a count of 0 would rest on absence"
-                    + ("" if chern is None else f"; the bulk Chern number is {chern:+d}"),
-                )
-            )
-            if mesh_text is not None:
-                problems.append(("k_mesh", [], mesh_text))
-            if chern is not None and step >= CROSSING_BERRY_STEP:
-                problems.append(("berry_step", [], _berry_text(step, mesh_name)))
+        )
+        if mesh_text is not None:
+            problems.append(("k_mesh", [], mesh_text))
+        if chern is not None and step >= CROSSING_BERRY_STEP:
+            problems.append(("berry_step", [], _berry_text(step, mesh_name)))
     elif shift is None:
         status = "unresolved"
         problems.append(
@@ -1456,7 +1454,7 @@ def edge_crossings(
         edge_free = not any(
             np.any((e > gap[0]) & (e < gap[1]) & (m < CROSSING_BULK_INTERIOR)) for e, m in zip(levels, inner)
         )
-        if edge_free and not (trusted and chern == 0):
+        if edge_free:
             problems.append(
                 (
                     "absence",
@@ -1562,19 +1560,11 @@ def edge_crossings(
             worst = max(abs(x - round(x)) for x in lefts)
             agrees = "" if chern is None else ", the bulk Chern number,"
             status = "resolved"
-            if edge_free:
-                reason = (
-                    "the bulk Chern number is 0 and no level crosses the gap: no edge "
-                    f"level lies in {bounds} {span_mev} at any k, and the left and "
-                    f"right flows at {len(rows)} energies across it are each within "
-                    f"{worst:.3f} of 0"
-                )
-            else:
-                reason = (
-                    f"left {rounded[0]:+d}{agrees} and right {-rounded[0]:+d} at "
-                    f"{len(rows)} energies across {bounds} {span_mev}, each within "
-                    f"{worst:.3f} of the integer"
-                )
+            reason = (
+                f"left {rounded[0]:+d}{agrees} and right {-rounded[0]:+d} at "
+                f"{len(rows)} energies across {bounds} {span_mev}, each within "
+                f"{worst:.3f} of the integer"
+            )
     if problems:
         reason = "; ".join(text for _, _, text in problems)
     per_step = at_fermi["per_step"] if at_fermi is not None else []
@@ -1684,12 +1674,9 @@ def crossing_margins(
         checks["k_mesh"] = min(mesh, default=math.inf)
         if guaranteed_lo is not None and guaranteed_hi is not None:
             checks["guaranteed"] = abs(guaranteed_hi - guaranteed_lo) / energy_tol
-    # A trusted bulk Chern number of 0 certifies an empty gap: the mesh's resolution decides
-    # (the caller adds the Berry-phase step).
-    zero = isinstance(bulk, Mapping) and bulk.get("chern") == 0
     window_edge = float(np.min(np.abs(span - np.abs(every)))) / energy_tol if every.size else math.inf
-    if every.size or zero:
-        checks["empty_window"] = min(window_edge, checks.get("k_mesh", math.inf) if zero else math.inf)
+    if every.size:
+        checks["empty_window"] = window_edge
     shift = crossings.get("step_shift_eV")
     gap = crossings.get("window_eV")
     margins: dict[float | str, float] = {}
@@ -1873,8 +1860,6 @@ def crossing_margins(
                     could_enter, max(0.0 if inside else edge, 0.0 if w < CROSSING_BULK_INTERIOR else interior)
                 )
     checks["absence"] = max(qualifying) if qualifying else could_enter
-    if zero:
-        checks["absence"] = min(checks["absence"], checks.get("k_mesh", math.inf))
     # The levels the edges may share: every decision of talking_levels on the levels in the gap.
     evaluated = [float(x) for x in crossings.get("energies_eV") or []]
     hybridised = math.inf

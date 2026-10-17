@@ -111,7 +111,7 @@ def assert_matches_the_driver(core, monkeypatch, directory, document, values):
 
 
 @pytest.mark.parametrize(
-    ("staggered", "net", "status"), [(0.2, 1, "resolved"), (1.5, 0, "resolved")], ids=["chern", "trivial"]
+    ("staggered", "net", "status"), [(0.2, 1, "resolved"), (1.5, 0, "unresolved")], ids=["chern", "trivial"]
 )
 def test_a_haldane_ribbon_has_one_chiral_mode_per_edge_exactly_as_the_driver(
     generator_core, monkeypatch, tmp_path, staggered, net, status
@@ -133,10 +133,8 @@ def test_a_haldane_ribbon_has_one_chiral_mode_per_edge_exactly_as_the_driver(
     # The bulk Chern number of the bands below E_F, the periodic axis first, is the left net.
     assert bulk["chern"] == net and bulk["berry_phase_step"] < np.pi / 2
     if net == 0:
-        # Nothing in the window, and a bulk Chern number of 0 on a mesh that resolves the gap.
-        assert crossings["reason"].startswith(
-            "the bulk Chern number is 0 and no level crosses the gap: no level lies within the window"
-        )
+        # Nothing in the window: the bulk Chern number of 0 does not certify the empty gap.
+        assert "empty_window" in crossings["checks"]
     produced = assert_matches_the_driver(generator_core, monkeypatch, tmp_path, document, values)
     # 41 points round up to 42, half a step off -1/2, 0 and 1/2.
     k = np.asarray(produced["kpoints_frac"])

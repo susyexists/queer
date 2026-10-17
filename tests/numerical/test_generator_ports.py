@@ -542,7 +542,7 @@ def ribbon_levels(model, cells, points, window=0.5, fermi=0.0):
         ("haldane_4", "unresolved"),
         ("hot_spots", "unresolved"),
         ("two_points", "unresolved"),
-        ("trivial_empty", "resolved"),
+        ("trivial_empty", "unresolved"),
         ("flat_at_e_f", "resolved"),
         ("kramers_pairs", "resolved"),
     ],
@@ -622,7 +622,9 @@ def test_edge_crossings_on_ribbons_equal_the_generator(generator_core, case, sta
         # The two wrapped steps of the winding cancel; the hops the mesh cannot resolve bound it.
         assert "k_mesh" in tally["checks"] and bulk["chern"] == 0
     if case == "trivial_empty":
-        assert tally["reason"].startswith("the bulk Chern number is 0 and no level crosses the gap")
+        # Nothing lies in the window; a bulk Chern number of 0 from the ribbon's own mesh does not
+        # certify the empty gap, so a count of 0 would rest on absence.
+        assert "empty_window" in tally["checks"] and "the bulk Chern number is +0" in tally["reason"]
     if case == "flat_at_e_f":
         # The flat band at E_F counts as at it and crosses nothing; the right edge's up and down
         # bound its one crossing down.
