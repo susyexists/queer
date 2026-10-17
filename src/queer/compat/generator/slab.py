@@ -19,21 +19,25 @@ cutoffs):
   :func:`~queer.observables.surface.slab_eigensystem`. A level's weight on the
   first and on the last ``edge_cells`` cells is the driver's per-state value,
   after each degenerate cluster is rotated to diagonalize the first-edge
-  projector (:func:`~queer.compat.generator.estimators.edge_weights`);
-- ``edge_crossings_at_fermi`` counts the levels crossing E_F between
-  neighbouring k-points by rank continuity, the last ribbon point paired with
-  the first, each crossing on the edge holding at least half of its endpoints'
-  mean weight (:func:`~queer.compat.generator.estimators.edge_crossings`), and
-  checks the counts at 9 energies across the gap the bulk-like levels leave
-  around E_F: ``status`` is ``resolved``, ``unresolved`` (hybridized edges, or
-  no cell between the two edge regions), ``metal`` or, for a slab's open
-  surface path, ``open_path``. The counts are informational; the bulk Chern
+  projector (:func:`~queer.compat.generator.estimators.edge_weights`); its
+  weight on the first half of the cells and on the middle half comes from
+  :func:`~queer.compat.generator.estimators.half_ribbon_weights`;
+- ``bulk_at_fermi`` says whether the bulk bands cross E_F at the same in-plane
+  k-points, sampled along the finite axis at twice the slab's resolution
+  (:func:`bulk_levels_at_fermi`);
+- ``edge_crossings_at_fermi`` is the driver's weighted spectral flow of the
+  first-half weight through E_F, the last ribbon point paired with the first
+  (:func:`~queer.compat.generator.estimators.edge_crossings`), checked at 9
+  energies across the gap the bulk-like levels leave around E_F: ``status`` is
+  ``resolved``, ``unresolved`` (with a ``reason``), ``metal`` or, for a slab's
+  open surface path, ``open_path``. The counts are informational; the bulk Chern
   number is the invariant.
 
 The step writes ``Out/ribbon_bands.json`` or ``Out/slab_bands.json``
 (``k_distance``, fractional for a ribbon and in 1/Å with 2 pi for a slab;
 ``kpoints_frac``; per k-point ``energies_eV`` relative to E_F, of varying length,
-with their ``left_weight`` and ``right_weight``; the path ticks) and its figure.
+with their ``left_weight`` and ``right_weight`` on the edge cells and their
+``left_half_weight`` and ``interior_weight``; the path ticks) and its figure.
 """
 
 from __future__ import annotations
@@ -47,7 +51,14 @@ import numpy as np
 
 from ...observables.surface import slab_eigensystem
 from ...physics.slab import edge_cells_used
-from .estimators import edge_crossings, edge_weights, k_distance, surface_path
+from .estimators import (
+    bulk_at_fermi,
+    edge_crossings,
+    edge_weights,
+    half_ribbon_weights,
+    k_distance,
+    surface_path,
+)
 from .memory import pmap
 from .plots import new_figure, save_figure, tick_marks
 from .results import ERR_BAD_PARAMS, OUT_DIR, WARN_PLOT_SKIPPED, RunnerError, write_json_atomic
@@ -95,13 +106,40 @@ def slab_levels(
     window: float,
     edge_cells: int,
     k_par: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Levels within ``window`` of E_F at one in-plane k and the driver's per-state edge weights."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Levels within ``window`` of E_F at one in-plane k and the driver's per-state weights.
+
+    The weights on the first and last ``edge_cells`` cells, then on the first half of
+    the cells and on the middle half.
+    """
     energies, vectors = slab_eigensystem(
         table, k_par, finite_axis=finite, cells=cells, window=window, periodic_axes=periodic
     )
     left, right = edge_weights(vectors, cells, table.nbnd, edge_cells, energies=energies)
-    return energies, left, right
+    half, middle = half_ribbon_weights(vectors, cells, table.nbnd, energies=energies)
+    return energies, left, right, half, middle
+
+
+def bulk_levels_at_fermi(
+    context: WannierStepContext, finite: int, periodic: Sequence[int], kpoints: np.ndarray, cells: int
+) -> dict[str, Any]:
+    """The driver's bulk check: do the bulk bands cross E_F at the slab's in-plane k-points?
+
+    The folded table with E_F taken off its home-cell block, without hops along a 2D
+    model's vacuum axis (the slab drops them too), sampled along the finite axis at
+    twice the resolution of the slab's own standing waves
+    (:func:`~queer.compat.generator.estimators.bulk_at_fermi`).
+    """
+    translations = np.asarray(context.table_R)
+    hoppings = np.array(context.table_H, dtype=complex, copy=True)
+    home = np.where(np.all(translations == 0, axis=1))[0]
+    if len(home):
+        hoppings[home[0]] = hoppings[home[0]] - context.fermi * np.eye(context.n_orb)
+    vacuum = [axis for axis in range(3) if axis != finite and axis not in periodic]
+    kept = np.all(translations[:, vacuum] == 0, axis=1)
+    if not kept.all():
+        translations, hoppings = translations[kept], hoppings[kept]
+    return bulk_at_fermi(translations, hoppings, finite, kpoints, 2 * cells)
 
 
 def run_slab(context: WannierStepContext) -> None:
@@ -146,14 +184,18 @@ def run_slab(context: WannierStepContext) -> None:
     energies = [row[0] for row in rows]
     left = [row[1] for row in rows]
     right = [row[2] for row in rows]
-    # Without a cell between the two edge regions no level can be bulk-like.
+    half = [row[3] for row in rows]
+    middle = [row[4] for row in rows]
+    bulk = bulk_levels_at_fermi(context, finite, periodic, kpoints, cells)
+    # Without a cell between the two edge regions the edges cannot be told apart.
     crossings = edge_crossings(
         energies,
-        left,
-        right,
+        half,
+        middle,
         periodic=kind == "ribbon",
         window=window,
         interior=cells > 2 * edge_cells_used(edge_cells, cells),
+        bulk_metal=bulk["metal"],
     )
     if kind == "ribbon":
         # A ribbon's x axis is its 1D crystal momentum, in units of 2 pi / a.
@@ -168,6 +210,7 @@ def run_slab(context: WannierStepContext) -> None:
         "states": states,
         "window_eV": window,
         "edge_cells": edge_cells,
+        "bulk_at_fermi": bulk,
         "edge_crossings_at_fermi": crossings,
         "note": CROSSINGS_NOTE,
     }
@@ -184,6 +227,8 @@ def run_slab(context: WannierStepContext) -> None:
             "energies_eV": energies,
             "left_weight": left,
             "right_weight": right,
+            "left_half_weight": half,
+            "interior_weight": middle,
             "tick_indices": path["tick_indices"],
             "tick_labels": path["tick_labels"],
         },

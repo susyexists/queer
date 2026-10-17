@@ -2,8 +2,9 @@
 
 The vendored driver runs its own ``run_slab`` on a stand-in context holding the
 step's folded table, so the levels, the per-state edge weights, the crossing
-counts, the path and the outputs are compared one to one. A Chern layer's ribbon
-carries one chiral mode per edge and a trivial one none.
+flows, the path and the outputs are compared one to one. A Chern layer's ribbon
+carries one chiral mode per edge; a trivial one shows nothing in its window, which
+is not certified as 0.
 """
 
 import json
@@ -28,6 +29,7 @@ SLAB_KEYS = [
     "states",
     "window_eV",
     "edge_cells",
+    "bulk_at_fermi",
     "edge_crossings_at_fermi",
     "note",
 ]
@@ -37,6 +39,8 @@ FILE_KEYS = [
     "energies_eV",
     "left_weight",
     "right_weight",
+    "left_half_weight",
+    "interior_weight",
     "tick_indices",
     "tick_labels",
 ]
@@ -106,9 +110,11 @@ def assert_matches_the_driver(core, monkeypatch, directory, document, values):
     return produced
 
 
-@pytest.mark.parametrize(("staggered", "net"), [(0.2, 1), (1.5, 0)], ids=["chern", "trivial"])
+@pytest.mark.parametrize(
+    ("staggered", "net", "status"), [(0.2, 1, "resolved"), (1.5, 0, "unresolved")], ids=["chern", "trivial"]
+)
 def test_a_haldane_ribbon_has_one_chiral_mode_per_edge_exactly_as_the_driver(
-    generator_core, monkeypatch, tmp_path, staggered, net
+    generator_core, monkeypatch, tmp_path, staggered, net, status
 ):
     write_model(tmp_path, haldane(staggered=staggered))
     values = settings(slab_kpoints=41)
@@ -121,7 +127,10 @@ def test_a_haldane_ribbon_has_one_chiral_mode_per_edge_exactly_as_the_driver(
     # The Haldane layer's C = -1 puts a left-moving mode on the first edge.
     assert crossings["left"]["net"] == net and crossings["right"]["net"] == -net
     assert crossings["left"]["up"] + crossings["left"]["down"] == abs(net)
-    assert crossings["status"] == "resolved" and crossings["method"] == "rank_continuity"
+    assert crossings["status"] == status and crossings["method"] == "half_ribbon_flow"
+    assert slab["bulk_at_fermi"]["metal"] is False
+    if status == "unresolved":
+        assert crossings["reason"].startswith("no level lies within the window at any k")
     produced = assert_matches_the_driver(generator_core, monkeypatch, tmp_path, document, values)
     # 41 points round up to 42, half a step off -1/2, 0 and 1/2.
     k = np.asarray(produced["kpoints_frac"])
@@ -140,13 +149,21 @@ def test_levels_stay_in_the_window_with_ragged_weights(tmp_path):
     produced = json.loads((tmp_path / "Out" / "ribbon_bands.json").read_text())
     counts = [len(levels) for levels in produced["energies_eV"]]
     assert len(set(counts)) > 1 and max(counts) < 16
-    for levels, left, right in zip(
-        produced["energies_eV"], produced["left_weight"], produced["right_weight"]
+    for levels, left, right, half, middle in zip(
+        produced["energies_eV"],
+        produced["left_weight"],
+        produced["right_weight"],
+        produced["left_half_weight"],
+        produced["interior_weight"],
     ):
         levels, left, right = np.asarray(levels), np.asarray(left), np.asarray(right)
-        assert len(left) == len(right) == len(levels)
+        half, middle = np.asarray(half), np.asarray(middle)
+        assert len(left) == len(right) == len(half) == len(middle) == len(levels)
         assert np.all(np.abs(levels) <= 0.8) and np.all(np.diff(levels) >= 0)
         assert np.all(left >= -1e-12) and np.all(right >= -1e-12) and np.all(left + right <= 1 + 1e-12)
+        # The first half holds both the first edge cell and at least what the last leaves.
+        assert np.all(half >= left - 1e-12) and np.all(half <= 1 - right + 1e-12)
+        assert np.all(middle >= -1e-12) and np.all(middle <= 1 - left - right + 1e-12)
     titles = [entry["title"] for entry in document["outputs"][1:]]
     assert titles == ["Ribbon bands (data)", "Ribbon bands with edge weight"]
 

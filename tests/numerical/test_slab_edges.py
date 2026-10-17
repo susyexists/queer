@@ -5,7 +5,7 @@ import pytest
 from numpy.testing import assert_allclose, assert_array_equal
 from tight_binding_models import haldane, kane_mele, qwz
 
-from queer.compat.generator.estimators import edge_crossings
+from queer.compat.generator.estimators import bulk_at_fermi, edge_crossings, half_ribbon_weights
 from queer.execution import ExecutionOptions
 from queer.models.wannier import WannierModel
 from queer.observables.geometry import chern_number
@@ -26,12 +26,20 @@ def ribbon_kpoints(count):
     return points
 
 
-def ragged(result):
-    counts = result["state_count"]
-    return [
-        [result[name][k, : counts[k]] for k in range(len(counts))]
-        for name in ("energies", "left_weight", "right_weight")
-    ]
+def ribbon_flow(model, points, cells, window=0.5):
+    """QUEER_SLAB's weighted flow on a ribbon cut along a2: half-ribbon weights per level and the bulk check."""
+    energies, half, middle = [], [], []
+    for k in points:
+        levels, vectors = slab_eigensystem(model, k, finite_axis=1, cells=cells, window=window)
+        first, inner = half_ribbon_weights(vectors, cells, model.nbnd, energies=levels)
+        energies.append(levels)
+        half.append(first)
+        middle.append(inner)
+    hopping = np.array(model.hopping_matrices, dtype=complex)
+    home = np.flatnonzero(np.all(model.translations == 0, axis=1))[0]
+    hopping[home] -= model.fermi_energy * np.eye(model.nbnd)
+    bulk = bulk_at_fermi(model.translations, hopping, 1, points, 2 * cells)
+    return edge_crossings(energies, half, middle, periodic=True, window=window, bulk_metal=bulk["metal"])
 
 
 def test_open_chain_levels_and_ribbon_levels_equal_independent_constructions():
@@ -56,16 +64,14 @@ def test_haldane_ribbon_carries_one_chiral_mode_on_each_edge(phase):
     model = haldane(phase=phase)
     chern = round(float(chern_number(model, grid=(12, 12, 1))["chern_number"]))
     assert abs(chern) == 1
-    spectrum = slab_edge_spectrum(model, ribbon_kpoints(60), finite_axis=1, cells=20, window=0.5)
-    energies, left, right = ragged(spectrum)
-    tally = edge_crossings(energies, left, right, periodic=True, window=0.5)
+    tally = ribbon_flow(model, ribbon_kpoints(60), 20)
     assert tally["left"]["net"] == -tally["right"]["net"] and abs(tally["left"]["net"]) == 1
     assert tally["left"]["up"] + tally["left"]["down"] == 1
     # The same chiral pair at every energy across the gap the ribbon's window shows.
     assert tally["status"] == "resolved", tally["reason"]
-    assert {(row["left_net"], row["right_net"], row["bulk_net"]) for row in tally["per_energy"]} == {
-        (tally["left"]["net"], tally["right"]["net"], 0)
-    }
+    for row in tally["per_energy"]:
+        assert row["left_flow"] == pytest.approx(tally["left"]["net"], abs=0.1)
+        assert row["right_flow"] == pytest.approx(-row["left_flow"], abs=1e-12)
     # Reversing the Chern number reverses the chirality on each edge.
     assert tally["left"]["net"] == (1 if chern == -1 else -1)
 
@@ -73,9 +79,12 @@ def test_haldane_ribbon_carries_one_chiral_mode_on_each_edge(phase):
 def test_trivial_haldane_ribbon_has_no_edge_crossings_in_serial_or_parallel_runs():
     model = haldane(staggered=1.0)
     assert abs(float(chern_number(model, grid=(12, 12, 1))["chern_number"])) < 1e-10
+    tally = ribbon_flow(model, ribbon_kpoints(40), 20)
+    # Nothing crosses, and nothing lies in the gap: a count of 0 is not certified from absence.
+    assert tally["left"]["net"] == tally["right"]["net"] == 0 and tally["status"] == "unresolved"
+    assert "rest on absence" in tally["reason"]
+    assert all(row["left_flow"] == 0.0 for row in tally["per_energy"])
     spectrum = slab_edge_spectrum(model, ribbon_kpoints(40), finite_axis=1, cells=20, window=0.5)
-    tally = edge_crossings(*ragged(spectrum), periodic=True, window=0.5)
-    assert tally["left"]["net"] == tally["right"]["net"] == 0 and tally["status"] == "resolved"
     options = ExecutionOptions(workers=2, batch_size=4)
     parallel = slab_edge_spectrum(
         model, ribbon_kpoints(40), finite_axis=1, cells=20, window=0.5, execution=options

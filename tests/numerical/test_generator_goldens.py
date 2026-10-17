@@ -31,9 +31,9 @@ from queer.compat.generator.parity import (  # noqa: E402
 from queer.compat.generator.runner import run  # noqa: E402
 
 DRIVER_CORE_SHA256 = "56fda912ba570e2293b3a9b4bf20d11038c64efa5d2f192c8ac03c615034e215"
-# The slab golden is the driver's that counts edge crossings by rank continuity; the
-# other cases' results did not change with it.
-CASE_CORE_SHA256 = {"haldane_slab": "93167386d4b15b24ff6ba84e656a4d4580164a3f02e52f6d2541f99b0027eb13"}
+# The slab golden is the driver's that counts edge crossings as a weighted flow of
+# half-ribbon weight; the other cases' results did not change with it.
+CASE_CORE_SHA256 = {"haldane_slab": "dbdf34d11e655e7bca1d49e4e632aa74644a49dd9917cc50d1e7f3059ce7bef5"}
 # Extrema tied at several k-points (K and K' of the honeycomb models) are picked
 # by rounding, which differs between BLAS kernels and machines. Only those picks
 # may differ from a golden, as documented ties; everything else must agree.

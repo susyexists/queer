@@ -265,7 +265,7 @@ def test_layer_blocks_and_slab_hamiltonian_equal_the_generator(generator_core):
             )
 
 
-def test_rotated_edge_weights_and_crossings_equal_the_generator(generator_core):
+def test_rotated_edge_and_half_ribbon_weights_equal_the_generator(generator_core):
     rng = np.random.default_rng(62)
     for cells, orbitals in ((4, 2), (7, 3), (2, 1), (5, 2)):
         size = cells * orbitals
@@ -274,32 +274,74 @@ def test_rotated_edge_weights_and_crossings_equal_the_generator(generator_core):
         if len(energies) >= 5:
             energies[1] = energies[0]
             energies[3], energies[4] = energies[2] + 4e-6, energies[2] + 8e-6
-        for edge in (1, 2, 5):
-            for levels in (None, energies, energies[::-1].copy()):
+        for levels in (None, energies, energies[::-1].copy()):
+            for edge in (1, 2, 5):
                 port = estimators.edge_weights(vectors, cells, orbitals, edge, energies=levels)
                 original = generator_core.edge_weights(vectors, cells, orbitals, edge, energies=levels)
                 for a, b in zip(port, original):
                     assert_array_equal(a, b)
-    for _ in range(40):
-        count = int(rng.integers(1, 12))
-        levels = [rng.normal(scale=0.3, size=int(rng.integers(0, 9))) for _ in range(count)]
-        left = [rng.uniform(0, 1, size=len(e)) for e in levels]
-        right = [rng.uniform(0, 1, size=len(e)) for e in levels]
+            port = estimators.half_ribbon_weights(vectors, cells, orbitals, energies=levels)
+            original = generator_core.half_ribbon_weights(vectors, cells, orbitals, energies=levels)
+            for a, b in zip(port, original):
+                assert_array_equal(a, b)
+
+
+def random_flow_inputs(rng):
+    """Ragged levels with weights, some degenerate, some at the reference energies and the window edge."""
+    count = int(rng.integers(1, 14))
+    levels = []
+    for _ in range(count):
+        e = rng.normal(scale=0.3, size=int(rng.integers(0, 9)))
+        if len(e) > 2 and rng.uniform() < 0.3:
+            e[1] = e[0]
+        if len(e) and rng.uniform() < 0.2:
+            e[-1] = rng.choice([0.0, 0.5, -0.5, 0.4])
+        levels.append(e)
+    half = [rng.uniform(0, 1, size=len(e)) for e in levels]
+    middle = [rng.choice([0.0, 0.1, 0.25, 0.5, 0.9], size=len(e)) for e in levels]
+    return levels, half, middle
+
+
+def test_the_weighted_flow_equals_the_generator_on_random_levels(generator_core):
+    rng = np.random.default_rng(63)
+    for _ in range(60):
+        levels, half, middle = random_flow_inputs(rng)
         for periodic in (False, True):
-            for threshold in (0.3, 0.5):
-                for window, interior in ((None, True), (0.5, True), (0.4, False)):
-                    options = dict(periodic=periodic, threshold=threshold, window=window, interior=interior)
-                    port = estimators.edge_crossings(levels, left, right, **options)
-                    assert port == generator_core.edge_crossings(levels, left, right, **options)
+            for window, interior in ((None, True), (0.5, True), (0.4, False)):
+                for bulk_metal in (None, False, True):
+                    options = dict(periodic=periodic, window=window, interior=interior, bulk_metal=bulk_metal)
+                    port = estimators.edge_crossings(levels, half, middle, **options)
+                    assert port == generator_core.edge_crossings(levels, half, middle, **options)
+
+
+def test_the_bulk_check_equals_the_generator(generator_core):
+    rng = np.random.default_rng(64)
+    cube = np.array([[a, b, 0] for a in (-1, 0, 1) for b in (-2, -1, 0, 1, 2)])
+    for _ in range(12):
+        bands = int(rng.integers(1, 4))
+        hopping = random_complex(rng, (len(cube), bands, bands))
+        hopping = 0.5 * (hopping + hopping[::-1].conj().transpose(0, 2, 1))
+        points = np.zeros((int(rng.integers(1, 9)), 3))
+        points[:, 0] = rng.uniform(-0.5, 0.5, size=len(points))
+        for n_perp in (1, 4, 13):
+            port = estimators.bulk_at_fermi(cube, hopping, 1, points, n_perp)
+            assert port == generator_core.bulk_at_fermi(cube, hopping, 1, points, n_perp)
 
 
 def ribbon_levels(model, cells, points, window=0.5, fermi=0.0):
-    """Levels and the driver's per-state edge weights of a ribbon cut along a2 (QUEER_SLAB's solve)."""
+    """Levels and the driver's per-state weights of a ribbon cut along a2 (QUEER_SLAB's solve).
+
+    Returns the levels, their edge-cell weights, their first-half and middle-half
+    weights, and the bulk check at the ribbon's k-points.
+    """
     table = FoldedTable(model.translations, model.hopping_matrices, fermi, model.nbnd)
     kpoints = np.zeros((points, 3))
     kpoints[:, 0] = -0.5 + (np.arange(points) + 0.5) / points
     rows = [slab_levels(table, 1, [0], cells, window, 2, k) for k in kpoints]
-    return [[row[index] for row in rows] for index in range(3)]
+    hopping = np.array(model.hopping_matrices, dtype=complex)
+    hopping[np.flatnonzero(np.all(model.translations == 0, axis=1))[0]] -= fermi * np.eye(model.nbnd)
+    bulk = estimators.bulk_at_fermi(model.translations, hopping, 1, kpoints, 2 * cells)
+    return [[row[index] for row in rows] for index in range(5)], bulk
 
 
 @pytest.mark.parametrize(
@@ -314,7 +356,7 @@ def ribbon_levels(model, cells, points, window=0.5, fermi=0.0):
     ],
 )
 def test_edge_crossings_on_ribbons_equal_the_generator(generator_core, case, status):
-    """Chiral, helical, hybridized and metallic ribbons: the full result, status and per-energy table."""
+    """Chiral, helical, hybridized and metallic ribbons: the full result, status and flows."""
     model, cells, points, window, fermi = {
         "haldane_6": (haldane(staggered=0.2), 6, 24, 0.5, 0.0),
         "haldane_20": (haldane(staggered=0.2), 20, 60, 0.5, 0.0),
@@ -323,44 +365,57 @@ def test_edge_crossings_on_ribbons_equal_the_generator(generator_core, case, sta
         "haldane_metal": (haldane(staggered=0.2), 12, 40, 0.5, 0.9),
         "haldane_4": (haldane(staggered=0.2), 4, 24, 0.5, 0.0),
     }[case]
-    energies, left, right = ribbon_levels(model, cells, points, window, fermi)
+    (energies, _, _, half, middle), bulk = ribbon_levels(model, cells, points, window, fermi)
+    original_bulk = generator_core.bulk_at_fermi(
+        model.translations,
+        np.array(model.hopping_matrices, dtype=complex)
+        - fermi * np.eye(model.nbnd) * np.all(model.translations == 0, axis=1)[:, None, None],
+        1,
+        np.column_stack([-0.5 + (np.arange(points) + 0.5) / points, np.zeros(points), np.zeros(points)]),
+        2 * cells,
+    )
+    assert bulk == original_bulk
     interior = cells > 4
+    results = {}
     for periodic in (True, False):
-        options = dict(periodic=periodic, window=window, interior=interior)
-        port = estimators.edge_crossings(energies, left, right, **options)
-        assert port == generator_core.edge_crossings(energies, left, right, **options)
-        assert port["status"] == (status if periodic else "open_path")
-    port = estimators.edge_crossings(energies, left, right, periodic=True, window=window, interior=interior)
-    assert port["energies_eV"] == [row["energy_eV"] for row in port["per_energy"]]
+        options = dict(periodic=periodic, window=window, interior=interior, bulk_metal=bulk["metal"])
+        results[periodic] = estimators.edge_crossings(energies, half, middle, **options)
+        assert results[periodic] == generator_core.edge_crossings(energies, half, middle, **options)
+        assert results[periodic]["status"] == (status if periodic else "open_path"), results[periodic][
+            "reason"
+        ]
     if status == "resolved":
-        assert {(r["left_net"], r["right_net"], r["bulk_net"]) for r in port["per_energy"]} == {
-            (port["left"]["net"], port["right"]["net"], 0)
-        }
+        for row in results[True]["per_energy"]:
+            assert abs(row["left_flow"] - results[True]["left"]["net"]) < estimators.CROSSING_TOLERANCE
 
 
-def test_two_edges_crossing_each_other_keep_their_crossings_as_in_the_generator(generator_core):
-    # By energy order alone nothing crossed; the exchanged edges say both levels did.
-    energies = [np.array([-0.05, 0.05]), np.array([-0.07, 0.07])]
-    left = [np.array([1.0, 0.0]), np.array([0.0, 1.0])]
-    right = [np.array([0.0, 1.0]), np.array([1.0, 0.0])]
-    port = estimators.edge_crossings(energies, left, right, periodic=True)
-    assert port == generator_core.edge_crossings(energies, left, right, periodic=True)
-    assert port["left"] == {"up": 1, "down": 1, "net": 0} and port["right"] == port["left"]
-    port = estimators.edge_crossings(energies, left, right)
-    assert port["left"] == {"up": 1, "down": 0, "net": 1}
-    assert port["right"] == {"up": 0, "down": 1, "net": -1}
+def test_two_levels_swapping_across_e_f_carry_their_weight_as_in_the_generator(generator_core):
+    # A left and a right mode crossing E_F and each other within one step (k = 0): by
+    # energy order the two ranks only change character.
+    ks = -0.5 + (np.arange(20) + 0.5) / 20
+    energies = [np.array([3 * k, -3 * k]) for k in ks]
+    edge = [abs(k) < 0.3 for k in ks]
+    half = [np.array([1.0, 0.0]) if on else np.array([0.5, 0.5]) for on in edge]
+    middle = [np.zeros(2) if on else np.full(2, 0.5) for on in edge]
+    for periodic in (True, False):
+        port = estimators.edge_crossings(energies, half, middle, periodic=periodic)
+        assert port == generator_core.edge_crossings(energies, half, middle, periodic=periodic)
+        assert port["left"] == {"up": 1, "down": 0, "net": 1}
+        assert port["right"] == {"up": 0, "down": 1, "net": -1}
+    assert port["status"] == "open_path"
 
 
 def test_the_legacy_count_keeps_the_nearest_energy_rule():
-    # Up to core 56fda912 the driver matched each edge state to the nearest-energy state of
-    # the same edge: unbounded, many to one. A far jump counted as a crossing.
+    # The drivers that recorded no method matched each edge state to the nearest-energy state
+    # of the same edge: unbounded, many to one. A far jump counted as a crossing.
     levels = np.array([-0.459, -0.2, 0.084, 0.2])
     energies = [levels, levels + 0.001]
     left = [np.array([0.9, 0.1, 0.1, 0.1]), np.array([0.1, 0.1, 0.9, 0.1])]
     right = [np.full(4, 0.1), np.full(4, 0.1)]
     legacy = estimators.legacy_edge_crossings(energies, left, right)
     assert legacy == {"left": {"up": 1, "down": 0, "net": 1}, "right": {"up": 0, "down": 0, "net": 0}}
-    current = estimators.edge_crossings(energies, left, right)
+    # Every level stays put: the weighted flow sees no crossing.
+    current = estimators.edge_crossings(energies, left, [np.zeros(4), np.zeros(4)])
     assert current["left"] == {"up": 0, "down": 0, "net": 0}
     # Two states sharing one match both count.
     energies = [np.array([-0.3, -0.2]), np.array([0.25])]

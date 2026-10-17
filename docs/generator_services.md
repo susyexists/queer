@@ -319,26 +319,57 @@ closer than 1e-5 eV) to diagonalize the first-edge projector; inside a cluster
 whose edge projector is degenerate they still depend on the basis.
 
 The Generator's edge-crossing count (`queer.compat.generator.estimators.edge_crossings`,
-the driver's rule since core 93167386…) follows levels by rank continuity. Per step
+the driver's rule since core dbdf34d1…) is a weighted spectral flow. Every level carries
+its weight on the first half of the cells, P_L (an odd ribbon's middle cell counts half;
+P_R = 1 - P_L), and on the middle half, I (cells n/4 to 3n/4, cut cells by their
+overlap), from `half_ribbon_weights`, which rotates each degenerate cluster to
+diagonalize the first-half projector. Both are stored per level in `Out/{kind}_bands.json`
+(`left_half_weight`, `interior_weight`). A level with I ≥ 1/4 is bulk-like. Per step
 k_j → k_j+1 (a ribbon's last point back to its first) the levels are ranked from the
-reference energy (rank 0 = the lowest at or above it), and the offset o in [-3, 3]
-that minimizes the mean |E_r(k_j) - E_r+o(k_j+1)| over the ranks r in [-3, 2] present
-at both says that |o| levels crossed, upwards for o > 0; those |o| levels must be
-present at both points. Two neighbouring pairs whose dominant edges are exchanged
-are two edges' levels crossing each other and swap partners, so two chiral modes
-crossing at E_F within one step keep one crossing each. A crossing belongs to the
-edge holding ≥ 1/2 of its endpoints' mean weight, else to the bulk. Levels with
-left + right < 1/2 bound the gap around E_F (± the energy window on a side without
-one); the nets are counted again at 9 energies a tenth of the gap apart and from its
-edges. The status is `resolved` when every energy gives the same nets with
-left = -right and no bulk net, `unresolved` otherwise or when no cell lies between
-the two edge regions, `metal` when a bulk-like level crosses E_F, and `open_path` for
-a slab's surface path. Validated on the 12-cell ribbon of a C = -1 MnBi2Te4 film
-(`unresolved`, where the old count gave 8 and 9), Haldane ribbons (`resolved`, ±1),
-trivial ribbons (`resolved`, 0), Kane-Mele (`resolved`, one mode each way per edge)
-and a 6-cell QWZ ribbon (`unresolved`). The drivers up to core 56fda912… matched each
-edge state to the nearest-energy state of the same edge, unbounded and many to one;
-`legacy_edge_crossings` keeps that rule for comparing their references.
+reference energy, and the offset o in [-3, 3] that minimizes the mean step over the
+ranks -3…2 says how many crossed and which way; a level without a partner costs its
+distance to the window edge it must have crossed (`align_ranks`). The flow adds the P_L
+that moves through the reference over the levels taking part (`taking_part`): the
+crossed ranks; with o = 0, ranks -1 and 0 when each could end where the other ends
+within a step's reach (two levels crossing each other at the reference within one
+step, which energy order hides); then every neighbour that could swap with an end of
+that set. The reach is 1.5 times the largest step of an aligned pair seen
+(`step_shift_eV`): a band's steepest step falls inside a step where two levels swap.
+So a rising level adds the mean P_L of its endpoints, two chiral modes crossing at a
+TRIM add one each, and |C| = 2 or degenerate copies count two with no swap repair.
+The right flow is the net level count minus the left, and both close to zero around
+the zone. A sum of the weight below E_F over a fixed rank window, tried first,
+telescopes around the zone and is exactly 0 once the window holds every level.
+
+The flows are evaluated at E_F and at 9 energies evenly across the gap the bulk-like
+levels leave around E_F, kept a reach from its edges (`per_energy`: `left_flow`,
+`right_flow`, `bulk_flow`, the last weighted by I). The status is `resolved` when every
+flow lies within 0.1 (`tolerance`) of the same integer: a pair of edge modes then holds
+at most 5% of its weight on the far half. It is `metal` when the bulk bands cross E_F
+(`slab.bulk_at_fermi`: the bulk levels at the same in-plane k-points, sampled along the
+finite axis at twice the slab's resolution, `bulk_at_fermi`) and `open_path` for a
+slab's surface path. It is `unresolved` otherwise, with a reason: bulk-like levels
+crossing E_F over a bulk gap (edge states spread over the ribbon), a bulk-like level or
+the window edge within a reach of E_F, no level in the gap (a trivial gap and edge
+states pushed out of it by hybridization look the same, so a count of 0 would rest on
+absence), levels appearing inside the window between neighbouring k-points (coarse k
+or a small window), fractional or varying flows, or no cell between the two edge
+regions. `left` and `right` hold the crossings at E_F: `up` and `down` count the steps
+whose flow on that side rounds to a positive or negative integer (attributed past 1/2),
+and `net` is the rounded flow, certified only when `resolved`.
+
+Validated on numpy ribbons and on 250 random 2- and 4-band models with a gap at E_F on a
+40 x 40 mesh, where no `resolved` count disagrees with the FHS Chern number (the two the
+bulk check calls metals are metals on a 400 x 400 mesh): Haldane ±1 (20 cells, 6 cells
+at 24 k, PythTB's example), two coincident chiral modes per edge (two Haldane or QWZ
+copies) ±2, Kane-Mele net 0 with one mode each way per edge, QWZ at m = -1.9 (a 0.2 eV
+gap, modes spread over ~10 cells) resolved from 34 cells at 200 k and unresolved below,
+also with E_F off the gap centre. Thin ribbons resolve only where their modes are
+localized (QWZ at m = -1 from 5 cells), thin metals are `metal`, and coarse-k and
+tiny-window ribbons are unresolved. The drivers up to core 56fda912… matched each edge state to
+the nearest-energy state of the same edge, unbounded and many to one;
+`legacy_edge_crossings` keeps that rule for comparing their references, and the
+rank-continuity count of core 93167386… was never released.
 
 `queer.compat.generator.estimators` keeps the Generator's own estimators with
 their exact semantics. The DOS histograms the eigenvalues on bins from

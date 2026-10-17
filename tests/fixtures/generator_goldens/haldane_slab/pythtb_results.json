@@ -3,13 +3,13 @@
  "status": "ok",
  "step_type": "PYTHTB_SLAB",
  "provenance": {
-  "core_sha256": "93167386d4b15b24ff6ba84e656a4d4580164a3f02e52f6d2541f99b0027eb13",
+  "core_sha256": "dbdf34d11e655e7bca1d49e4e632aa74644a49dd9917cc50d1e7f3059ce7bef5",
   "params_sha256": "1fe2c606542b4c99708d2e2b8a43dd28b98db2c54aeb51d3a89ad2b513db7e73",
   "python": "3.12.12",
   "numpy": "2.5.4",
   "host": "golden",
   "cpus": 16,
-  "memory_available_bytes": 16694759424,
+  "memory_available_bytes": 20216532992,
   "pythtb": "2.0.2",
   "scipy": "1.18.1",
   "matplotlib": "3.11.2",
@@ -57,8 +57,8 @@
     "processes": 1
    }
   ],
-  "wall_seconds": 1.15,
-  "peak_rss_bytes": 126009344,
+  "wall_seconds": 0.67,
+  "peak_rss_bytes": 113246208,
   "peak_worker_rss_bytes": 0
  },
  "citation": "T. Cole, S. Coh and D. Vanderbilt, Python Tight Binding (PythTB), doi:10.5281/zenodo.12721315",
@@ -174,6 +174,14 @@
   "states": 12,
   "window_eV": 0.5,
   "edge_cells": 2,
+  "bulk_at_fermi": {
+   "metal": false,
+   "gap_eV": [
+    -0.5896688758802662,
+    0.5896688758802662
+   ],
+   "k_perp_points": 12
+  },
   "edge_crossings_at_fermi": {
    "left": {
     "up": 1,
@@ -186,80 +194,81 @@
     "net": -1
    },
    "status": "resolved",
-   "reason": "the same counts at 9 energies across the gap [-500.0, +500.0] meV",
-   "method": "rank_continuity",
+   "reason": "left +1, right -1 at 9 energies across the gap [-454.1, +454.1] meV, each within 0.001 of the integer",
+   "method": "half_ribbon_flow",
    "window_eV": [
-    -0.5,
-    0.5
+    -0.45409105980417164,
+    0.45409105980417164
    ],
+   "step_shift_eV": 0.2015792891084469,
    "energies_eV": [
-    -0.4,
-    -0.3,
-    -0.2,
-    -0.09999999999999998,
+    -0.12137770091320102,
+    -0.09103327568490076,
+    -0.06068885045660051,
+    -0.030344425228300248,
     0.0,
-    0.09999999999999998,
-    0.19999999999999996,
-    0.30000000000000004,
-    0.4
+    0.030344425228300248,
+    0.060688850456600524,
+    0.09103327568490077,
+    0.12137770091320099
    ],
    "per_energy": [
     {
-     "energy_eV": -0.4,
-     "left_net": 1,
-     "right_net": -1,
-     "bulk_net": 0
+     "energy_eV": -0.12137770091320102,
+     "left_flow": 0.9996394333947922,
+     "right_flow": -0.9996394333947922,
+     "bulk_flow": -0.0060587147750710835
     },
     {
-     "energy_eV": -0.3,
-     "left_net": 1,
-     "right_net": -1,
-     "bulk_net": 0
+     "energy_eV": -0.09103327568490076,
+     "left_flow": 0.9996394333947922,
+     "right_flow": -0.9996394333947922,
+     "bulk_flow": -0.0060587147750710835
     },
     {
-     "energy_eV": -0.2,
-     "left_net": 1,
-     "right_net": -1,
-     "bulk_net": 0
+     "energy_eV": -0.06068885045660051,
+     "left_flow": 0.9994265028014361,
+     "right_flow": -0.9994265028014361,
+     "bulk_flow": 1.3877787807814457e-17
     },
     {
-     "energy_eV": -0.09999999999999998,
-     "left_net": 1,
-     "right_net": -1,
-     "bulk_net": 0
+     "energy_eV": -0.030344425228300248,
+     "left_flow": 0.9994265028014361,
+     "right_flow": -0.9994265028014361,
+     "bulk_flow": 1.3877787807814457e-17
     },
     {
      "energy_eV": 0.0,
-     "left_net": 1,
-     "right_net": -1,
-     "bulk_net": 0
+     "left_flow": 0.9994265028014361,
+     "right_flow": -0.9994265028014361,
+     "bulk_flow": 1.3877787807814457e-17
     },
     {
-     "energy_eV": 0.09999999999999998,
-     "left_net": 1,
-     "right_net": -1,
-     "bulk_net": 0
+     "energy_eV": 0.030344425228300248,
+     "left_flow": 0.9994265028014361,
+     "right_flow": -0.9994265028014361,
+     "bulk_flow": 1.3877787807814457e-17
     },
     {
-     "energy_eV": 0.19999999999999996,
-     "left_net": 1,
-     "right_net": -1,
-     "bulk_net": 0
+     "energy_eV": 0.060688850456600524,
+     "left_flow": 0.9994265028014361,
+     "right_flow": -0.9994265028014361,
+     "bulk_flow": 1.3877787807814457e-17
     },
     {
-     "energy_eV": 0.30000000000000004,
-     "left_net": 1,
-     "right_net": -1,
-     "bulk_net": 0
+     "energy_eV": 0.09103327568490077,
+     "left_flow": 0.9996394333947921,
+     "right_flow": -0.9996394333947921,
+     "bulk_flow": 0.00605871477507109
     },
     {
-     "energy_eV": 0.4,
-     "left_net": 1,
-     "right_net": -1,
-     "bulk_net": 0
+     "energy_eV": 0.12137770091320099,
+     "left_flow": 0.9996394333947921,
+     "right_flow": -0.9996394333947921,
+     "bulk_flow": 0.00605871477507109
     }
    ],
-   "threshold": 0.5
+   "tolerance": 0.1
   },
   "note": "Crossing counts are informational: the bulk Chern number is the invariant."
  },
