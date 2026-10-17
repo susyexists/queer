@@ -972,10 +972,11 @@ def test_step_names_and_reference_detection():
     assert openmx_family("QUEER_BANDS") is None and openmx_family("AHC") == "AHC"
     assert is_pyatb_directory(FIXTURES / "c_direct_openmx") and not is_pyatb_directory(FIXTURES)
     assert pyatb_step(FIXTURES / "h_chern_fermi") == "PYATB_CHERN_NUMBER"
-    with pytest.raises(ValueError, match="AHC or CHERN_NUMBER"):
+    assert openmx_family("PYATB_SHIFT_CURRENT") == "SHIFT_CURRENT"
+    with pytest.raises(ValueError, match="AHC, CHERN_NUMBER or SHIFT_CURRENT"):
         from queer.compat.generator.parity_pyatb import compare as compare_pyatb
 
-        compare_pyatb("SHIFT_CURRENT", FIXTURES, FIXTURES)
+        compare_pyatb("PYATB_BANDS", FIXTURES, FIXTURES)
 
 
 def test_the_compare_command_detects_a_pyatb_reference(runs, tmp_path, capsys):

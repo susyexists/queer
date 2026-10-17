@@ -1,5 +1,8 @@
 """Parity of a Generator OpenMX step (AHC, Chern number) between a PyATB run and a QUEER run.
 
+A shift current (``SHIFT_CURRENT``) is judged by its own rule in
+:mod:`~queer.compat.generator.parity_shift`, reached through :func:`compare`.
+
 :func:`compare` judges a candidate directory (``queer_results.json``,
 ``queer_params.json``, ``Out/``) against a PyATB reference directory (``Input``,
 optional ``inputs.sha256``, ``Out/input.json``, ``Out/running.log``, the product
@@ -114,8 +117,6 @@ from .openmx_params import (
     COUNTERPARTS,
     FUNCTION_BLOCKS,
     PARAMS_FILENAME,
-    STEP_AHC,
-    STEP_CHERN,
     canonical_openmx_step,
     effective_parameters,
     limit_refusal,
@@ -152,12 +153,14 @@ from .pyatb_files import (
     INPUTS_SHA256_FILENAME,
     INTEGRATION_LOG,
     RUNNING_LOG,
+    SHIFT_CURRENT_FILE,
     parse_ahc,
     parse_chern,
     parse_input,
     parse_inputs_sha256,
     parse_integration_log,
     parse_running_log,
+    parse_shift_current,
 )
 from .results import (
     CHERN_INTEGER_TOL,
@@ -168,7 +171,7 @@ from .results import (
     to_jsonable,
 )
 
-FAMILIES: tuple[str, ...] = ("AHC", "CHERN_NUMBER")
+FAMILIES: tuple[str, ...] = ("AHC", "CHERN_NUMBER", "SHIFT_CURRENT")
 TIER_A_RELATIVE = 2e-7
 AHC_FLOOR_S_CM = 5e-7
 CHERN_FLOOR = 1e-9
@@ -180,7 +183,7 @@ ADAPTIVE_MIN_CELLS = 512
 ENERGY_PRINT_TOL = 5.01e-7
 PARAMETER_RELATIVE = 1e-12
 FERMI_SLACK = 1e-9
-PRODUCT_FILES = {"AHC": AHC_FILE, "CHERN_NUMBER": CHERN_FILE}
+PRODUCT_FILES = {"AHC": AHC_FILE, "CHERN_NUMBER": CHERN_FILE, "SHIFT_CURRENT": SHIFT_CURRENT_FILE}
 # Signatures of PyATB failures in its logs, and the failure they are.
 FAILURE_SIGNATURES: tuple[tuple[str, str], ...] = (
     (r"inconsistent with scfout SpinP_switch|supports nspin = 1 or 4", "bad_params"),
@@ -193,7 +196,7 @@ FAILURE_LOG_PATTERNS = ("slurm-*.err", "slurm-*.out")
 
 
 def openmx_family(name: Any) -> str | None:
-    """``AHC`` or ``CHERN_NUMBER`` for a QUEER, PyATB or bare OpenMX step name; None otherwise."""
+    """``AHC``, ``CHERN_NUMBER`` or ``SHIFT_CURRENT`` for a QUEER, PyATB or bare OpenMX step name; else None."""
     token = str(name or "").strip().upper()
     for prefix in ("QUEER_", "PYATB_"):
         if token.startswith(prefix):
@@ -218,7 +221,9 @@ def pyatb_step(directory: str | Path) -> str:
     blocks = parse_input((Path(directory) / INPUT_FILENAME).read_text(encoding="utf-8", errors="replace"))
     present = [step for step, block in FUNCTION_BLOCKS.items() if block in blocks]
     if len(present) != 1:
-        raise ValueError(f"{directory}/{INPUT_FILENAME} names no single AHC or CHERN_NUMBER block")
+        raise ValueError(
+            f"{directory}/{INPUT_FILENAME} names no single AHC, CHERN_NUMBER or SHIFT_CURRENT block"
+        )
     return COUNTERPARTS[present[0]]
 
 
@@ -278,8 +283,11 @@ class PyatbRun:
         elif product is None:
             run.failure = f"{PRODUCT_FILES.get(run.family or '', AHC_FILE)} is missing"
         else:
+            parse = {"AHC": parse_ahc, "SHIFT_CURRENT": parse_shift_current}.get(
+                run.family or "", parse_chern
+            )
             try:
-                run.product = parse_ahc(product) if run.family == "AHC" else parse_chern(product)
+                run.product = parse(product)
             except ValueError as error:
                 run.failure = f"the product cannot be read: {error}"
         for name in (INTEGRATION_LOG, CHERN_INTEGRATION_LOG):
@@ -567,7 +575,7 @@ class _PyatbComparison:
         params = self.candidate.params
         if params is None:
             return self.precondition("parameters", False, f"the candidate holds no {PARAMS_FILENAME}")
-        step = STEP_AHC if self.family == "AHC" else STEP_CHERN
+        step = canonical_openmx_step(f"QUEER_{self.family}")
         reference = effective_parameters(
             step,
             self.reference.input_parameters(),
@@ -1343,18 +1351,35 @@ def compare(
     candidate_dir: str | Path,
     *,
     scfout: str | Path | None = None,
+    clean_control: Any = None,
 ) -> dict[str, Any]:
     """Compare a QUEER run of an OpenMX step with the PyATB run of its counterpart.
 
     ``step_type`` names the family (``QUEER_AHC``, ``PYATB_AHC`` or ``AHC``; likewise
-    CHERN_NUMBER); an unknown step raises ``ValueError``. ``scfout`` names the
-    scfout to hash when the reference holds no ``inputs.sha256``. Returns the
-    report of :func:`~queer.compat.generator.parity.compare`'s schema.
+    CHERN_NUMBER and SHIFT_CURRENT); an unknown step raises ``ValueError``.
+    ``scfout`` names the scfout to hash when the reference holds no
+    ``inputs.sha256``. ``clean_control`` (a shift current only) is the report, or
+    the path of the JSON report, of this QUEER release's clean-control comparison
+    (:mod:`~queer.compat.generator.parity_shift`). Returns the report of
+    :func:`~queer.compat.generator.parity.compare`'s schema.
     """
     family = openmx_family(step_type)
     if family is None:
-        raise ValueError(f"unknown step {step_type!r}: compare AHC or CHERN_NUMBER (QUEER_ or PYATB_)")
+        raise ValueError(
+            f"unknown step {step_type!r}: compare AHC, CHERN_NUMBER or SHIFT_CURRENT (QUEER_ or PYATB_)"
+        )
     canonical_openmx_step(f"QUEER_{family}")
+    if family == "SHIFT_CURRENT":
+        from .parity_shift import compare_shift
+
+        return compare_shift(
+            PyatbRun.load(reference_dir),
+            QueerRun.load(candidate_dir),
+            scfout=scfout,
+            clean_control=clean_control,
+        )
+    if clean_control is not None:
+        raise ValueError("a clean-control report applies to a SHIFT_CURRENT comparison only")
     comparison = _PyatbComparison(family, PyatbRun.load(reference_dir), QueerRun.load(candidate_dir), scfout)
     comparison.run()
     return comparison.report()
