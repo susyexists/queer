@@ -588,20 +588,8 @@ def test_text_values_in_the_candidates_parameter_file_compare_as_the_runner_read
 
 
 def left_handed_qwz_scfout(path):
-    """The QWZ spinor model with a3 reversed: the same bands on a left-handed lattice."""
-    from openmx_files import SQUARE_TRANSLATIONS, write_scfout_model
-
-    uu = np.array([1.0, 0.5, 0.5, 0.5, 0.5])
-    up_down_real = np.array([0.0, 0.0, 0.0, -0.5, 0.5])
-    up_down_imaginary = np.array([0.0, -0.5, 0.5, 0.0, 0.0])
-    hamiltonian = np.stack((uu, -uu, up_down_real, up_down_imaginary))[:, :, None, None]
-    return write_scfout_model(
-        path,
-        lattice=np.diag([2.0, 2.0, -10.0]),
-        translations=SQUARE_TRANSLATIONS,
-        hamiltonian=hamiltonian,
-        spin=3,
-    )
+    """The QWZ spinor model with a3 reversed: the same crystal on a left-handed lattice."""
+    return qwz_spinor_scfout(path, lattice=np.diag([2.0, 2.0, -10.0]))
 
 
 def test_a_left_handed_lattice_flips_pyatbs_direct_and_kubo_sign(runs, tmp_path):
@@ -626,6 +614,32 @@ def test_a_left_handed_lattice_flips_pyatbs_direct_and_kubo_sign(runs, tmp_path)
     assert unsigned["verdict"] == FAIL and classes(unsigned)["sigma_xy"] == UNEXPLAINED
 
 
+def tilted_qwz_scfout(path):
+    """The QWZ spinor model with a3 tilted off the layer normal: a non-orthogonal cell."""
+    return qwz_spinor_scfout(path, lattice=[[2.0, 0.0, 0.0], [0.0, 2.0, 0.0], [1.5, 0.0, 10.0]])
+
+
+def test_pyatbs_fhs_construction_is_compared_after_convention_on_a_tilted_cell(tmp_path):
+    scan = {"fhs_grid": [8, 8, 1], "fhs_energy_window": [-0.2, 0.2], "fhs_energy_points": 4}
+    tilted = candidate(tmp_path / "tilted", scfout=tilted_qwz_scfout, engine="fhs", **scan)
+    document = read(tilted / "queer_results.json")
+    names = ("yz", "zx", "xy")
+    construction = np.column_stack([document["ahc"]["pyatb_construction_S_cm"][name] for name in names])
+    physical = np.column_stack([document["ahc"]["sigma_S_cm"][name] for name in names])
+    assert np.all(np.abs(construction[:, 0]) > 1.0) and np.all(physical[:, 0] == 0)
+    report = compare("AHC", reference_from(tmp_path / "pyatb", tilted, sigma=construction), tilted)
+    assert report["verdict"] == PASS, render_markdown(report)
+    assert (
+        classes(report)["sigma_xy(E)"] == AFTER_CONVENTION
+        and classes(report)["sigma_yz(E)"] == AFTER_CONVENTION
+    )
+    detail = [item for item in report["quantities"] if item["name"] == "sigma_xy(E)"][0]["detail"]
+    assert "Cartesian construction" in detail
+    # PyATB printing the physical vector would contradict its own construction: in a gap that fails.
+    report = compare("AHC", reference_from(tmp_path / "physical", tilted, sigma=physical), tilted)
+    assert report["verdict"] == FAIL and classes(report)["sigma_yz(E)"] == UNEXPLAINED
+
+
 def test_a_candidate_file_disagreeing_with_its_document_fails(runs, tmp_path):
     reference = reference_from(tmp_path / "reference", runs["openmx"])
     tampered = copy(runs["openmx"], tmp_path / "tampered")
@@ -645,8 +659,12 @@ def test_a_value_on_a_rounding_boundary_still_matches_its_six_decimals(runs, tmp
     assert classes(report)["candidate_file"] == AGREE
 
 
-def template(runs, directory, fixture, *, sigma=None, chern=None, offsets=None):
-    """A candidate run of the kagome calibration: a runner document carrying QUEER's calibration values."""
+def template(runs, directory, fixture, *, sigma=None, chern=None, offsets=None, fhs=None):
+    """A candidate run of the kagome calibration: a runner document carrying QUEER's calibration values.
+
+    ``fhs`` (an FHS scan) holds QUEER's per-energy facts: ``rank_variation`` and the
+    ``emulated_xy`` and ``queer_links_xy`` values of its link emulation.
+    """
     family = "chern" if chern is not None else "ahc"
     source = runs["chern"] if family == "chern" else runs["fhs" if offsets is not None else "openmx"]
     directory = copy(source, directory)
@@ -671,6 +689,22 @@ def template(runs, directory, fixture, *, sigma=None, chern=None, offsets=None):
         }
         if offsets is not None:
             document["ahc"]["energy_offsets_eV"] = offsets
+            document["ahc"]["pyatb_construction_S_cm"] = document["ahc"]["sigma_S_cm"]
+            facts = fhs or {}
+            zeros = [0.0] * len(offsets)
+            document["integration"]["fhs"]["metallic_vertex_rank_variation"] = facts.get(
+                "rank_variation", [False] * len(offsets)
+            )
+            document["ahc"]["pyatb_emulation"] = (
+                {
+                    "fhs_links": {
+                        "printed_S_cm": {"yz": zeros, "zx": zeros, "xy": facts["emulated_xy"]},
+                        "queer_links_S_cm": {"yz": zeros, "zx": zeros, "xy": facts["queer_links_xy"]},
+                    }
+                }
+                if "emulated_xy" in facts
+                else None
+            )
             text = ahc_scan_text(offsets, rows * sign)
         else:
             text = ahc_vector_text(rows[0] * sign)
@@ -706,26 +740,102 @@ def test_the_kagome_calibration_outputs_pass_against_queers_values(runs, tmp_pat
     assert compare("CHERN_NUMBER", reference, candidate_dir)["verdict"] == FAIL
 
 
-def test_an_fhs_table_agrees_point_by_point_or_is_documented(runs, tmp_path):
+def kagome_fhs():
+    """PyATB's a_fhs_scan table and QUEER's values on the same scan (fixtures)."""
     from queer.compat.generator.pyatb_files import parse_ahc
 
     table = parse_ahc((FIXTURES / "a_fhs_scan/Out/AHC/ahc.dat").read_text())
+    queer = read(FIXTURES / "a_fhs_scan_queer.json")
+    rows = np.zeros((len(queer["construction_xy"]), 3))
+    rows[:, 2] = queer["construction_xy"]
+    return table, queer, rows
+
+
+def test_an_fhs_scan_agrees_in_gaps_and_is_explained_by_the_link_schemes_in_bands(runs, tmp_path):
+    table, queer, rows = kagome_fhs()
     reference = calibration_reference("a_fhs_scan", tmp_path / "reference")
-    rows = np.asarray(table["sigma"])
-    same = template(runs, tmp_path / "same", "a_fhs_scan", sigma=rows, offsets=table["energy_eV"])
+    offsets = table["energy_eV"]
+    same = template(runs, tmp_path / "same", "a_fhs_scan", sigma=np.asarray(table["sigma"]), offsets=offsets)
     report = compare("AHC", reference, same)
     assert report["verdict"] == PASS and classes(report)["sigma_xy(E)"] == AGREE
-    moved = rows.copy()
-    moved[150:, 2] *= 0.996
-    differing = template(runs, tmp_path / "differing", "a_fhs_scan", sigma=moved, offsets=table["energy_eV"])
-    report = compare("AHC", reference, differing)
-    assert report["verdict"] == PASS_DOCUMENTED and classes(report)["sigma_xy(E)"] == DOCUMENTED
-    detail = [item for item in report["quantities"] if item["name"] == "sigma_xy(E)"][0]["detail"]
-    assert "correlation" in detail and "beyond Tier A" in detail
+    # QUEER's real values: Tier A at the 159 gapped energies, and at the 42 in bands the gap
+    # (up to 0.13 S/cm) is PyATB's link scheme, which QUEER's emulation reproduces.
+    real = template(runs, tmp_path / "real", "a_fhs_scan", sigma=rows, offsets=offsets, fhs=queer)
+    report = compare("AHC", reference, real)
+    assert report["verdict"] == PASS_DOCUMENTED and classes(report)["sigma_xy(E)"] == DOCUMENTED, (
+        render_markdown(report)
+    )
+    item = [item for item in report["quantities"] if item["name"] == "sigma_xy(E)"][0]
+    assert 0.13 < item["metric"] < 0.14 and "0 in a gap, 42 with a varying occupied rank" in item["detail"]
+    assert (
+        "start" in item["detail"] and "midpoint" in item["detail"] and "plaquette links" not in item["detail"]
+    )
     shifted = template(
-        runs, tmp_path / "shifted", "a_fhs_scan", sigma=rows, offsets=[e + 1e-3 for e in table["energy_eV"]]
+        runs, tmp_path / "shifted", "a_fhs_scan", sigma=rows, offsets=[e + 1e-3 for e in offsets]
     )
     assert classes(compare("AHC", reference, shifted))["energies"] == UNEXPLAINED
+
+
+@pytest.mark.parametrize("factor", [-1.0, 2.0, 0.0, float("nan")])
+def test_fhs_negative_controls_do_not_pass(runs, tmp_path, factor):
+    table, queer, rows = kagome_fhs()
+    reference = calibration_reference("a_fhs_scan", tmp_path / "reference")
+    wrong = template(
+        runs, tmp_path / "wrong", "a_fhs_scan", sigma=rows * factor, offsets=table["energy_eV"], fhs=queer
+    )
+    report = compare("AHC", reference, wrong)
+    assert report["verdict"] == FAIL and classes(report)["sigma_xy(E)"] == UNEXPLAINED, factor
+
+
+def test_an_fhs_gap_needs_both_link_schemes_reproduced(runs, tmp_path):
+    table, queer, rows = kagome_fhs()
+    reference = calibration_reference("a_fhs_scan", tmp_path / "reference")
+    offsets = table["energy_eV"]
+    band = queer["rank_variation"].index(True)
+    gap = queer["rank_variation"].index(False)
+    # One gapped energy off by 1e-5 S/cm: in a gap only Tier A passes.
+    moved = rows.copy()
+    moved[gap, 2] += 1e-5
+    report = compare(
+        "AHC",
+        reference,
+        template(runs, tmp_path / "gap", "a_fhs_scan", sigma=moved, offsets=offsets, fhs=queer),
+    )
+    assert report["verdict"] == FAIL and "1 in a gap" in report["quantities"][-2]["detail"]
+    # An emulation that misses PyATB's value at one band energy explains nothing.
+    missed = {**queer, "emulated_xy": list(queer["emulated_xy"])}
+    missed["emulated_xy"][band] += 1e-3
+    report = compare(
+        "AHC",
+        reference,
+        template(runs, tmp_path / "missed", "a_fhs_scan", sigma=rows, offsets=offsets, fhs=missed),
+    )
+    assert classes(report)["sigma_xy(E)"] == UNEXPLAINED
+    assert (
+        "emulation of PyATB's links misses"
+        in [i for i in report["quantities"] if i["name"] == "sigma_xy(E)"][0]["detail"]
+    )
+    # A QUEER value that its own midpoint links do not give is unexplained even inside a band.
+    strayed = rows.copy()
+    strayed[band, 2] += 0.05
+    report = compare(
+        "AHC",
+        reference,
+        template(runs, tmp_path / "strayed", "a_fhs_scan", sigma=strayed, offsets=offsets, fhs=queer),
+    )
+    assert classes(report)["sigma_xy(E)"] == UNEXPLAINED
+    assert (
+        "not its own midpoint links'"
+        in [i for i in report["quantities"] if i["name"] == "sigma_xy(E)"][0]["detail"]
+    )
+    # Without the emulation a band gap cannot be documented.
+    bare = {"rank_variation": queer["rank_variation"]}
+    report = compare(
+        "AHC",
+        reference,
+        template(runs, tmp_path / "bare", "a_fhs_scan", sigma=rows, offsets=offsets, fhs=bare),
+    )
+    assert classes(report)["sigma_xy(E)"] == UNEXPLAINED
 
 
 def test_step_names_and_reference_detection():

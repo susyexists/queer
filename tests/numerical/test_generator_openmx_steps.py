@@ -296,8 +296,85 @@ def test_the_fhs_scan_gives_the_quantized_plateau_on_pyatbs_energies(tmp_path):
     xy = np.asarray(block["sigma_S_cm"]["xy"])
     assert np.allclose(np.abs(xy), PLATEAU, rtol=1e-12) and np.all(xy == xy[0])
     assert block["sigma_S_cm"]["yz"] == [0.0] * 4 and block["at_fermi"]["xy"] == xy[2]
-    rows = np.column_stack([block["sigma_S_cm"][name] for name in ("yz", "zx", "xy")])
+    # The file holds PyATB's Cartesian construction, the physical vector on this orthogonal cell.
+    rows = np.column_stack([block["pyatb_construction_S_cm"][name] for name in ("yz", "zx", "xy")])
+    physical = np.column_stack([block["sigma_S_cm"][name] for name in ("yz", "zx", "xy")])
+    np.testing.assert_allclose(rows, physical, rtol=1e-14, atol=0)
     assert (tmp_path / "Out/AHC/ahc.dat").read_text() == ahc_scan_text(block["energy_offsets_eV"], rows)
+
+
+FHS_SCAN = {
+    "engine": "fhs",
+    "fhs_grid": [12, 12, 1],
+    "fhs_energy_window": [-0.2, 0.2],
+    "fhs_energy_points": 4,
+}
+
+
+def test_a_tilted_cell_writes_pyatbs_fhs_construction_beside_the_physical_vector(tmp_path):
+    tilted = [[2.0, 0.0, 0.0], [0.0, 2.0, 0.0], [1.5, 0.0, 10.0]]
+    code, document = execute(tmp_path, params(**FHS_SCAN), lattice=tilted)
+    assert code == EXIT_OK, document.get("error")
+    block = document["ahc"]
+    names = ("yz", "zx", "xy")
+    physical = np.column_stack([block["sigma_S_cm"][name] for name in names])
+    construction = np.column_stack([block["pyatb_construction_S_cm"][name] for name in names])
+    # The physical Hall vector is normal to the layers (b3 is parallel to a1 x a2, spacing 10 A) ...
+    assert np.allclose(np.abs(physical[:, 2]), PLATEAU, rtol=1e-12) and np.all(physical[:, :2] == 0)
+    # ... while PyATB prints C e^2/h 1e8/|a3| along a3: not the Hall vector of a tilted cell.
+    a3 = np.array(tilted[2])
+    expected = (physical[:, 2] * 10.0 / np.linalg.norm(a3))[:, None] * (a3 / np.linalg.norm(a3))[None]
+    np.testing.assert_allclose(construction, expected, rtol=1e-12, atol=1e-12)
+    assert "construction" in block["convention"]["file"]
+    assert (tmp_path / "Out/AHC/ahc.dat").read_text() == ahc_scan_text(
+        block["energy_offsets_eV"], construction
+    )
+
+
+def test_a_band_scan_records_both_link_schemes_on_the_same_eigenvectors(tmp_path):
+    from queer.compat.generator.pyatb_conventions import PYATB_E2_H, pyatb_length_ratio
+
+    scan = {**FHS_SCAN, "fhs_energy_window": [-2.5, 0.5], "fhs_energy_points": 6}
+    code, document = execute(tmp_path, params(**scan))
+    assert code == EXIT_OK, document.get("error")
+    varying = document["integration"]["fhs"]["metallic_vertex_rank_variation"]
+    assert any(varying) and not all(varying)
+    links = document["ahc"]["pyatb_emulation"]["fhs_links"]
+    assert links["directions"] == [2] and links["rank_varying_energies"] == sum(varying)
+    construction = np.asarray(document["ahc"]["pyatb_construction_S_cm"]["xy"])
+    own = np.asarray(links["queer_links_S_cm"]["xy"])
+    printed = np.asarray(links["printed_S_cm"]["xy"])
+    # QUEER's midpoint links rebuild QUEER's own FHS value at every energy.
+    np.testing.assert_allclose(own, construction, rtol=1e-10, atol=1e-10)
+    # Orbitals at the origin have no position operator: PyATB's links are the same overlaps,
+    # and its print differs only by its e^2/h and Bohr radius.
+    np.testing.assert_allclose(
+        printed, own * PYATB_E2_H / E2_H / pyatb_length_ratio(), rtol=1e-10, atol=1e-10
+    )
+    code, gapped = execute(tmp_path / "gapped", params(**FHS_SCAN))
+    assert code == EXIT_OK and gapped["ahc"]["pyatb_emulation"] is None
+
+
+@pytest.mark.parametrize("dimension", [0, 1])
+def test_the_bulk_fhs_hall_vector_does_not_depend_on_the_lattices_handedness(tmp_path, dimension):
+    scan = {**FHS_SCAN, "fhs_dimension": dimension}
+    right = execute(tmp_path / "right", params(**scan))[1]["ahc"]
+    left = execute(tmp_path / "left", params(**scan), lattice=np.diag([2.0, 2.0, -10.0]))[1]["ahc"]
+    # The same crystal described by a3 or -a3: the plaquettes of the k1-k2 plane are oriented
+    # by b1 x b2 in both, so sigma = -g e^2/h sign(det A) sum C_i b_i/2pi.
+    for key in ("sigma_S_cm", "pyatb_construction_S_cm"):
+        np.testing.assert_allclose(left[key]["xy"], right[key]["xy"], rtol=1e-12)
+    assert np.allclose(np.abs(right["sigma_S_cm"]["xy"]), PLATEAU, rtol=1e-12)
+    model = OpenMXModel.from_scfout(tmp_path / "left" / "scf.scfout")
+    bulk = ahc(
+        model,
+        grid=(12, 12, 1),
+        chemical_potentials=[0.0],
+        engine="fhs",
+        dimension=3,
+        execution=ExecutionOptions(),
+    )
+    assert np.asarray(bulk["ahc"])[0][0, 1] == pytest.approx(right["sigma_S_cm"]["xy"][2], rel=1e-12)
 
 
 def test_a_collinear_scfout_reports_pyatbs_single_channel_beside_the_physical_value(tmp_path):

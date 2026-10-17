@@ -50,7 +50,14 @@ sample the same point (both values are recorded).
   budget stops with ``queer_validation_failed``.
 - The FHS engine: QUEER's FHS plaquette scan over PyATB's energies (the
   ``fhs_energy_window`` offsets, upper end excluded). ``fhs_dimension 0`` evaluates
-  the k1-k2 plane only.
+  the k1-k2 plane only. ``sigma_S_cm`` is the physical Hall vector
+  ``-g (e^2/h) sign(det A) sum_i C_i b_i / 2 pi``; ``pyatb_construction_S_cm`` is the
+  same Chern numbers as PyATB prints them, ``sum_d (C_d e^2/h 1e8/|a_d|)
+  normalize(b_(d+1) x b_(d+2))``, which differs on a non-orthogonal cell and is what
+  ``Out/AHC/ahc.dat`` holds. Where an energy shows a varying occupied rank at
+  plaquette vertices (inside a band), ``pyatb_emulation.fhs_links`` records PyATB's
+  scan with its own link variables (``exp(i dk.r)`` to first order at the link's
+  start) beside QUEER's midpoint links, both on the same eigenvectors.
 
 **Spin.** PyATB reads only ``Hks[0]`` of a scfout without spin-orbit coupling: the
 spin-up Hamiltonian of a collinear SCF, without a spin factor for a
@@ -98,6 +105,7 @@ from .pyatb_conventions import (
     FERMI_TOLERANCE_HARTREE,
     HARTREE_EV,
     PYATB_BOHR_ANGSTROM,
+    PYATB_E2_H,
     PYATB_E_CHARGE,
     PYATB_HARTREE_EV,
     PYATB_HBAR,
@@ -105,6 +113,8 @@ from .pyatb_conventions import (
     pyatb_length_ratio,
 )
 from .pyatb_emulation import (
+    BlochTable,
+    fhs_plaquette_phases,
     gamma_nodes,
     plane_projection,
     pyatb_rule_rows,
@@ -671,9 +681,48 @@ def _budget_refusal(stage: str, error: RuntimeError, integration: Mapping[str, A
 
 
 def _fhs_vectors(model: Any, cherns: np.ndarray) -> np.ndarray:
-    """The bulk Hall vectors (S/cm) of per-plane plaquette Chern numbers, as QUEER's FHS forms them."""
+    """The bulk Hall vectors (S/cm) of per-plane plaquette Chern numbers, as QUEER's FHS forms them.
+
+    ``sigma = -g (e^2/h) sign(det A) sum_i C_i b_i / 2 pi``: the plaquettes of plane i are
+    oriented by ``b_(i+1) x b_(i+2)``, which is parallel to ``sign(det A) a_i``.
+    """
+    handedness = float(np.sign(np.linalg.det(np.asarray(model.lattice, float))))
     return (
-        -spin_degeneracy(model) * E2_H * (np.asarray(cherns, float) @ reciprocal(model)) / (2 * np.pi) * 1e8
+        -spin_degeneracy(model)
+        * E2_H
+        * handedness
+        * (np.asarray(cherns, float) @ reciprocal(model))
+        / (2 * np.pi)
+        * 1e8
+    )
+
+
+def plane_normals(model: Any) -> np.ndarray:
+    """Row d: the unit vector along ``b_(d+1) x b_(d+2)``, the normal of the d-th plane family (parallel to a_d)."""
+    rows = reciprocal(model)
+    normals = np.array([np.cross(rows[(d + 1) % 3], rows[(d + 2) % 3]) for d in range(3)])
+    return normals / np.linalg.norm(normals, axis=1)[:, None]
+
+
+def fhs_construction(cherns: Any, lengths: Any, normals: Any, e2_h: float, factor: float = 1.0) -> np.ndarray:
+    """PyATB's Cartesian FHS output: ``sum_d (factor e2_h C_d 1e8 / |a_d|) n_d`` per energy (S/cm).
+
+    ``C_d`` (per energy and plane family, PyATB's sign) is the plane-averaged plaquette
+    phase over 2 pi and ``n_d`` the family's unit normal (parallel to a_d). It equals the
+    Hall vector only for orthogonal lattice vectors; the physical vector is the dual
+    sum of :func:`_fhs_vectors`.
+    """
+    sigma = factor * e2_h * 1e8 * np.asarray(cherns, float) / np.asarray(lengths, float)
+    # Adding zero turns the -0.0 of empty plane families into 0.0 for the printed table.
+    return sigma @ np.asarray(normals, float) + 0.0
+
+
+def _pyatb_construction(model: Any, cherns: np.ndarray) -> np.ndarray:
+    """QUEER's FHS Chern numbers projected as PyATB prints them (a convention of its output file)."""
+    lengths = np.linalg.norm(np.asarray(model.lattice, float), axis=1)
+    # QUEER's C_d = -(sum of phases)/(2 pi N); PyATB's is its negative, and sigma = -g e^2/h C.
+    return fhs_construction(
+        -np.asarray(cherns, float), lengths, plane_normals(model), E2_H, spin_degeneracy(model)
     )
 
 
@@ -705,6 +754,7 @@ def _ahc_fhs(
         vectors = _vector(np.asarray(result["ahc"]))
     return {
         "sigma": vectors,
+        "pyatb_construction": _pyatb_construction(model, cherns),
         "per_k_flagged": [],
         "flagged": None,
         "integration": {
@@ -867,6 +917,79 @@ def _pyatb_refined_grid(context: OpenMXStepContext, family: str, sign: int = 1) 
     }
 
 
+FHS_LINKS_SCHEME = (
+    "PyATB's FHS engine: per plane family d the plaquettes (k, k+du, k+du+dv, k+dv), the link from k to k+dk "
+    "W(k)^+ [sum_R exp(2 pi i k.R) (S_R + i dk.r_R)] W(k+dk) (exp(i dk.r) to first order at the link's start, "
+    "the raw position operator), the leading minors without pivoting, the phase of their product at each "
+    "vertex's occupied count averaged over the vertices where the counts differ; C_d = sum phase/(2 pi N_d); "
+    "printed as sum_d (C_d e^2/h 1e8/|a_d|) normalize(b_(d+1) x b_(d+2)) with PyATB's e^2/h and Bohr radius"
+)
+# Complex N x N matrices one plaquette of the link emulation keeps alive.
+FHS_EMULATION_MATRICES = 48
+
+
+def _pyatb_fhs(
+    context: OpenMXStepContext, native: Mapping[str, Any], meta: Mapping[str, Any], varying: Sequence[bool]
+) -> dict[str, Any] | None:
+    """PyATB's FHS scan with its own link variables, beside QUEER's midpoint links on the same eigenvectors.
+
+    Evaluated on the model PyATB reads when an energy shows a varying occupied rank
+    at plaquette vertices (inside a band), the only place the two link schemes
+    differ; None otherwise. ``printed_S_cm`` is what PyATB prints (its constants)
+    and ``queer_links_S_cm`` QUEER's FHS value rebuilt from the same plaquettes
+    (QUEER's constants, PyATB's Cartesian construction, no spin factor).
+    """
+    if not any(bool(value) for value in varying or []):
+        return None
+    model = context.pyatb_model
+    size = model.nbnd
+    empty: dict[Any, Any] = {}
+    raw = context.model.data.position if context.model.data is not None else (empty, empty, empty)
+
+    def channel(blocks: Mapping[Any, Any]) -> dict[Any, Any]:
+        return {key: block[:size, :size] for key, block in blocks.items()}
+
+    overlap = BlochTable(model.overlap_blocks, size)
+    position = tuple(BlochTable(channel(axis), size) for axis in raw)
+    connection = tuple(BlochTable(axis, size) for axis in model.position_blocks)
+    grid = [int(value) for value in native["grid"]]
+    mus = np.asarray(native["chemical_potentials"], float)
+    directions = [2] if int(meta.get("fhs_dimension", 0)) == 0 else [0, 1, 2]
+    cherns = np.zeros((2, len(mus), 3))
+    for direction in directions:
+        u, v = (direction + 1) % 3, (direction + 2) % 3
+        steps = np.zeros((2, 3))
+        steps[0, u], steps[1, v] = 1.0 / grid[u], 1.0 / grid[v]
+        index = np.indices((grid[direction], grid[u], grid[v])).reshape(3, -1).T
+        origins = np.zeros((len(index), 3))
+        origins[:, direction], origins[:, u], origins[:, v] = (
+            index[:, 0] / grid[direction],
+            index[:, 1] / grid[u],
+            index[:, 2] / grid[v],
+        )
+        stage = f"AHC FHS PyATB link emulation (planes {direction})"
+        options = context.options(stage, model, len(origins), FHS_EMULATION_MATRICES)
+        function = functools.partial(fhs_plaquette_phases, model, overlap, position, connection, mus, steps)
+        parts = pmap(function, chunks(origins, options.batch_size), options)
+        cherns[:, :, direction] = np.sum(parts, axis=0) / grid[direction]
+    lengths = np.linalg.norm(np.asarray(model.lattice, float), axis=1)
+    normals = plane_normals(model)
+    printed = fhs_construction(cherns[0], lengths * pyatb_length_ratio(), normals, PYATB_E2_H)
+    queer = fhs_construction(cherns[1], lengths, normals, E2_H)
+    return {
+        "role": EMULATION_ROLE,
+        "scheme": FHS_LINKS_SCHEME,
+        "model": "spin-up channel, occupied once" if context.legacy else "the scfout's spin-orbit model",
+        "directions": directions,
+        "rank_varying_energies": int(sum(bool(value) for value in varying)),
+        "chern_vector": cherns[0].tolist(),
+        "chern_vector_queer_links": cherns[1].tolist(),
+        "printed_S_cm": _components(printed),
+        "queer_links_S_cm": _components(queer),
+        "constants": {"e2_h_S": PYATB_E2_H, "bohr_angstrom": PYATB_BOHR_ANGSTROM},
+    }
+
+
 def _emulations(**blocks: dict[str, Any] | None) -> dict[str, Any] | None:
     """The ``pyatb_emulation`` block: the emulations that ran, or None."""
     present = {name: block for name, block in blocks.items() if block is not None}
@@ -914,6 +1037,12 @@ def run_ahc(context: OpenMXStepContext) -> None:
     elif offsets is not None and 0.0 in offsets:
         at_fermi = dict(zip(AHC_COMPONENTS, vectors[list(offsets).index(0.0)].tolist()))
     computed = list(AHC_COMPONENTS) if not (fhs and int(meta.get("fhs_dimension", 0)) == 0) else ["xy"]
+    construction = np.asarray(physical["pyatb_construction"], float) if fhs else None
+    fhs_links = None
+    if fhs:
+        compared = legacy if legacy is not None else physical["integration"]
+        varying = (compared.get("fhs") or {}).get("metallic_vertex_rank_variation") or []
+        fhs_links = _pyatb_fhs(context, native, meta, varying)
     record.results["ahc"] = {
         "engine": native["engine"],
         "method": None if fhs else (0 if native["engine"] == "direct" else 1),
@@ -924,6 +1053,7 @@ def run_ahc(context: OpenMXStepContext) -> None:
         "components": list(AHC_COMPONENTS),
         "components_computed": computed,
         "sigma_S_cm": _components(vectors),
+        "pyatb_construction_S_cm": _components(construction) if construction is not None else None,
         "at_fermi": at_fermi,
         "convention": {
             "requested": meta.get("hall_convention_requested"),
@@ -932,13 +1062,19 @@ def run_ahc(context: OpenMXStepContext) -> None:
             "lattice_handedness": context.handedness,
             "export_sign": sign,
             "physical": PHYSICAL_SIGN,
-            "file": f"{AHC_FILE} holds export_sign times sigma_S_cm",
+            "file": (
+                f"{AHC_FILE} holds PyATB's Cartesian FHS construction (pyatb_construction_S_cm)"
+                if fhs
+                else f"{AHC_FILE} holds export_sign times sigma_S_cm"
+            ),
         },
         "legacy_single_channel": legacy,
         "per_k_flagged": physical["per_k_flagged"],
         "flagged": physical["flagged"],
         "raw_curvature_to_S_cm": raw_curvature_to_s_cm(context.model),
-        "pyatb_emulation": _emulations(refined_grid=_pyatb_refined_grid(context, "AHC", sign)),
+        "pyatb_emulation": _emulations(
+            refined_grid=_pyatb_refined_grid(context, "AHC", sign), fhs_links=fhs_links
+        ),
     }
     record.results["integration"] = {
         **_integration_block(meta, native, physical),
@@ -947,7 +1083,7 @@ def run_ahc(context: OpenMXStepContext) -> None:
         "execution_only": ["workers", "max_kpoint_num", "sparse_format"],
     }
     _warn_integration(context, meta, native, physical)
-    exported = sign * vectors
+    exported = sign * (construction if construction is not None else vectors)
     text = ahc_scan_text(offsets, exported) if fhs else ahc_vector_text(exported[0])
     write_text(record.workspace / AHC_FILE, text)
     record.add_output(AHC_FILE, "Anomalous Hall conductivity (PyATB layout)", "data")
@@ -995,6 +1131,8 @@ def _legacy_ahc(context: OpenMXStepContext, physical: Mapping[str, Any]) -> dict
         if integration.get("error_estimate") is not None:
             integration["error_estimate"] = integration["error_estimate"] / degeneracy
         evaluation = {**physical, "sigma": np.asarray(physical["sigma"]) / degeneracy}
+        if physical.get("pyatb_construction") is not None:
+            evaluation["pyatb_construction"] = np.asarray(physical["pyatb_construction"]) / degeneracy
         evaluation.update(per_k_flagged=listed, flagged=flagged, integration=integration)
     else:
         evaluation = _ahc_evaluate(context, single_channel_model(model), "spin-up channel")
@@ -1002,10 +1140,16 @@ def _legacy_ahc(context: OpenMXStepContext, physical: Mapping[str, Any]) -> dict
         "channel": 0,
         "reason": reason,
         "sigma_S_cm": _components(evaluation["sigma"]),
+        "pyatb_construction_S_cm": (
+            _components(evaluation["pyatb_construction"])
+            if evaluation.get("pyatb_construction") is not None
+            else None
+        ),
         "per_k_flagged": evaluation["per_k_flagged"],
         "flagged": evaluation["flagged"],
         "self_convergence": (evaluation.get("integration") or {}).get("self_convergence"),
         "error_estimate": (evaluation.get("integration") or {}).get("error_estimate"),
+        "fhs": (evaluation.get("integration") or {}).get("fhs"),
     }
 
 

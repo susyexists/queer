@@ -208,7 +208,9 @@ def ahc(
             "sign_convention": "C=-sum principal occupied-overlap phases/(2pi); sigma=-e^2/h times C",
         }
         if dimension == 3:
-            vector = -degeneracy * E2_H * (cherns @ reciprocal_vectors) / (2 * np.pi) * 1e8
+            # The plaquettes of plane i are oriented by b_(i+1) x b_(i+2), parallel to sign(det A) a_i.
+            handedness = np.sign(np.linalg.det(cell(model)))
+            vector = -degeneracy * E2_H * handedness * (cherns @ reciprocal_vectors) / (2 * np.pi) * 1e8
         else:
             normal = np.cross(reciprocal_vectors[plane[0]], reciprocal_vectors[plane[1]])
             normal /= np.linalg.norm(normal)

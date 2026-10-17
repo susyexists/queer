@@ -12,6 +12,7 @@ third-party data and is not committed. No PyATB source is included.
 | `c_direct_openmx` | the same with `hall_convention openmx` | the physical Hall sign |
 | `h_chern_fermi` | `CHERN_NUMBER`, direct, Fermi occupation, Grid 100 x 100 x 1 | the one-line Chern layout at full precision |
 | `adaptive_log` | `AHC`, adaptive integral (an earlier Generator job) | `integraton.log` and its last-generation error |
+| `a_fhs_scan_queer.json` | QUEER 1.5.0's `QUEER_AHC` run of the `a_fhs_scan` Input on the same scfout | QUEER's sigma_xy per energy (PyATB's Cartesian construction and physical), the energies with a varying occupied rank, and its emulations of PyATB's FHS links and of its own midpoint links |
 
 The first four are the calibration runs of PyATB build 60fc6b2a (16 October
 2026, 8 MPI processes) on a kagome Chern-insulator scfout with spin-orbit

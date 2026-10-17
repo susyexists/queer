@@ -7,6 +7,7 @@ import pytest
 
 from queer.compat.generator.pyatb_emulation import (
     gamma_nodes,
+    leading_minors,
     plane_projection,
     refined_sum,
     vector_projection,
@@ -130,3 +131,33 @@ def test_projections_map_the_tensor_to_its_vector_and_plane_flux():
     np.testing.assert_array_equal(vector_projection() @ tensor.ravel(), [1.0, 2.0, 3.0])
     u, w = np.array([1.0, 0.0, 0.0]), np.array([0.0, 2.0, 0.0])
     assert (plane_projection(u, w) @ tensor.ravel())[0] == pytest.approx(np.cross(u, w) @ [1.0, 2.0, 3.0])
+
+
+def test_leading_minors_are_the_unpivoted_determinants():
+    rng = np.random.default_rng(7)
+    matrices = rng.normal(size=(3, 5, 5)) + 1j * rng.normal(size=(3, 5, 5)) + 4 * np.eye(5)
+    minors = leading_minors(matrices)
+    for row, matrix in zip(minors, matrices, strict=True):
+        np.testing.assert_allclose(row, [np.linalg.det(matrix[:n, :n]) for n in range(1, 6)], rtol=1e-12)
+    # A zero pivot zeroes every later minor, as PyATB's elimination does, even where the
+    # pivoted determinant is not zero.
+    np.testing.assert_array_equal(leading_minors(np.array([[[0.0, 1.0], [1.0, 0.0]]])), [[0.0, 0.0]])
+
+
+def test_bloch_tables_sum_their_sparse_blocks():
+    from scipy.sparse import csr_matrix
+
+    from queer.compat.generator.pyatb_emulation import BlochTable
+
+    rng = np.random.default_rng(3)
+    blocks = {
+        key: csr_matrix(rng.normal(size=(3, 3)) * (rng.random((3, 3)) > 0.4))
+        for key in [(0, 0, 0), (1, 0, 0), (-1, 0, 0), (0, -1, 2)]
+    }
+    points = np.array([[0.1, -0.3, 0.2], [0.5, 0.25, 0.0], [0.0, 0.0, 0.0]])
+    table = BlochTable(blocks, 3)
+    for point, value in zip(points, table.at(points), strict=True):
+        expected = sum(
+            np.exp(2j * np.pi * np.dot(point, key)) * block.toarray() for key, block in blocks.items()
+        )
+        np.testing.assert_allclose(value, expected, atol=1e-13)

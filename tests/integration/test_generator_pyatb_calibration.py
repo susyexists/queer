@@ -20,6 +20,7 @@ import os
 import shutil
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from queer.compat.generator.openmx_params import params_from_pyatb_input
@@ -32,7 +33,7 @@ from queer.compat.generator.parity import (
     compare,
     render_markdown,
 )
-from queer.compat.generator.pyatb_files import read_input
+from queer.compat.generator.pyatb_files import parse_ahc, read_input
 from queer.compat.generator.results import EXIT_OK
 from queer.compat.generator.runner import run
 
@@ -41,7 +42,7 @@ DATA = Path(os.environ.get("QUEER_PYATB_CALIBRATION_DIR") or ROOT / "data" / "py
 SCFOUT_SHA256 = "9309730433e6b54d439aad25ca3dbcc57eb75c705ad1684cdfb310be8b6ea0cb"
 # Case: (expected verdicts, expected class of every compared sigma or Chern quantity).
 CASES = {
-    "a_fhs_scan": ({PASS, PASS_DOCUMENTED}, {AGREE, DOCUMENTED}),
+    "a_fhs_scan": ({PASS_DOCUMENTED}, {AGREE, DOCUMENTED}),
     "b_direct_pyatb": ({PASS}, {AFTER_CONVENTION}),
     "c_direct_openmx": ({PASS}, {AGREE}),
     "d_kubo_pyatb": ({PASS}, {AFTER_CONVENTION}),
@@ -109,6 +110,12 @@ def test_queer_reproduces_the_pyatb_calibration_case(case, tmp_path):
         emulation = document["ahc"]["pyatb_emulation"]["refined_grid"]
         assert emulation["flagged"] == REFINED_NODES[case]
         assert {item["name"]: item["class"] for item in report["quantities"]}["pyatb_refined_grid"] == AGREE
+    if case == "a_fhs_scan":
+        # QUEER's emulation of PyATB's FHS links reproduces PyATB's table at every energy (Tier A).
+        table = parse_ahc((reference / "Out/AHC/ahc.dat").read_text())
+        printed = np.asarray(table["sigma"])[:, 2]
+        emulated = np.asarray(document["ahc"]["pyatb_emulation"]["fhs_links"]["printed_S_cm"]["xy"])
+        assert np.all(np.abs(printed - emulated) <= 2e-7 * np.abs(emulated) + 5e-7)
 
 
 def _relabel(text, replacements):

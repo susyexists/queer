@@ -504,3 +504,39 @@ canonical = "queer.compat.generator.pyatb_emulation:refined_sum"
 specialized_backends = ["queer.compat.generator.pyatb_emulation:gamma_nodes", "queer.compat.generator.openmx_steps:_pyatb_refined_grid"]
 source_references = ["docs/generator_services.md#openmx-steps-of-the-pyatb-counterpart"]
 independent_tests = ["tests/unit/test_generator_pyatb_emulation.py::test_the_refined_sum_is_pyatbs_rule_node_by_node", "tests/unit/test_generator_pyatb_emulation.py::test_a_1x1x1_subgrid_still_moves_a_flagged_node_half_a_cell", "tests/numerical/test_generator_parity_pyatb.py::test_a_refining_grid_is_judged_with_both_codes_error_estimates", "tests/integration/test_generator_pyatb_calibration.py::test_a_refined_metal_is_bounded_by_both_codes_discretisation_errors"]
+
+[[equations]]
+id = "response.fhs_bulk_hall_vector"
+expression = "sigma = -g*(e^2/h)*sign(det A)*sum_i C_i*b_i/(2*pi)*1e8; C_i = -(1/(2*pi*N_i))*sum over the planes of family i of the plaquette phases, plaquettes oriented by b_(i+1) x b_(i+2)"
+input_units = "b_i: inverse angstrom (with 2 pi); A: lattice rows in angstrom"
+output_units = "S/cm (axial vector yz, zx, xy)"
+assumptions = ["Plaquettes (k, k+du, k+du+dv, k+dv) along b_(i+1), b_(i+2), parallel to sign(det A) a_i", "Zero temperature; principal-branch plaquette phases"]
+conventions = ["A crystal described by a left-handed lattice has the same Hall vector as by a right-handed one", "QUEER's physical estimator; PyATB's printed construction is response.pyatb_fhs_construction"]
+canonical = "queer.observables.integrated:ahc"
+specialized_backends = ["queer.compat.generator.openmx_steps:_fhs_vectors"]
+source_references = ["docs/generator_services.md#openmx-steps-of-the-pyatb-counterpart", "https://doi.org/10.1143/JPSJ.74.1674"]
+independent_tests = ["tests/numerical/test_generator_openmx_steps.py::test_the_bulk_fhs_hall_vector_does_not_depend_on_the_lattices_handedness"]
+
+[[equations]]
+id = "response.pyatb_fhs_construction"
+expression = "F = sum_d (C_d*e^2/h*1e8/|a_d|)*normalize(b_(d+1) x b_(d+2)), C_d = (1/(2*pi*N_d))*sum of the plaquette phases of family d (PyATB's sign)"
+input_units = "a_d: angstrom; e^2/h: siemens"
+output_units = "S/cm"
+assumptions = ["normalize(b_(d+1) x b_(d+2)) is parallel to sign(det A) a_d", "Equal to the physical Hall vector only when the lattice vectors are orthogonal"]
+conventions = ["Written to Out/AHC/ahc.dat by QUEER's FHS engine (a convention of PyATB's output), recorded beside sigma_S_cm as pyatb_construction_S_cm", "Compared with PyATB's table as agree_after_convention where it differs from the physical vector"]
+canonical = "queer.compat.generator.openmx_steps:fhs_construction"
+specialized_backends = ["queer.compat.generator.openmx_steps:plane_normals", "queer.compat.generator.openmx_steps:_pyatb_construction"]
+source_references = ["docs/generator_services.md#openmx-steps-of-the-pyatb-counterpart"]
+independent_tests = ["tests/numerical/test_generator_openmx_steps.py::test_a_tilted_cell_writes_pyatbs_fhs_construction_beside_the_physical_vector", "tests/numerical/test_generator_parity_pyatb.py::test_pyatbs_fhs_construction_is_compared_after_convention_on_a_tilted_cell"]
+
+[[equations]]
+id = "response.pyatb_fhs_links"
+expression = "U_link(k -> k+dk) = W(k)^+ [sum_R exp(2 pi i k.R) (S_R + i dk.r_R)] W(k+dk) (PyATB) or W(k)^+ [S(m) - i dk.A(m)] W(k+dk), m = k + dk/2, A = (r(m) + r(m)^+)/2 (QUEER); phase_n = arg prod_links det(U[:n, :n]); a plaquette takes phase_n at the vertices' common occupied count n, else the mean over its four vertices"
+input_units = "dk: inverse angstrom; r_R: angstrom (the raw scfout position operator for PyATB's links)"
+output_units = "dimensionless phases; C_d and S/cm as response.pyatb_fhs_construction"
+assumptions = ["PyATB's determinants are leading minors by elimination without pivoting; QUEER's are pivoted", "Both schemes use the same eigenvectors of the model PyATB reads"]
+conventions = ["A comparison diagnostic in pyatb_emulation.fhs_links, evaluated where an energy shows a varying occupied rank at plaquette vertices", "The schemes agree on an integer in a gap and differ inside bands"]
+canonical = "queer.compat.generator.pyatb_emulation:fhs_plaquette_phases"
+specialized_backends = ["queer.compat.generator.pyatb_emulation:leading_minors", "queer.compat.generator.pyatb_emulation:BlochTable", "queer.compat.generator.openmx_steps:_pyatb_fhs"]
+source_references = ["docs/generator_services.md#openmx-steps-of-the-pyatb-counterpart", "https://doi.org/10.1103/PhysRevB.107.024404"]
+independent_tests = ["tests/numerical/test_generator_openmx_steps.py::test_a_band_scan_records_both_link_schemes_on_the_same_eigenvectors", "tests/numerical/test_generator_parity_pyatb.py::test_an_fhs_scan_agrees_in_gaps_and_is_explained_by_the_link_schemes_in_bands", "tests/numerical/test_generator_parity_pyatb.py::test_an_fhs_gap_needs_both_link_schemes_reproduced", "tests/unit/test_generator_pyatb_emulation.py::test_leading_minors_are_the_unpivoted_determinants"]

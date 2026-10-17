@@ -58,10 +58,18 @@ single-channel").
   ``pyatb_refined_grid``; otherwise ``differs_unexplained``). Without ``e_Q`` or
   ``e_P`` the run is ``not_comparable`` (run with the refinement off for Tier A,
   or with ``self_convergence``).
-- *FHS scans*: the energies must match to the printed decimals; each component
-  is compared point by point, ``agree`` when every point meets Tier A and
-  ``differs_documented`` with the measured largest gap otherwise (the two codes
-  build plaquette links differently, see the documentation).
+- *FHS scans*: the energies must match to the printed decimals and PyATB's table
+  is compared with QUEER's FHS Chern numbers in PyATB's Cartesian construction
+  (``pyatb_construction_S_cm``; ``agree_after_convention`` where it differs from the
+  physical vector, on a non-orthogonal cell). At every energy where no plaquette
+  vertex of QUEER's scan changes its occupied rank (a gap) each point must meet
+  Tier A. Inside a band the two codes' plaquette links differ (PyATB expands
+  ``exp(i dk.r)`` to first order at the link's start, QUEER at its midpoint): a gap
+  there is ``differs_documented`` with its measured size only when QUEER's
+  emulation of PyATB's links reproduces PyATB's value and QUEER's own midpoint
+  links on the same eigenvectors reproduce QUEER's, each within Tier A, and
+  ``differs_unexplained`` otherwise. A value that is not finite meets no
+  tolerance.
 - *Chern numbers*: on a gapped plane where both values lie within 0.05 of an
   integer the integers must be equal; otherwise the floats meet Tier A with a
   1e-9 floor (and Tier B when the integral refines).
@@ -928,7 +936,29 @@ class _PyatbComparison:
                 detail + "; the emulation does not reproduce PyATB, so its e_P is not used",
             )
 
+    def rank_variation(self, count: int) -> np.ndarray:
+        """Per energy, whether QUEER's FHS saw the occupied rank vary across plaquette vertices (a band)."""
+        if self.legacy:
+            facts = (self.compared_block().get("fhs") or {}).get("metallic_vertex_rank_variation")
+        else:
+            facts = (self.candidate.block("integration").get("fhs") or {}).get(
+                "metallic_vertex_rank_variation"
+            )
+        flags = np.zeros(count, bool) if facts is None else np.asarray(facts, bool)
+        if flags.shape != (count,):
+            raise ValueError("the candidate's FHS rank-variation flags do not match its energies")
+        return flags
+
     def compare_scan(self, product: Mapping[str, Any], sigma: Mapping[str, Any]) -> None:
+        """PyATB's FHS table against QUEER's, energy by energy.
+
+        Where no plaquette vertex changes its occupied rank (a gap) the two codes'
+        plaquette sums are the same integer and every energy must meet Tier A.
+        Inside a band the link schemes differ: there the gap is documented with its
+        measured size when QUEER's emulation of PyATB's links reproduces PyATB's
+        value and QUEER's own links reproduce QUEER's, each within Tier A, and
+        unexplained otherwise. A value that is not finite is beyond any tolerance.
+        """
         if product.get("format") != "scan":
             self.quantity("sigma", UNEXPLAINED, detail="the reference holds one AHC vector, not an FHS table")
             return
@@ -939,33 +969,96 @@ class _PyatbComparison:
         ):
             self.quantity("energies", UNEXPLAINED, detail="the FHS energy grids differ")
             return
+        block = self.compared_block()
+        construction = block.get("pyatb_construction_S_cm") or sigma
+        varying = self.rank_variation(len(energies))
+        emulation = (self.candidate.block("ahc").get("pyatb_emulation") or {}).get("fhs_links")
         reference = np.asarray(product["sigma"], float)
         for index, component in enumerate(AHC_COMPONENTS):
-            values = np.asarray(sigma[component], float)
-            difference = np.abs(reference[:, index] - values)
+            values = np.asarray(construction[component], float)
+            physical = np.asarray(sigma[component], float)
+            printed = reference[:, index]
+            difference = np.abs(printed - values)
             tolerance = TIER_A_RELATIVE * np.abs(values) + AHC_FLOOR_S_CM
-            worst = int(np.argmax(difference - tolerance))
-            beyond = int(np.sum(difference > tolerance))
+            beyond = ~(difference <= tolerance)
+            finite = np.where(np.isfinite(difference), difference, np.inf)
+            worst = int(np.argmax(finite))
+            largest = float(finite[worst]) if len(finite) else 0.0
             detail = (
-                f"largest gap {difference.max():.6g} S/cm at E-E_F {energies[int(np.argmax(difference))]:+.6f} eV; "
-                f"{beyond} of {len(values)} energies beyond Tier A"
+                f"largest gap {largest:.6g} S/cm at E-E_F {energies[worst]:+.6f} eV; {int(beyond.sum())} of "
+                f"{len(values)} energies beyond Tier A ({int((beyond & ~varying).sum())} in a gap, "
+                f"{int((beyond & varying).sum())} with a varying occupied rank)"
             )
-            spread = float(np.std(values)) * float(np.std(reference[:, index]))
-            if spread > 0:
-                correlation = float(np.corrcoef(values, reference[:, index])[0, 1])
-                detail += f"; correlation {correlation:.6f}"
+            if (
+                np.isfinite(values).all()
+                and np.isfinite(printed).all()
+                and np.std(values) * np.std(printed) > 0
+            ):
+                detail += f"; correlation {float(np.corrcoef(values, printed)[0, 1]):.6f}"
+            converted = self.legacy or not np.allclose(values, physical, rtol=1e-12, atol=1e-12)
+            if converted and not self.legacy:
+                detail += "; PyATB's Cartesian construction of the plane Chern numbers (non-orthogonal cell)"
             name = f"sigma_{component}(E)"
-            if beyond == 0:
-                kind = AFTER_CONVENTION if self.legacy else AGREE
-                self.quantity(name, kind, float(difference.max()), float(tolerance[worst]), detail)
-            else:
+            tolerance_worst = float(tolerance[worst]) if np.isfinite(tolerance[worst]) else None
+            if (beyond & ~varying).any():
                 self.quantity(
                     name,
-                    DOCUMENTED,
-                    float(difference.max()),
-                    float(tolerance[worst]),
-                    detail + " (FHS plaquette links differ between the codes)",
+                    UNEXPLAINED,
+                    largest,
+                    tolerance_worst,
+                    detail + "; in a gap both codes sum the same integer plaquette fluxes",
                 )
+                continue
+            if not beyond.any():
+                self.quantity(
+                    name, AFTER_CONVENTION if converted else AGREE, largest, tolerance_worst, detail
+                )
+                continue
+            self.quantity(name, *self.explain_links(emulation, component, printed, values, varying, detail))
+
+    def explain_links(
+        self,
+        emulation: Mapping[str, Any] | None,
+        component: str,
+        printed: np.ndarray,
+        values: np.ndarray,
+        varying: np.ndarray,
+        detail: str,
+    ) -> tuple[str, float, float | None, str]:
+        """The class of a band gap: documented when both link schemes are reproduced at every varying energy."""
+        difference = np.abs(printed - values)
+        largest = float(np.max(np.where(np.isfinite(difference), difference, np.inf)[varying], initial=0.0))
+        if emulation is None:
+            return UNEXPLAINED, largest, None, detail + "; no emulation of PyATB's FHS links was recorded"
+        emulated = np.asarray(emulation["printed_S_cm"][component], float)
+        own = np.asarray(emulation["queer_links_S_cm"][component], float)
+        fidelity = np.abs(printed - emulated)
+        consistency = np.abs(values - own)
+        missed = varying & ~(fidelity <= TIER_A_RELATIVE * np.abs(emulated) + AHC_FLOOR_S_CM)
+        strayed = varying & ~(consistency <= TIER_A_RELATIVE * np.abs(own) + AHC_FLOOR_S_CM)
+        scheme = np.abs(emulated - own)[varying]
+        if missed.any() or strayed.any():
+            why = []
+            if missed.any():
+                residual = float(np.max(np.where(np.isfinite(fidelity), fidelity, np.inf)[missed]))
+                why.append(
+                    f"QUEER's emulation of PyATB's links misses PyATB's value at {int(missed.sum())} energies "
+                    f"(by up to {residual:.3g} S/cm)"
+                )
+            if strayed.any():
+                residual = float(np.max(np.where(np.isfinite(consistency), consistency, np.inf)[strayed]))
+                why.append(
+                    f"QUEER's value is not its own midpoint links' at {int(strayed.sum())} energies "
+                    f"(by up to {residual:.3g} S/cm)"
+                )
+            return UNEXPLAINED, largest, None, detail + "; " + "; ".join(why)
+        explained = (
+            f"; inside bands ({int(varying.sum())} energies with a varying occupied rank) PyATB's links, exp(i dk.r) "
+            f"to first order at the link's start, and QUEER's midpoint links differ by up to "
+            f"{float(np.max(scheme, initial=0.0)):.6g} S/cm on the same eigenvectors; QUEER's emulation "
+            f"reproduces PyATB's values within Tier A (up to {float(np.max(fidelity[varying], initial=0.0)):.3g} S/cm)"
+        )
+        return DOCUMENTED, largest, None, detail + explained
 
     def compare_chern(self) -> None:
         block = self.compared_block()
@@ -1044,7 +1137,10 @@ class _PyatbComparison:
                 f"{CHERN_FILE} holds {product['value']!r}",
             )
             return
-        sigma = self.candidate.block("ahc").get("sigma_S_cm") or {}
+        block = self.candidate.block("ahc")
+        sigma = (block.get("pyatb_construction_S_cm") if block.get("engine") == "fhs" else None) or (
+            block.get("sigma_S_cm") or {}
+        )
         physical = np.array([sigma[name] for name in AHC_COMPONENTS], float).T
         written = np.atleast_2d(np.asarray(product["sigma"], float))
         if written.shape != physical.shape:
@@ -1058,7 +1154,9 @@ class _PyatbComparison:
             kind,
             difference,
             tolerance,
-            f"{AHC_FILE} holds {self.sign:+d} x the physical value (sign table)",
+            f"{AHC_FILE} holds {self.sign:+d} x the "
+            + ("FHS construction" if block.get("engine") == "fhs" else "physical value")
+            + " (sign table)",
         )
 
     # ------------------------------------------------------------- driver

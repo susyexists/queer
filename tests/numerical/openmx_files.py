@@ -101,9 +101,14 @@ def write_scfout_model(
     return path
 
 
-def qwz_spinor_scfout(path, *, mass=1.0, hopping=1.0, coupling=1.0, chemp_eV=0.0, a=2.0, c=10.0):
-    """The QWZ model on a square lattice (a, c in Å) as one spinor orbital; returns the path."""
-    lattice = np.diag([a, a, c])
+def qwz_spinor_scfout(
+    path, *, mass=1.0, hopping=1.0, coupling=1.0, chemp_eV=0.0, a=2.0, c=10.0, lattice=None
+):
+    """The QWZ model on a square lattice (a, c in Å) as one spinor orbital; returns the path.
+
+    ``lattice`` (rows in Å) replaces ``diag(a, a, c)``: the hoppings stay along a1 and a2.
+    """
+    lattice = np.diag([a, a, c]) if lattice is None else np.asarray(lattice, float)
     uu = np.array([mass, hopping / 2, hopping / 2, hopping / 2, hopping / 2])
     up_down_real = np.array([0.0, 0.0, 0.0, -coupling / 2, coupling / 2])
     up_down_imaginary = np.array([0.0, -coupling / 2, coupling / 2, 0.0, 0.0])
