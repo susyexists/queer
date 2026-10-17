@@ -532,17 +532,32 @@ node is still replaced by the node half a cell below it.
 **Integration.** A Grid with the refinement off is the plain Gamma-origin sum,
 evaluated point by point with the functions `queer.observables.integrated.ahc`
 sums (the same result to the last bit); each point's occupation facts give the
-flagged set `F`: points with a level within `delta_EF` of E_F, or an occupied-empty
-pair in one spin channel closer than 1e-4 eV, where `delta_EF = 1e-6 eV *
-HARTREE_EV / 27.211324570273` (the Fermi-energy agreement allowed between the
-codes) `+ max(1e-8 eV, degeneracy tolerance)`. `per_k_flagged` lists each point of
-`F` with its contribution `c_k` (S/cm per component; dimensionless for a Chern
-number), the largest first. A refining Grid runs QUEER's threshold quadrature and an
-Adaptive integral QUEER's cubature with PyATB's tolerances (`absolute_error` in
-S/cm). Their nodes differ from PyATB's, so their comparison needs
-`self_convergence: true`, which records `e_Q = |sigma(N) - sigma(2N)|` (the grid
-doubled on its active axes; 4 or 8 times the cost); a cubature also records its own
-embedded error estimate. Their budgets come from the request and the job's memory
+flagged set `F`: points with a level within `delta_EF` of E_F and, for the direct
+engine, an occupied-empty pair in one spin channel closer than 1e-4 eV, where
+`delta_EF = 1e-6 eV * HARTREE_EV / 27.211324570273` (the Fermi-energy agreement
+allowed between the codes) `+ max(1e-8 eV, degeneracy tolerance)`. PyATB's direct
+engine sets the coefficient derivative of such a pair to zero (`get_D`); its Kubo
+engine sums every occupied-empty pair with no cut, so Kubo pairs are not flagged.
+`per_k_flagged` lists each point of `F` (the largest first) with its contribution
+`c_k` (S/cm per component; dimensionless for a Chern number), `c_pyatb_rule` (the
+contribution with PyATB's cut, evaluated with QUEER's per-k functions),
+`flip_allowance` (the curvature of the degenerate blocks within `delta_EF`, which
+either code may occupy) and `allowance = |c_k - c_pyatb_rule| + flip_allowance`;
+`flagged` sums them (`pair_shift`, `flip_allowance`, `allowance`). A refining Grid
+runs QUEER's threshold quadrature and an Adaptive integral QUEER's cubature with
+PyATB's tolerances (`absolute_error` in S/cm). Their nodes differ from PyATB's, so
+their comparison needs `self_convergence: true`, which records `e_Q = |sigma(N) -
+sigma(2N)|` (the grid doubled on its active axes; 4 or 8 times the cost); a
+cubature also records its own embedded error estimate. PyATB writes no error
+estimate for a Grid, so with `self_convergence` a refining Grid also records
+`pyatb_emulation.refined_grid`: PyATB's own refined sum, evaluated with QUEER's
+per-k curvature on the model PyATB reads (Gamma-origin nodes; a node whose
+occupied curvature norm, in Å² on PyATB's Bohr radius, reaches the threshold is
+replaced by the `adaptive_grid` sub-grid starting half a coarse cell below it;
+PyATB's pair cut at flagged points; PyATB's e, ħ and Bohr radius) on the grid and
+its double: `printed_S_cm`, `printed_doubled_S_cm`, `e_P_S_cm` (their difference,
+PyATB's discretisation error), the refined node counts, the threshold ties and the
+occupation windows. Their budgets come from the request and the job's memory
 (cgroup-aware, as for the Wannier steps): the quadrature keeps about 1 kB per cell,
 so it may hold `0.5 * 0.6 * available memory / 1024` cells. A threshold quadrature
 gets `max_cells = min(that, coarse cells x sub-grid cells)` and enough points for
@@ -564,12 +579,17 @@ plans), `model` (`scfout_sha256`, `spin_mode`, `spin_p_switch`, `nspin`,
 `fermi_energy` sampled, `fermi_source`, `fermi_energy_pyatb_eV`, `chemp_hartree`,
 both Hartree values, the lattice and volume), `ahc` (`mu_eV`, `mu_pyatb_eV`,
 `energy_offsets_eV`, `sigma_S_cm {yz, zx, xy}` per energy, `at_fermi`,
-`convention {requested, resolved, export_sign}`, `legacy_single_channel`,
-`per_k_flagged`, `flagged`, `raw_curvature_to_S_cm`) or `chern` (`value`, `integer`,
-`gapped`, `method`, `integrate_mode`, `occupied_bands`, `plane`, `flux`,
-`legacy_single_channel`, `per_k_flagged`, `flagged`), `integration` (mode,
-refinement, grid, threshold in Å², node placement, points, error estimate,
-`self_convergence`), `warnings` with their `warning_codes` and `outputs`. The
+`convention {requested, resolved, sign_table, lattice_handedness, export_sign}`,
+`legacy_single_channel`, `per_k_flagged`, `flagged`, `raw_curvature_to_S_cm`,
+`pyatb_emulation`) or `chern` (`value`, `integer`, `gapped`, `method`,
+`integrate_mode`, `occupied_bands`, `plane`, `flux`, `legacy_single_channel`,
+`per_k_flagged`, `flagged`, `pyatb_emulation`), `integration` (mode, refinement,
+grid, threshold in Å², node placement, points, error estimate, `budget`,
+`self_convergence`), `warnings` with their `warning_codes` and `outputs`.
+`pyatb_emulation` holds comparison diagnostics only: PyATB's own schemes evaluated
+with QUEER's per-k functions, recorded so a parity comparison can bound PyATB's
+error or explain a difference. QUEER keeps its physical estimators as the result
+(`sigma_S_cm`, `chern.value`) and never reports an emulated legacy value as one. The
 workspace also receives PyATB's `Out/AHC/ahc.dat` or `Out/Chern_Num/chern_number.dat`
 in PyATB's layout and requested sign, and neither `pyatb_results.json` nor
 `manifest.json`. Failures write the same document with `status: failed` and
@@ -607,15 +627,21 @@ coupling, with `legacy_single_channel` (`agree_after_convention`):
 
 | Tier | When | Rule per component |
 |---|---|---|
-| A | Grid with the refinement off in both runs | `abs(d sigma) <= 2e-7 abs(sigma) + sum_F abs(c_k) + 5e-7 S/cm` |
-| B | a Grid threshold below 1e30, or Adaptive | outside Tier A, `differs_documented` only if `abs(d sigma) <= 3 max(e_Q, e_P)`; without `e_Q`, `not_comparable` |
+| A | Grid with the refinement off in both runs | `abs(d sigma) <= base + sum_F flip_allowance`, `base = 2e-7 abs(sigma) + 5e-7 S/cm`; PyATB equal to QUEER's value with PyATB's pair cut at the flagged points (`sigma - pair_shift`) within the same bound is `differs_documented`, naming the points; agreement that relies on an allowance above `base` is `differs_documented`, never `agree` |
+| B | a Grid threshold below 1e30, or Adaptive | outside Tier A, `differs_documented` only if `abs(d sigma) <= 3 max(e_Q, e_P)`; `e_P` from `integraton.log` (Adaptive) or from QUEER's emulation of PyATB's refined Grid sum, used only when it reproduces PyATB's printed value within Tier A (`pyatb_refined_grid`, else `differs_unexplained`); without `e_Q` or `e_P`, `not_comparable` |
 | FHS | the FHS engine | the energies equal to the printed six decimals; `agree` when every energy meets Tier A, else `differs_documented` with the largest gap and the correlation |
 | Chern | gapped plane, both values within 0.05 of an integer | the integers equal; otherwise the floats meet Tier A with a 1e-9 floor (Tier B when refining) |
 
 2e-7 covers the two codes' physical constants (PyATB's e and ħ differ from CODATA's
-by up to 1.8e-7 in e²/ħ) and 5e-7 S/cm the six decimals PyATB prints. `e_P` is
-PyATB's last-generation error in `integraton.log`, converted with
-`raw_curvature_to_S_cm`. The candidate's own product file must hold what its
+by up to 1.8e-7 in e²/ħ) and 5e-7 S/cm the six decimals PyATB prints. For an
+Adaptive integral `e_P` is PyATB's last-generation error in `integraton.log`,
+converted with `raw_curvature_to_S_cm`. For a refined Grid it is `|sigma_E(N) -
+sigma_E(2N)|` of the emulation; `|sigma_P - sigma_E(N)|` is its fidelity, reported
+with the refined node counts of both. A refined Grid without `self_convergence`
+has neither estimate and is `not_comparable`: run it with the refinement off
+(`adaptive_grid_threshold 1e30`) for Tier A, or set `self_convergence`. The pair
+cut is applied as an exact shift rather than a window of its size, so a wrong
+candidate cannot pass where the cut points dominate sigma. The candidate's own product file must hold what its
 document says. Two failed runs pass when their failures are equivalent: PyATB's
 are classified from its logs, Slurm's `slurm-*.err` and `slurm-*.out` included
 (the Generator's batch script does not redirect PyATB's output; an nspin conflict
@@ -629,16 +655,27 @@ scfout; E_F -2.35 eV on its sigma_xy plateau, -2.12 eV in a band, -2.60 eV below
 it) every Tier A case passes, direct and Kubo, in each convention: QUEER's 38.740461
 and 33.739453 S/cm (direct; plateau and metal) against PyATB's 38.740468 and
 33.739459 are the constant 1.7e-7 of the physical constants. The Chern numbers are
--1.0000000000000013 (QUEER) and -0.9999999999999967 (PyATB). Refined Grids (thresholds 10 and 20 Å²,
-2 x 2 sub-grids) are `differs_documented`: |d sigma| 0.0096 and 0.0090 S/cm within
-3 e_Q (e_Q 0.0048 and 0.0044 S/cm). The FHS scan (201 energies) agrees to Tier A
+-1.0000000000000013 (QUEER) and -0.9999999999999967 (PyATB). On the refined Grids
+(thresholds 10 and 20 Å², 2 x 2 sub-grids) PyATB refines the nodes whose occupied
+curvature vector has a norm of at least the threshold in Å² (raw, before the
+prefactor and sign): 1757 and 471 nodes, which QUEER's emulation of its sum
+reproduces exactly, printing -38.724467275 and -38.725572875 S/cm (PyATB:
+-38.724467 and -38.725573). PyATB's own grid error is e_P 0.0120 and 0.0112 S/cm,
+larger than QUEER's e_Q (0.0048 and 0.0044 S/cm; QUEER's midpoint quadrature
+refines 1754 and 460 cells), so both are `differs_documented` within 3 max(e_Q,
+e_P) (|d sigma| 0.0096 and 0.0090 S/cm). On the metal (E_F -2.12 eV) PyATB's
+plain 100 x 100 Grid relabelled to threshold 100 Å² (no node reaches it; the largest
+norm is 21.5 Å²) prints 33.739459 S/cm, 0.0174 S/cm from QUEER's midpoint
+quadrature (33.722013): 100 times QUEER's e_Q (1.7e-4 S/cm), so the rule without
+PyATB's error failed this correct run; PyATB's own e_P (0.0123 S/cm; the emulation
+reproduces its print to 1.9e-7) documents it. The FHS scan (201 energies) agrees to Tier A
 at the 159 energies in a gap; at the 42 energies inside a band QUEER's FHS stays
 within 0.002-0.04 S/cm of the direct Fermi-sea sum on the same grid while PyATB's
 lies 0.07-0.13 S/cm above it (correlation 0.999998): PyATB builds its plaquette
 links from a first-order expansion of exp(i dk.r) at the link's start, QUEER at its
 midpoint, and the difference shows only where the occupied rank changes across
 plaquettes, inside a band. `tests/integration/test_generator_pyatb_calibration.py` replays the
-twelve cases with `QUEER_PYATB_CALIBRATION=1`.
+twelve cases and the relabelled metal with `QUEER_PYATB_CALIBRATION=1`.
 
 ### Replaying saved response calculations
 

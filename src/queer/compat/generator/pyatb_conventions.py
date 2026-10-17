@@ -34,11 +34,19 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from ...physics.constants import BOHR_ANGSTROM as _CODATA_BOHR_ANGSTROM
 from ...physics.constants import HARTREE_EV as _CODATA_HARTREE_EV
 
 # PyATB's OpenMX reader: Hartree -> eV and Bohr -> Angstrom.
 PYATB_HARTREE_EV = 27.211324570273
 PYATB_BOHR_ANGSTROM = 0.52917721
+# PyATB's charge and reduced Planck constant (SI) in its direct/Kubo prefactor, its
+# e^2/h (S) in the FHS engine, and the threshold below which its direct engine
+# zeroes the coefficient derivative of a same-channel pair (eV).
+PYATB_E_CHARGE = 1.60217662e-19
+PYATB_HBAR = 1.054571628e-34
+PYATB_E2_H = 3.874046e-5
+PYATB_DEGENERATE_EV = 1e-4
 # PyATB's Rydberg -> eV for an explicit ``fermi_energy_unit Ry``.
 PYATB_RYDBERG_EV = 13.605698066
 # QUEER's Hartree -> eV (CODATA), the scale of every QUEER energy.
@@ -50,6 +58,11 @@ REFINEMENT_OFF_THRESHOLD = 1e30
 # The E_F agreement rule: the two codes' Fermi energies, each in Hartree on its
 # own scale, may differ by the six decimals PyATB prints (1e-6 eV of its scale).
 FERMI_TOLERANCE_HARTREE = 1e-6 / PYATB_HARTREE_EV
+
+
+def pyatb_length_ratio() -> float:
+    """PyATB's Angstrom per QUEER's: both read the scfout in Bohr, with different Bohr radii."""
+    return PYATB_BOHR_ANGSTROM / float(_CODATA_BOHR_ANGSTROM)
 
 
 def queer_energy(pyatb_energy_eV: float) -> float:

@@ -208,27 +208,131 @@ def test_the_single_channel_of_a_collinear_run_is_compared_after_convention(runs
     assert {c for n, c in classes(report).items() if n.startswith("sigma")} == {AFTER_CONVENTION}
 
 
-def test_a_refining_grid_is_documented_within_its_error_estimate(runs, tmp_path):
+def test_a_refining_grid_is_judged_with_both_codes_error_estimates(runs, tmp_path):
     document = read(runs["refining"] / "queer_results.json")
-    physical = document["ahc"]["sigma_S_cm"]["xy"][0]
-    e_q = document["integration"]["self_convergence"]["e_Q"][2]
-    assert e_q > 1e-6
-    shifted = [0.0, 0.0, physical + 2 * e_q]
+    emulation = document["ahc"]["pyatb_emulation"]["refined_grid"]
+    # threshold 0 refines every node: PyATB's sum is then its 2 x 2 sub-grids of every node.
+    assert emulation["flagged"] == 36 and emulation["flagged_doubled"] == 144
+    assert emulation["grid"] == [6, 6, 1] and emulation["doubled_grid"] == [12, 12, 1]
+    printed = emulation["printed_S_cm"]
+    e_p = emulation["e_P_S_cm"][2]
+    assert e_p == pytest.approx(abs(printed[2] - emulation["printed_doubled_S_cm"][2]))
+    # PyATB printing its own refined sum (as QUEER emulates it) is documented within 3 max(e_Q, e_P).
     report = compare(
-        "AHC", reference_from(tmp_path / "near", runs["refining"], sigma=shifted), runs["refining"]
+        "AHC", reference_from(tmp_path / "pyatb", runs["refining"], sigma=printed), runs["refining"]
     )
-    assert report["verdict"] == PASS_DOCUMENTED and classes(report)["sigma_xy"] == DOCUMENTED
-    assert report["tolerance_basis"]["tier"] == "B"
-    far = [0.0, 0.0, physical + 4 * e_q]
-    report = compare("AHC", reference_from(tmp_path / "far", runs["refining"], sigma=far), runs["refining"])
-    assert report["verdict"] == FAIL and classes(report)["sigma_xy"] == UNEXPLAINED
+    assert report["verdict"] in {PASS, PASS_DOCUMENTED}, render_markdown(report)
+    assert classes(report)["pyatb_refined_grid"] == AGREE and report["tolerance_basis"]["tier"] == "B"
+    assert report["tolerance_basis"]["e_P"] == pytest.approx(emulation["e_P_S_cm"])
+    assert "emulation" in report["tolerance_basis"]["e_P_source"]
+    # A reference the emulation does not reproduce is unexplained, whatever the error estimates.
+    off = [printed[0], printed[1], printed[2] + 10 * max(e_p, 1e-3)]
+    report = compare("AHC", reference_from(tmp_path / "off", runs["refining"], sigma=off), runs["refining"])
+    assert report["verdict"] == FAIL and classes(report)["pyatb_refined_grid"] == UNEXPLAINED
+    assert report["tolerance_basis"]["e_P"] is None
+    # Without self_convergence neither e_Q nor e_P is known: not comparable, with the way out.
     report = compare("AHC", reference_from(tmp_path / "plain", runs["unconverged"]), runs["unconverged"])
-    assert report["verdict"] == NOT_COMPARABLE
-    assert "self_convergence" in [item for item in report["preconditions"] if not item["ok"]][0]["detail"]
+    assert report["verdict"] == NOT_COMPARABLE and _preconditions(report) == {"integration"}
+    detail = [item for item in report["preconditions"] if not item["ok"]][0]["detail"]
+    assert "adaptive_grid_threshold 1e30" in detail and "self_convergence" in detail and "e_P" in detail
+
+
+@pytest.mark.parametrize(("e_q", "e_p", "verdict"), [(1e-9, 0.5, PASS_DOCUMENTED), (1e-9, 0.1, FAIL)])
+def test_tier_b_bounds_the_gap_by_both_codes_discretisation_errors(runs, tmp_path, e_q, e_p, verdict):
+    # A correct refined run whose gap to PyATB is PyATB's own discretisation error: QUEER's
+    # e_Q alone cannot bound it, PyATB's e_P (from QUEER's emulation of its sum) can.
+    candidate_dir = copy(runs["refining"], tmp_path / "candidate")
+    document = read(candidate_dir / "queer_results.json")
+    physical = document["ahc"]["sigma_S_cm"]["xy"][0]
+    printed = [0.0, 0.0, physical + 1.2]
+    document["integration"]["self_convergence"]["e_Q"] = [e_q, e_q, e_q]
+    emulation = document["ahc"]["pyatb_emulation"]["refined_grid"]
+    emulation.update(printed_S_cm=printed, e_P_S_cm=[e_p, e_p, e_p])
+    write(candidate_dir / "queer_results.json", document)
+    report = compare(
+        "AHC", reference_from(tmp_path / "reference", runs["refining"], sigma=printed), candidate_dir
+    )
+    assert report["verdict"] == verdict, render_markdown(report)
+    assert classes(report)["sigma_xy"] == (DOCUMENTED if verdict == PASS_DOCUMENTED else UNEXPLAINED)
+    assert classes(report)["pyatb_refined_grid"] == AGREE
 
 
 def _preconditions(report):
     return {item["name"] for item in report["preconditions"] if not item["ok"]}
+
+
+def near_gap_scfout(path):
+    """QWZ with its gap almost closed at M: the two levels sit 3e-5 eV either side of E_F = 0 there.
+
+    A weak spin-orbit coupling spreads the curvature, so the M node holds a small share of sigma.
+    """
+    return qwz_spinor_scfout(path, mass=2.0 - 3e-5, coupling=1e-4)
+
+
+NEAR_GAP_GRID = {"integrate_grid": [24, 24, 1]}
+
+
+def _scaled(directory, factor):
+    """A copy of a candidate whose document and file hold ``factor`` times its conductivity."""
+    target = copy(directory, directory.parent / f"{directory.name}-x{factor}")
+    document = read(target / "queer_results.json")
+    for name in ("yz", "zx", "xy"):
+        document["ahc"]["sigma_S_cm"][name] = [
+            factor * value for value in document["ahc"]["sigma_S_cm"][name]
+        ]
+    write(target / "queer_results.json", document)
+    sign = document["ahc"]["convention"]["export_sign"]
+    values = [sign * document["ahc"]["sigma_S_cm"][name][0] for name in ("yz", "zx", "xy")]
+    (target / "Out/AHC/ahc.dat").write_text(ahc_vector_text(values))
+    return target
+
+
+def test_pyatbs_kubo_engine_has_no_pair_cut_so_tier_a_is_not_widened(tmp_path):
+    kubo = candidate(
+        tmp_path / "kubo",
+        inputs={"hall_convention": "openmx"},
+        scfout=near_gap_scfout,
+        method=1,
+        **NEAR_GAP_GRID,
+    )
+    document = read(kubo / "queer_results.json")
+    # The 6e-5 eV pair at M is not flagged for the Kubo engine: PyATB's Kubo kernel has no cut.
+    assert document["ahc"]["flagged"]["count"] == 0 and document["ahc"]["flagged"]["pair_gap_eV"] is None
+    reference = reference_from(tmp_path / "reference", kubo)
+    assert compare("AHC", reference, kubo)["verdict"] == PASS
+    for factor in (0.5, 0.0, 1.9, -1.0):
+        report = compare("AHC", reference, _scaled(kubo, factor))
+        assert report["verdict"] == FAIL and classes(report)["sigma_xy"] == UNEXPLAINED, factor
+
+
+def test_pyatbs_direct_pair_cut_is_an_exact_documented_allowance(tmp_path):
+    direct = candidate(
+        tmp_path / "direct", inputs={"hall_convention": "openmx"}, scfout=near_gap_scfout, **NEAR_GAP_GRID
+    )
+    document = read(direct / "queer_results.json")
+    flagged, listed = document["ahc"]["flagged"], document["ahc"]["per_k_flagged"]
+    assert flagged["count"] == 1 and listed[0]["k"] == [0.5, 0.5, 0.0]
+    assert listed[0]["reasons"] == ["pyatb_pair_cut"] and listed[0]["pair_gap_eV"] < 1e-4
+    point = listed[0]
+    # With the only pair cut, PyATB's direct engine sees no curvature at M: c_pyatb_rule is ~0.
+    assert point["c_pyatb_rule"][2] == pytest.approx(0.0, abs=1e-6 * abs(point["c"][2]))
+    assert point["allowance"][2] == pytest.approx(abs(point["c"][2] - point["c_pyatb_rule"][2]), rel=1e-12)
+    assert flagged["pair_shift_S_cm"][2] == pytest.approx(point["c"][2] - point["c_pyatb_rule"][2], rel=1e-12)
+    assert flagged["flip_allowance_S_cm"] == [0.0, 0.0, 0.0]
+    physical = [document["ahc"]["sigma_S_cm"][name][0] for name in ("yz", "zx", "xy")]
+    # PyATB's direct value: QUEER's sum with the contribution at M replaced by PyATB's.
+    pyatb = [value - c + p for value, c, p in zip(physical, point["c"], point["c_pyatb_rule"], strict=True)]
+    reference = reference_from(tmp_path / "pyatb", direct, sigma=pyatb)
+    report = compare("AHC", reference, direct)
+    assert report["verdict"] == PASS_DOCUMENTED and classes(report)["sigma_xy"] == DOCUMENTED, (
+        render_markdown(report)
+    )
+    detail = [item for item in report["quantities"] if item["name"] == "sigma_xy"][0]["detail"]
+    assert "[0.5, 0.5, 0.0]" in detail and "1e-4 eV" in detail and "PyATB's cut" in detail
+    # The exact shift, not a window of its size: wrong candidates fail even where M dominates sigma.
+    for factor in (0.5, 0.0, -1.0, 2.0):
+        report = compare("AHC", reference, _scaled(direct, factor))
+        assert report["verdict"] == FAIL and classes(report)["sigma_xy"] == UNEXPLAINED, factor
 
 
 def test_negative_controls_do_not_pass(runs, tmp_path):

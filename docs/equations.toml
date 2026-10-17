@@ -483,12 +483,24 @@ independent_tests = ["tests/unit/test_generator_pyatb_conventions.py::test_the_h
 
 [[equations]]
 id = "response.grid_hall_contributions"
-expression = "sigma_ab = -g*(e^2/hbar)*(1e8/V)*(1/N)*sum_k sum_n f_n(k)*Omega_n,ab(k); c_k = -g*(e^2/hbar)*(1e8/V)*(1/N)*sum_n f_n(k)*Omega_n,ab(k); C = sum_k sum_n f_n*Omega_n,ab*s1_a*s2_b/(N1*N2*2*pi); F = {k: min_n |E_n - mu| < delta_EF or a same-channel occupied-empty gap < 1e-4 eV}"
+expression = "sigma_ab = -g*(e^2/hbar)*(1e8/V)*(1/N)*sum_k sum_n f_n(k)*Omega_n,ab(k); c_k = -g*(e^2/hbar)*(1e8/V)*(1/N)*sum_n f_n(k)*Omega_n,ab(k); C = sum_k sum_n f_n*Omega_n,ab*s1_a*s2_b/(N1*N2*2*pi); F = {k: min_n |E_n - mu| < delta_EF, or (direct engine) a same-channel occupied-empty gap < 1e-4 eV}; c_k^P = c_k with D_nm = 0 for |E_n - E_m| <= 1e-4 eV (direct; c_k^P = c_k for Kubo); flip_k = sum_B |c_k(Omega_B)| over degenerate blocks B within delta_EF; Tier A: |sigma^P - s*sigma| <= base + sum_F flip_k, or |sigma^P - s*(sigma - sum_F (c_k - c_k^P))| <= base + sum_F flip_k (documented)"
 input_units = "Omega: angstrom^2; V: angstrom^3; E and mu: eV; s1, s2: reciprocal spans in inverse angstrom"
 output_units = "sigma and c_k: S/cm; C: dimensionless"
 assumptions = ["Gamma-origin nodes k_start + sum_i v_i n_i/N_i, upper boundary excluded", "Zero temperature: f = 1 for E < mu (or the lowest occupied_bands levels)", "delta_EF = 1e-6 eV*HARTREE_EV/27.211324570273 + max(1e-8 eV, the model's degeneracy tolerance)"]
 conventions = ["g is the spin degeneracy (2 without spin polarization)", "The sum equals queer.observables.integrated.ahc on the same nodes to the last bit", "A metallic plane's C is the Fermi-sea flux, not a topological invariant"]
 canonical = "queer.compat.generator.openmx_steps:hall_rows"
-specialized_backends = ["queer.compat.generator.openmx_steps:hall_factor", "queer.compat.generator.openmx_steps:run_chern"]
+specialized_backends = ["queer.compat.generator.openmx_steps:hall_factor", "queer.compat.generator.openmx_steps:run_chern", "queer.compat.generator.pyatb_emulation:pyatb_rule_rows"]
 source_references = ["docs/generator_services.md#openmx-steps-of-the-pyatb-counterpart", "https://doi.org/10.1103/RevModPhys.82.1959"]
-independent_tests = ["tests/numerical/test_generator_openmx_steps.py::test_the_grid_ahc_is_queers_own_sum_and_pyatbs_layout", "tests/numerical/test_generator_openmx_steps.py::test_a_level_at_the_fermi_energy_flags_its_point_with_its_contribution", "tests/numerical/test_generator_openmx_steps.py::test_the_chern_number_is_queers_own_and_a_metal_gives_the_fermi_sea_flux", "tests/numerical/test_generator_openmx_steps.py::test_the_single_channel_model_is_the_spin_up_hamiltonian_occupied_once"]
+independent_tests = ["tests/numerical/test_generator_openmx_steps.py::test_the_grid_ahc_is_queers_own_sum_and_pyatbs_layout", "tests/numerical/test_generator_openmx_steps.py::test_a_level_at_the_fermi_energy_flags_its_point_with_its_contribution", "tests/numerical/test_generator_openmx_steps.py::test_the_chern_number_is_queers_own_and_a_metal_gives_the_fermi_sea_flux", "tests/numerical/test_generator_openmx_steps.py::test_the_single_channel_model_is_the_spin_up_hamiltonian_occupied_once", "tests/numerical/test_generator_parity_pyatb.py::test_pyatbs_direct_pair_cut_is_an_exact_documented_allowance", "tests/numerical/test_generator_parity_pyatb.py::test_pyatbs_kubo_engine_has_no_pair_cut_so_tier_a_is_not_widened"]
+
+[[equations]]
+id = "response.pyatb_refined_grid_emulation"
+expression = "sigma_E(N) = c_P*[(1/N)*sum_{k in G_N, |Omega(k)| < t} Omega(k) + (1/(N*n))*sum_{k in G_N, |Omega(k)| >= t} sum_{m} Omega(k - h/2 + h.m/n)]; G_N = {k_start + sum_i v_i j_i/N_i}, h_i = v_i/N_i; c_P = s*h*(e_P^2/hbar_P)*1e8/V_P (AHC) or |s1 x s2|/(2 pi) with Omega -> Omega.n (Chern); e_P = |sigma_E(N) - sigma_E(2N)|"
+input_units = "Omega: occupied curvature, angstrom^2 on PyATB's Bohr radius 0.52917721 A; t: angstrom^2; V_P: angstrom^3"
+output_units = "S/cm (AHC) or dimensionless (Chern)"
+assumptions = ["PyATB's grid_integrate_3D: a node is judged by |Omega| (AHC vector norm, Chern |Omega.n|) >= adaptive_grid_threshold and then replaced by its sub-grid", "The sub-grid starts half a coarse cell below the node along every vector, the third included for a 2D AHC grid", "The flagged points use PyATB's direct-engine pair cut; occupation windows bound the levels within delta_EF"]
+conventions = ["A comparison diagnostic recorded in pyatb_emulation, never QUEER's result", "e_P bounds PyATB's discretisation error only when sigma_E(N) reproduces PyATB's printed value within Tier A"]
+canonical = "queer.compat.generator.pyatb_emulation:refined_sum"
+specialized_backends = ["queer.compat.generator.pyatb_emulation:gamma_nodes", "queer.compat.generator.openmx_steps:_pyatb_refined_grid"]
+source_references = ["docs/generator_services.md#openmx-steps-of-the-pyatb-counterpart"]
+independent_tests = ["tests/unit/test_generator_pyatb_emulation.py::test_the_refined_sum_is_pyatbs_rule_node_by_node", "tests/unit/test_generator_pyatb_emulation.py::test_a_1x1x1_subgrid_still_moves_a_flagged_node_half_a_cell", "tests/numerical/test_generator_parity_pyatb.py::test_a_refining_grid_is_judged_with_both_codes_error_estimates", "tests/integration/test_generator_pyatb_calibration.py::test_a_refined_metal_is_bounded_by_both_codes_discretisation_errors"]

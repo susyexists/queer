@@ -17,6 +17,7 @@ sits on its sigma_xy plateau, -2.12 eV in a band and -2.60 eV below it.
 
 import json
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -48,12 +49,14 @@ CASES = {
     "f_kubo_auto": ({PASS}, {AGREE}),
     "g_kubo_openmx_offplateau": ({PASS}, {AGREE}),
     "h_chern_fermi": ({PASS}, {AGREE}),
-    "i_threshold_10": ({PASS, PASS_DOCUMENTED}, {AFTER_CONVENTION, DOCUMENTED}),
-    "i_threshold_20": ({PASS, PASS_DOCUMENTED}, {AFTER_CONVENTION, DOCUMENTED}),
+    "i_threshold_10": ({PASS_DOCUMENTED}, {AFTER_CONVENTION, DOCUMENTED}),
+    "i_threshold_20": ({PASS_DOCUMENTED}, {AFTER_CONVENTION, DOCUMENTED}),
     "j_direct_metal": ({PASS}, {AGREE}),
     "k_kubo_metal": ({PASS}, {AGREE}),
 }
 REFINING = {"i_threshold_10", "i_threshold_20"}
+# PyATB's own refinement counts (running.log), which QUEER's emulation of its refined sum must reproduce.
+REFINED_NODES = {"i_threshold_10": 1757, "i_threshold_20": 471}
 
 pytestmark = [
     pytest.mark.slow,
@@ -102,3 +105,64 @@ def test_queer_reproduces_the_pyatb_calibration_case(case, tmp_path):
         item["class"] for item in report["quantities"] if item["name"].startswith(("sigma_", "chern_number"))
     }
     assert compared and compared <= classes, render_markdown(report)
+    if case in REFINING:
+        emulation = document["ahc"]["pyatb_emulation"]["refined_grid"]
+        assert emulation["flagged"] == REFINED_NODES[case]
+        assert {item["name"]: item["class"] for item in report["quantities"]}["pyatb_refined_grid"] == AGREE
+
+
+def _relabel(text, replacements):
+    for old, new in replacements:
+        assert old in text, old
+        text = text.replace(old, new)
+    return text
+
+
+def test_a_refined_metal_is_bounded_by_both_codes_discretisation_errors(tmp_path):
+    """A correct refined Grid on a metal passes only with PyATB's own error e_P.
+
+    PyATB's j_direct_metal run (E_F -2.12 eV, 100 x 100 x 1, refinement off) relabelled
+    to threshold 100 A^2 with 20 x 20 x 1 sub-grids: no node's curvature reaches 100 A^2
+    (the largest is 21.5), so PyATB prints the same plain Gamma-origin sum. QUEER's
+    midpoint sum differs from it by more than 3 e_Q; PyATB's own grid error, e_P from
+    QUEER's emulation of its refined sum on the grid and its double, bounds the gap.
+    """
+    reference = tmp_path / "reference"
+    shutil.copytree(DATA / "j_direct_metal", reference)
+    swaps = [
+        ("adaptive_grid                   1 1 1", "adaptive_grid                   20 20 1"),
+        ("adaptive_grid_threshold         1e30", "adaptive_grid_threshold         100"),
+    ]
+    (reference / "Input").write_text(_relabel((reference / "Input").read_text(), swaps))
+    echo = json.loads((reference / "Out/input.json").read_text())
+    echo["AHC"].update(adaptive_grid=[20, 20, 1], adaptive_grid_threshold=100.0)
+    (reference / "Out/input.json").write_text(json.dumps(echo, indent=4))
+    log = _relabel(
+        (reference / "Out/running.log").read_text(),
+        [
+            (
+                ">> adaptive_grid           : 1        1        1       ",
+                ">> adaptive_grid           : 20       20       1       ",
+            ),
+            ("1000000000000000019884624838656.0000", "100.0000"),
+        ],
+    )
+    (reference / "Out/running.log").write_text(log)
+    workspace = tmp_path / "queer"
+    workspace.mkdir()
+    (workspace / "scf.scfout").symlink_to(DATA / "test.scfout")
+    params = params_from_pyatb_input(
+        read_input(reference / "Input"),
+        workers=int(os.environ.get("QUEER_REAL_REPLAY_WORKERS") or 4),
+        self_convergence=True,
+    )
+    (workspace / "queer_params.json").write_text(json.dumps(params, indent=1))
+    assert run(None, workspace / "queer_params.json", workspace, log=lambda line: None) == EXIT_OK
+    report = compare("AHC", reference, workspace, scfout=DATA / "test.scfout")
+    save_parity_report(report, "j_direct_metal_threshold_100")
+    classes = {item["name"]: item["class"] for item in report["quantities"]}
+    assert report["verdict"] == PASS_DOCUMENTED and classes["sigma_xy"] == DOCUMENTED, render_markdown(report)
+    assert classes["pyatb_refined_grid"] == AGREE
+    e_q, e_p = report["tolerance_basis"]["e_Q"][2], report["tolerance_basis"]["e_P"][2]
+    gap = [item for item in report["quantities"] if item["name"] == "sigma_xy"][0]["metric"]
+    assert 3 * e_q < gap <= 3 * e_p, (gap, e_q, e_p)

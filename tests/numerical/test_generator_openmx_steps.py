@@ -163,7 +163,18 @@ def test_a_level_at_the_fermi_energy_flags_its_point_with_its_contribution(tmp_p
         assert flagged["sum_abs_S_cm"][axis] == pytest.approx(sum(abs(entry["c"][axis]) for entry in listed))
     assert "flagged_kpoints" in document["warning_codes"]
     point = [entry for entry in listed if entry["k"] == [0.0, 0.0, 0.0]][0]
-    assert point["closest_level_eV"] < flagged["delta_ef_eV"]
+    assert point["closest_level_eV"] < flagged["delta_ef_eV"] and point["reasons"] == ["level_at_fermi"]
+    # No pair is cut at Gamma (a 6 eV gap): PyATB's rule leaves c_k, and the level at E_F, which
+    # either code may occupy, gives the window: its own curvature's contribution.
+    assert point["c_pyatb_rule"] == pytest.approx(point["c"], rel=1e-12, abs=1e-12)
+    assert flagged["pair_shift_S_cm"] == pytest.approx([0.0, 0.0, 0.0], abs=1e-12)
+    assert point["flip_allowance"][2] > 0 and point["allowance"][2] == pytest.approx(
+        point["flip_allowance"][2]
+    )
+    for axis in range(3):
+        assert flagged["allowance_S_cm"][axis] == pytest.approx(
+            sum(entry["allowance"][axis] for entry in listed)
+        )
 
 
 def test_the_chern_number_is_queers_own_and_a_metal_gives_the_fermi_sea_flux(tmp_path):

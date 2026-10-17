@@ -25,7 +25,7 @@ verdicts of :mod:`~queer.compat.generator.parity`.
   ``agree_after_convention``;
 - the same resolved Hall convention (the FHS engine ignores it);
 - an integration that can be compared: an adaptive integral starting from at
-  least 512 cells, and an error estimate for a refining one (below).
+  least 512 cells, and both codes' error estimates for a refining one (below).
 
 **Quantities.** PyATB's printed conductivity is compared with QUEER's physical
 value times the sign table's factor (-1 for the ``pyatb`` convention:
@@ -34,15 +34,30 @@ QUEER's ``legacy_single_channel`` (``agree_after_convention``, "legacy
 single-channel").
 
 - *Tier A* (Grid with the refinement off in both runs, the same Gamma-origin
-  nodes): per component ``|d sigma| <= 2e-7 |sigma| + sum_F |c_k| + 5e-7 S/cm``,
-  the flagged contributions coming from the candidate. 2e-7 covers the two codes'
-  physical constants (PyATB's e and hbar differ from CODATA's by up to 1.8e-7);
-  5e-7 S/cm is the rounding of PyATB's six decimals.
+  nodes): per component ``|d sigma| <= 2e-7 |sigma| + 5e-7 S/cm`` (the base) plus
+  the flagged set's occupation window. 2e-7 covers the two codes' physical
+  constants (PyATB's e and hbar differ from CODATA's by up to 1.8e-7); 5e-7 S/cm is
+  the rounding of PyATB's six decimals. At a flagged k-point PyATB may differ for
+  a known reason: its direct engine zeroes the coefficient derivative of a pair
+  closer than 1e-4 eV (its Kubo engine has no cut), and either code may occupy a
+  level within ``delta_EF`` of E_F. The candidate records each point's
+  contribution under PyATB's cut and the occupation window; PyATB's value must
+  then lie within the base plus the window of QUEER's value, or of QUEER's value
+  with PyATB's cut applied at the flagged points (``differs_documented``, naming
+  the points). Agreement that relies on an allowance larger than the base is
+  ``differs_documented``, never ``agree``.
 - *Tier B* (a Grid threshold below 1e30, or an adaptive integral): outside Tier
-  A, ``differs_documented`` only if ``|d sigma| <= 3 max(e_Q, e_P)``, with ``e_Q``
+  A, ``differs_documented`` only if ``|d sigma| <= 3 max(e_Q, e_P)``. ``e_Q`` is
   the candidate's ``|sigma(N) - sigma(2N)|`` (``self_convergence``) or its
-  cubature error estimate and ``e_P`` PyATB's last-generation error in
-  ``integraton.log`` converted to S/cm. Without ``e_Q`` the run is not comparable.
+  cubature error estimate. ``e_P`` is PyATB's own discretisation error: for an
+  adaptive integral its last-generation error in ``integraton.log`` converted to
+  S/cm; for a refined Grid, for which PyATB writes none, ``|sigma_E(N) -
+  sigma_E(2N)|`` of QUEER's emulation of PyATB's refined sum
+  (:mod:`~queer.compat.generator.pyatb_emulation`), used only when that emulation
+  reproduces PyATB's printed value within Tier A (quantity
+  ``pyatb_refined_grid``; otherwise ``differs_unexplained``). Without ``e_Q`` or
+  ``e_P`` the run is ``not_comparable`` (run with the refinement off for Tier A,
+  or with ``self_convergence``).
 - *FHS scans*: the energies must match to the printed decimals; each component
   is compared point by point, ``agree`` when every point meets Tier A and
   ``differs_documented`` with the measured largest gap otherwise (the two codes
@@ -407,6 +422,7 @@ class _PyatbComparison:
         self.legacy = False
         self.e_q: list[float] | None = None
         self.e_p: list[float] | None = None
+        self.emulation: dict[str, Any] | None = None
         self.notes: dict[str, Any] = {}
 
     # ----------------------------------------------------------- records
@@ -661,18 +677,50 @@ class _PyatbComparison:
                     "it can miss sharp curvature",
                 )
         self.e_q = self.candidate_error_estimate(integration)
+        if mode == "Grid":
+            emulation = self.emulation = self.refined_grid_emulation()
+            missing = []
+            if self.e_q is None:
+                missing.append("QUEER's self-convergence estimate e_Q")
+            if emulation is None:
+                missing.append(
+                    "PyATB's own refinement error e_P (PyATB writes none for a Grid; QUEER emulates its "
+                    "refined sum on the grid and its double)"
+                )
+            if missing or emulation is None:
+                return self.precondition(
+                    "integration",
+                    False,
+                    f"Grid integration with refinement (Tier B) needs {' and '.join(missing)}: run with the "
+                    "refinement off (adaptive_grid_threshold 1e30) for Tier A, or set self_convergence",
+                )
+            unit = "_S_cm" if self.family == "AHC" else ""
+            self.e_p = [float(value) for value in emulation[f"e_P{unit}"]]
+            refined = self.reference.running.get("refined_kpoints")
+            detail = (
+                f"Grid integration with refinement (Tier B): e_Q {self.e_q}; e_P {self.e_p} from QUEER's "
+                f"emulation of PyATB's refined sum ({emulation.get('flagged')} nodes refined; PyATB's "
+                f"running.log {refined})"
+            )
+            return self.precondition("integration", True, detail)
         self.e_p = self.reference_error_estimate()
-        if self.e_q is None:
+        if self.e_q is None or self.e_p is None:
+            missing = [] if self.e_q is not None else ["QUEER's error estimate e_Q"]
+            if self.e_p is None:
+                missing.append(f"PyATB's last-generation error e_P ({INTEGRATION_LOG})")
             return self.precondition(
                 "integration",
                 False,
-                f"{mode} integration with refinement: QUEER recorded no self-convergence estimate e_Q "
-                "(run it with self_convergence true)",
+                f"{mode} integration (Tier B) needs {' and '.join(missing)}",
             )
-        detail = f"{mode} integration with refinement (Tier B): e_Q {self.e_q}"
-        if self.e_p is not None:
-            detail += f", e_P {self.e_p}"
+        detail = f"{mode} integration (Tier B): e_Q {self.e_q}, e_P {self.e_p} from {INTEGRATION_LOG}"
         return self.precondition("integration", True, detail)
+
+    def refined_grid_emulation(self) -> dict[str, Any] | None:
+        """QUEER's emulation of PyATB's refined Grid sum, as the candidate recorded it."""
+        block = self.candidate.block("ahc" if self.family == "AHC" else "chern")
+        emulation = (block.get("pyatb_emulation") or {}).get("refined_grid")
+        return emulation if isinstance(emulation, dict) else None
 
     def candidate_error_estimate(self, integration: Mapping[str, Any]) -> list[float] | None:
         estimates = []
@@ -717,10 +765,43 @@ class _PyatbComparison:
         values = [item[component if len(item) > 1 else 0] for item in (self.e_q, self.e_p) if item]
         return TIER_B_FACTOR * max(values) if values else None
 
-    def judge(self, name: str, difference: float, tier_a: float, component: int, detail: str) -> None:
+    def judge(
+        self,
+        name: str,
+        difference: float,
+        tier_a: float,
+        component: int,
+        detail: str,
+        *,
+        base: float | None = None,
+        allowance: float = 0.0,
+        regularised: float | None = None,
+        reason: str = "",
+    ) -> None:
+        """Class one compared value: Tier A, else Tier B within ``3 max(e_Q, e_P)``, else unexplained.
+
+        ``tier_a`` is ``base`` plus the occupation window of the flagged set.
+        ``regularised`` is the gap to QUEER's value with PyATB's own cut at the
+        flagged points: within ``tier_a`` it is documented (``reason`` names the
+        points and the rule). Agreement that needs an allowance (``allowance``,
+        the flagged set's exact one) larger than ``base`` is documented too.
+        """
         convention = self.sign < 0 or self.legacy
         if difference <= tier_a:
-            self.quantity(name, AFTER_CONVENTION if convention else AGREE, difference, tier_a, detail)
+            if base is not None and allowance > base:
+                self.quantity(name, DOCUMENTED, difference, tier_a, f"{detail}; {reason}".rstrip("; "))
+            else:
+                self.quantity(name, AFTER_CONVENTION if convention else AGREE, difference, tier_a, detail)
+            return
+        if regularised is not None and regularised <= tier_a:
+            self.quantity(
+                name,
+                DOCUMENTED,
+                regularised,
+                tier_a,
+                f"{detail}; QUEER's value with PyATB's cut at the flagged k-points lies {regularised:.3g} "
+                f"from PyATB's; {reason}".rstrip("; "),
+            )
             return
         bound = self.tier_b(component) if self.tier == "B" else None
         if bound is not None and difference <= bound:
@@ -745,28 +826,107 @@ class _PyatbComparison:
             self.quantity("sigma", UNEXPLAINED, detail="the reference holds an FHS table, not one AHC vector")
             return
         flagged = block.get("flagged") or {}
-        allowance = list(flagged.get("sum_abs_S_cm") or [0.0, 0.0, 0.0])
+        zero = [0.0, 0.0, 0.0]
+        allowance = [float(value) for value in flagged.get("allowance_S_cm") or zero]
+        shift = [float(value) for value in flagged.get("pair_shift_S_cm") or zero]
+        flips = [float(value) for value in flagged.get("flip_allowance_S_cm") or zero]
+        reason = self.regularisation(block)
+        if self.emulation is not None:
+            self.compare_emulation([float(value) for value in product["sigma"]])
         for index, component in enumerate(AHC_COMPONENTS):
             physical = float(sigma[component][0])
             expected = self.sign * physical
             printed = float(product["sigma"][index])
-            tier_a = TIER_A_RELATIVE * abs(physical) + float(allowance[index]) + AHC_FLOOR_S_CM
+            base = TIER_A_RELATIVE * abs(physical) + AHC_FLOOR_S_CM
             detail = (
                 f"PyATB {printed:.6f} vs {self.sign:+d} x QUEER {physical:.9f} S/cm"
                 + (" (legacy single-channel)" if self.legacy else "")
-                + f"; flagged allowance {float(allowance[index]):.3g}"
+                + f"; flagged allowance {allowance[index]:.3g}"
             )
-            self.judge(f"sigma_{component}", abs(printed - expected), tier_a, index, detail)
+            regularised = abs(printed - self.sign * (physical - shift[index])) if shift[index] else None
+            self.judge(
+                f"sigma_{component}",
+                abs(printed - expected),
+                base + flips[index],
+                index,
+                detail,
+                base=base,
+                allowance=allowance[index],
+                regularised=regularised,
+                reason=reason,
+            )
         if flagged:
             self.flagged["ahc"] = {
                 **{key: flagged.get(key) for key in ("count", "points", "delta_ef_eV", "pair_gap_eV")},
-                "sum_abs_S_cm": allowance,
+                "allowance_S_cm": allowance,
+                "sum_abs_S_cm": flagged.get("sum_abs_S_cm"),
                 "summary_line": (
                     f"{flagged.get('count')} of {flagged.get('points')} k-points flagged (delta_EF "
                     f"{float(flagged.get('delta_ef_eV') or 0):.3g} eV, pair gap {flagged.get('pair_gap_eV')} eV); "
                     f"allowance {allowance} S/cm"
                 ),
             }
+
+    def regularisation(self, block: Mapping[str, Any]) -> str:
+        """Why an agreement needs the flagged allowance: the flagged k-points and PyATB's rule at them."""
+        entries = [entry for entry in block.get("per_k_flagged") or [] if isinstance(entry, Mapping)]
+        if not entries:
+            return ""
+        reasons = {
+            "level_at_fermi": "a level within delta_EF of E_F, which either code may occupy",
+            "pyatb_pair_cut": "an occupied-empty pair closer than 1e-4 eV, whose coefficient derivative "
+            "PyATB's direct engine sets to zero",
+        }
+        found = sorted({reason for entry in entries for reason in entry.get("reasons") or []})
+        points = ", ".join(str([round(float(x), 6) for x in entry["k"]]) for entry in entries[:5])
+        more = f" and {len(entries) - 5} more" if len(entries) > 5 else ""
+        why = "; ".join(reasons.get(reason, reason) for reason in found)
+        return f"agreement relies on the allowance of the flagged k-points {points}{more} ({why})"
+
+    def compare_emulation(self, printed: list[float]) -> None:
+        """How well QUEER's emulation of PyATB's refined Grid sum reproduces PyATB's printed value.
+
+        Within Tier A plus the emulation's own allowances (threshold ties and flagged
+        points) the emulated ``e_P`` bounds PyATB's discretisation error; otherwise
+        the emulation does not reproduce PyATB, ``e_P`` is not used, and the gap is
+        unexplained.
+        """
+        emulation = self.emulation or {}
+        unit = "_S_cm" if self.family == "AHC" else ""
+        emulated = [float(value) for value in emulation[f"printed{unit}"]]
+        allowances = [
+            float(a) + float(b)
+            for a, b in zip(
+                emulation[f"tie_allowance{unit}"], emulation[f"flag_allowance{unit}"], strict=True
+            )
+        ]
+        floor = AHC_FLOOR_S_CM if self.family == "AHC" else CHERN_FLOOR
+        differences = [abs(p - e) for p, e in zip(printed, emulated, strict=True)]
+        tolerances = [
+            TIER_A_RELATIVE * abs(e) + floor + allowance
+            for e, allowance in zip(emulated, allowances, strict=True)
+        ]
+        worst = max(range(len(differences)), key=lambda i: differences[i] / tolerances[i])
+        ok = all(
+            difference <= tolerance for difference, tolerance in zip(differences, tolerances, strict=True)
+        )
+        refined = self.reference.running.get("refined_kpoints")
+        detail = (
+            f"PyATB {printed} vs QUEER's emulation of PyATB's refined Grid sum {emulated} "
+            f"(|d| {differences[worst]:.3g}, fidelity); nodes refined: emulation {emulation.get('flagged')}, "
+            f"PyATB's running.log {refined}; e_P {self.e_p}"
+        )
+        if ok:
+            self.quantity("pyatb_refined_grid", AGREE, differences[worst], tolerances[worst], detail)
+        else:
+            self.e_p = None
+            self.quantity(
+                "pyatb_refined_grid",
+                UNEXPLAINED,
+                differences[worst],
+                tolerances[worst],
+                detail + "; the emulation does not reproduce PyATB, so its e_P is not used",
+            )
 
     def compare_scan(self, product: Mapping[str, Any], sigma: Mapping[str, Any]) -> None:
         if product.get("format") != "scan":
@@ -831,23 +991,36 @@ class _PyatbComparison:
             self.quantity("chern_number", kind, float(abs(round(printed) - round(value))), 0.0, detail)
         else:
             flagged = block.get("flagged") or {}
-            allowance = float(flagged.get("sum_abs") or 0.0)
-            tier_a = TIER_A_RELATIVE * abs(value) + allowance + CHERN_FLOOR
+            allowance = float(flagged.get("allowance") or 0.0)
+            shift = float(flagged.get("pair_shift") or 0.0)
+            if self.emulation is not None:
+                self.compare_emulation([printed])
+            base = TIER_A_RELATIVE * abs(value) + CHERN_FLOOR
             detail = (
                 f"PyATB {printed!r} vs QUEER {value!r} ({'gapped' if gapped else 'metallic'} plane); "
                 f"flagged allowance {allowance:.3g}"
             )
-            self.judge("chern_number", abs(printed - value), tier_a, 0, detail)
+            self.judge(
+                "chern_number",
+                abs(printed - value),
+                base + float(flagged.get("flip_allowance") or 0.0),
+                0,
+                detail,
+                base=base,
+                allowance=allowance,
+                regularised=abs(printed - (value - shift)) if shift else None,
+                reason=self.regularisation(block),
+            )
         flagged = block.get("flagged")
         if isinstance(flagged, dict):
             self.flagged["chern"] = {
                 **{
                     key: flagged.get(key)
-                    for key in ("count", "points", "delta_ef_eV", "pair_gap_eV", "sum_abs")
+                    for key in ("count", "points", "delta_ef_eV", "pair_gap_eV", "allowance", "sum_abs")
                 },
                 "summary_line": (
                     f"{flagged.get('count')} of {flagged.get('points')} k-points flagged; allowance "
-                    f"{float(flagged.get('sum_abs') or 0):.3g}"
+                    f"{float(flagged.get('allowance') or 0):.3g}"
                 ),
             }
 
@@ -967,6 +1140,11 @@ class _PyatbComparison:
                     ),
                     "e_Q": self.e_q,
                     "e_P": self.e_p,
+                    "e_P_source": (
+                        "QUEER's emulation of PyATB's refined Grid sum"
+                        if self.emulation is not None
+                        else (INTEGRATION_LOG if self.e_p is not None else None)
+                    ),
                 },
                 "preconditions": self.preconditions,
                 "quantities": self.quantities,

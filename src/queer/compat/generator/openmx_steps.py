@@ -21,18 +21,29 @@ sample the same point (both values are recorded).
   Gamma-origin grid sum, evaluated k-point by k-point with the functions of
   :func:`~queer.observables.integrated.ahc` (the same sum, to the last bits). The
   per-k curvature gives the flagged set ``F``: the k-points with a level within
-  ``delta_EF`` of E_F or an occupied-empty pair (same spin channel) closer than
-  1e-4 eV, where ``delta_EF = 1e-6 eV * HARTREE_EV / PYATB_HARTREE_EV`` (the
-  Fermi-energy agreement allowed between the codes) plus the eigenvalue
-  tolerance ``max(1e-8 eV, the model's degeneracy tolerance)``. Each point of
-  ``F`` is listed with its contribution ``c_k`` to the result, the largest first.
+  ``delta_EF`` of E_F and, for the direct engine, those with an occupied-empty
+  pair (same spin channel) closer than 1e-4 eV, where ``delta_EF = 1e-6 eV *
+  HARTREE_EV / PYATB_HARTREE_EV`` (the Fermi-energy agreement allowed between the
+  codes) plus the eigenvalue tolerance ``max(1e-8 eV, the model's degeneracy
+  tolerance)``. Each point of ``F`` is listed with its contribution ``c_k`` to the
+  result (the largest first), ``c_pyatb_rule``, its contribution under PyATB's
+  direct-engine cut (the coefficient derivative of a pair closer than 1e-4 eV is
+  zero; PyATB's Kubo engine has no cut, so its pairs are not flagged), and
+  ``flip_allowance``, the contribution of the levels within ``delta_EF``, which
+  either code may occupy.
 - Grid with a lower threshold: QUEER's own threshold quadrature (cell
   midpoints, midpoint sub-cells for cells whose curvature norm reaches the
   threshold in Å²), and ``Adaptive``: QUEER's embedded-error cubature with
   PyATB's tolerances. Their nodes differ from PyATB's, so a comparison needs an
   error estimate: ``self_convergence: true`` adds the same integration on the
   doubled grid and records ``e_Q = |sigma(N) - sigma(2N)|``; a cubature also
-  records its own embedded error estimate. Their cell and point budgets come
+  records its own embedded error estimate. With ``self_convergence`` a refined
+  Grid also records ``pyatb_emulation.refined_grid``: PyATB's own refined sum
+  (Gamma-origin nodes, a node whose curvature norm reaches the threshold replaced
+  by the sub-grid half a cell below it), evaluated with :func:`hall_rows` on the
+  grid and its double, whose difference ``e_P`` is PyATB's discretisation error,
+  which PyATB does not write for a Grid. It is a comparison diagnostic, never the
+  result. Their cell and point budgets come
   from the requested grid and sub-grid and from the job's memory
   (:func:`quadrature_budget`): a grid this process cannot hold is refused before
   the model is read (``queer_bad_params``) and a refinement that outgrows its
@@ -86,8 +97,19 @@ from .openmx_params import BUDGET_REFUSAL, STEP_AHC, STEP_CHERN, OpenMXStepParam
 from .pyatb_conventions import (
     FERMI_TOLERANCE_HARTREE,
     HARTREE_EV,
+    PYATB_BOHR_ANGSTROM,
+    PYATB_E_CHARGE,
     PYATB_HARTREE_EV,
+    PYATB_HBAR,
     pyatb_energy,
+    pyatb_length_ratio,
+)
+from .pyatb_emulation import (
+    gamma_nodes,
+    plane_projection,
+    pyatb_rule_rows,
+    refined_sum,
+    vector_projection,
 )
 from .pyatb_files import (
     AHC_COMPONENTS,
@@ -422,6 +444,11 @@ class OpenMXStepContext:
         """Whether PyATB reads a single spin channel of this scfout."""
         return self.model.spin_mode != "soc"
 
+    @functools.cached_property
+    def pyatb_model(self) -> OpenMXModel:
+        """The model PyATB reads: the scfout's with spin-orbit coupling, else its spin-up channel occupied once."""
+        return single_channel_model(self.model) if self.legacy else self.model
+
     # ------------------------------------------------------------ plans
     def options(
         self, stage: str, model: Any, n_items: int, per_k: int = CURVATURE_MATRICES
@@ -457,33 +484,104 @@ class OpenMXStepContext:
         parts = pmap(function, chunks(points, options.batch_size), options)
         return np.concatenate(parts, axis=0) if parts else np.empty((0, 12))
 
+    def flag_mask(self, rows: np.ndarray, engine: str) -> np.ndarray:
+        """The points PyATB may sum differently: a level within ``delta_EF`` of E_F, or, for the direct
+        engine, a same-channel occupied-empty pair closer than PyATB's 1e-4 eV cut (its Kubo engine has
+        none)."""
+        mask = rows[:, 9] < self.delta_ef
+        if engine == "direct":
+            mask |= rows[:, 10] < PAIR_GAP_EV
+        return mask
+
+    def rule_rows(
+        self,
+        stage: str,
+        model: Any,
+        points: np.ndarray,
+        engine: str,
+        occupied_bands: int | None,
+        projection: np.ndarray,
+    ) -> np.ndarray:
+        """:func:`~.pyatb_emulation.pyatb_rule_rows` of the points, in order, on the planned processes."""
+        if not len(points):
+            return np.empty((0, 9 + len(projection)))
+        options = self.options(stage, model, len(points))
+        function = functools.partial(
+            pyatb_rule_rows, model, self.mu, engine, occupied_bands, self.delta_ef, projection
+        )
+        return np.concatenate(pmap(function, chunks(points, options.batch_size), options), axis=0)
+
     def flagged(
-        self, points: np.ndarray, rows: np.ndarray, contributions: np.ndarray
+        self,
+        points: np.ndarray,
+        rows: np.ndarray,
+        contributions: np.ndarray,
+        *,
+        stage: str,
+        model: Any,
+        engine: str,
+        projection: np.ndarray,
+        scale: float,
+        occupied_bands: int | None = None,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        """The flagged set: its listed points (largest ``|c_k|`` first) and its summary."""
+        """The flagged set: its listed points (largest ``|c_k|`` first) and its summary.
+
+        ``contributions`` are the points' ``c_k``; ``projection`` maps a curvature
+        tensor to the summed components and ``scale`` the projected value to
+        ``c_k``. Each flagged point gets ``c_pyatb_rule``, its contribution under
+        PyATB's direct-engine cut (:func:`~.pyatb_emulation.pyatb_rule_rows`), and
+        ``flip_allowance``, how far the occupation of a level within ``delta_EF``
+        of E_F may move it. The summary sums ``pair_shift = sum (c_k -
+        c_pyatb_rule)``, the flip allowances and ``allowance = sum |c_k -
+        c_pyatb_rule| + flip_allowance``.
+        """
         closest, gaps = rows[:, 9], rows[:, 10]
-        mask = (closest < self.delta_ef) | (gaps < PAIR_GAP_EV)
-        indices = np.flatnonzero(mask)
-        magnitude = np.abs(np.asarray(contributions, float).reshape(len(points), -1))
-        order = indices[np.argsort(-magnitude[indices].max(axis=1), kind="stable")]
-        listed = [
-            {
-                "k": points[index].tolist(),
-                "c": np.asarray(contributions[index], float).tolist(),
-                "closest_level_eV": None if not math.isfinite(closest[index]) else float(closest[index]),
-                "pair_gap_eV": None if not math.isfinite(gaps[index]) else float(gaps[index]),
-            }
-            for index in order[:FLAGGED_LISTED]
-        ]
+        indices = np.flatnonzero(self.flag_mask(rows, engine))
+        contributions = np.asarray(contributions, float).reshape(len(points), -1)
+        magnitude = np.abs(contributions)
+        width = contributions.shape[1]
+        rule = self.rule_rows(stage, model, points[indices], engine, occupied_bands, projection)
+        regularised = (rule[:, :9] @ np.asarray(projection, float).T) * scale
+        flips = rule[:, 9:] * abs(scale)
+        shift = contributions[indices] - regularised
+        allowance = np.abs(shift) + flips
+        order = np.argsort(-magnitude[indices].max(axis=1), kind="stable") if len(indices) else indices
+        listed = []
+        for position in order[:FLAGGED_LISTED]:
+            index = indices[position]
+            reasons = []
+            if closest[index] < self.delta_ef:
+                reasons.append("level_at_fermi")
+            if engine == "direct" and gaps[index] < PAIR_GAP_EV:
+                reasons.append("pyatb_pair_cut")
+            listed.append(
+                {
+                    "k": points[index].tolist(),
+                    "c": contributions[index].tolist(),
+                    "c_pyatb_rule": regularised[position].tolist(),
+                    "flip_allowance": flips[position].tolist(),
+                    "allowance": allowance[position].tolist(),
+                    "reasons": reasons,
+                    "closest_level_eV": None if not math.isfinite(closest[index]) else float(closest[index]),
+                    "pair_gap_eV": None if not math.isfinite(gaps[index]) else float(gaps[index]),
+                }
+            )
+        empty = [0.0] * width
         summary = {
             "count": int(len(indices)),
             "points": int(len(points)),
             "listed": len(listed),
-            "sum_abs": magnitude[indices].sum(axis=0).tolist()
-            if len(indices)
-            else [0.0] * magnitude.shape[1],
+            "sum_abs": magnitude[indices].sum(axis=0).tolist() if len(indices) else empty,
+            "pair_shift": shift.sum(axis=0).tolist() if len(indices) else empty,
+            "flip_allowance": flips.sum(axis=0).tolist() if len(indices) else empty,
+            "allowance": allowance.sum(axis=0).tolist() if len(indices) else empty,
             "delta_ef_eV": self.delta_ef,
-            "pair_gap_eV": PAIR_GAP_EV,
+            "pair_gap_eV": PAIR_GAP_EV if engine == "direct" else None,
+            "rule": (
+                "PyATB's direct engine zeroes the coefficient derivative of pairs closer than 1e-4 eV (its "
+                "Kubo engine has no cut): c_pyatb_rule is c_k under that cut and pair_shift the sum of "
+                "c_k - c_pyatb_rule; either code may occupy a level within delta_EF of E_F: flip_allowance"
+            ),
         }
         return listed, summary
 
@@ -504,8 +602,18 @@ def _ahc_grid(
     factor = hall_factor(model)
     tensor = factor * np.einsum("k,kmab->mab", weight, stacked)
     contributions = factor * weight[:, None] * _vector(stacked[:, 0])
-    listed, summary = context.flagged(points, rows, contributions)
-    summary["sum_abs_S_cm"] = summary.pop("sum_abs")
+    listed, summary = context.flagged(
+        points,
+        rows,
+        contributions,
+        stage=f"AHC flagged points ({label})",
+        model=model,
+        engine=native["engine"],
+        projection=vector_projection(),
+        scale=factor / len(points),
+    )
+    for key in ("sum_abs", "pair_shift", "flip_allowance", "allowance"):
+        summary[f"{key}_S_cm"] = summary.pop(key)
     return {
         "sigma": _vector(tensor),
         "per_k_flagged": listed,
@@ -639,6 +747,132 @@ def _ahc_evaluate(context: OpenMXStepContext, model: Any, label: str) -> dict[st
     return evaluation
 
 
+EMULATION_ROLE = (
+    "comparison diagnostic, not a QUEER result: PyATB's own scheme evaluated with QUEER's per-k functions "
+    "on the model PyATB reads"
+)
+REFINED_GRID_SCHEME = (
+    "PyATB's Grid integral: the Gamma-origin nodes k_start + sum_i v_i n_i/N_i; a node whose judged value "
+    "reaches adaptive_grid_threshold is replaced by the adaptive_grid sub-grid starting half a coarse cell "
+    "(sum_i v_i/N_i)/2 below it, each sub-node weighted 1/(N n)"
+)
+
+
+def _pyatb_refined_grid(context: OpenMXStepContext, family: str, sign: int = 1) -> dict[str, Any] | None:
+    """PyATB's refined Grid sum on the grid and its double (``e_P``); None unless the Grid refines and
+    ``self_convergence`` is set.
+
+    The sums use :func:`hall_rows` on the model PyATB reads. An AHC node is judged
+    by the norm of its occupied curvature vector, a Chern node by the absolute
+    curvature along the plane normal (Å² on PyATB's Bohr radius); an AHC sum is
+    printed with PyATB's constants and ``sign`` (the file's), a Chern sum is the
+    plane flux over 2 pi.
+    """
+    native = context.recipe["parameters"]
+    integration = native.get("integration")
+    if integration is None or integration.get("method") != "threshold" or not context.params.self_convergence:
+        return None
+    model, engine = context.pyatb_model, native["engine"]
+    grid = [int(value) for value in native["grid"]]
+    subgrid = [int(value) for value in integration["subdivision"]]
+    ratio = pyatb_length_ratio()
+    if family == "AHC":
+        doubled = _doubled(grid)
+        origin, vectors, occupied = np.zeros(3), np.eye(3), None
+        projection = vector_projection()
+        scale = -sign * PYATB_E_CHARGE**2 / PYATB_HBAR * 1e8 / (volume(model) * ratio)
+
+        def magnitude(rows: np.ndarray) -> np.ndarray:
+            return np.linalg.norm(rows[:, :9] @ projection.T, axis=1) * ratio**2
+
+    else:
+        doubled = _doubled(grid, active=(0, 1))
+        origin, spans, vectors = _plane(native)
+        occupied = native.get("occupied_bands")
+        cartesian = spans @ reciprocal(model)
+        projection = plane_projection(*cartesian)
+        area = float(np.linalg.norm(np.cross(*cartesian)))
+        scale = 1.0 / (2 * np.pi)
+
+        def magnitude(rows: np.ndarray) -> np.ndarray:
+            return np.abs(rows[:, :9] @ projection[0]) / area * ratio**2
+
+    stage = f"{family} PyATB refined-grid emulation"
+
+    def rows_at(points: np.ndarray) -> np.ndarray:
+        return context.grid_rows(stage, model, points, engine, occupied)
+
+    def project(rows: np.ndarray) -> np.ndarray:
+        return rows[:, :9] @ projection.T
+
+    def regularise(points: np.ndarray, rows: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        # PyATB's own rule at the flagged points, before it judges or sums them.
+        rows = np.array(rows, copy=True)
+        windows = np.zeros((len(points), len(projection)))
+        mask = context.flag_mask(rows, engine)
+        if mask.any():
+            rule = context.rule_rows(stage, model, points[mask], engine, occupied, projection)
+            rows[mask, :9] = rule[:, :9]
+            windows[mask] = rule[:, 9:]
+        return rows, windows
+
+    fine_nodes = gamma_nodes(doubled, origin, vectors)
+    fine_rows = rows_at(fine_nodes)
+    # The grid's nodes are the doubled grid's even nodes along its doubled axes (the same numbers).
+    keep = tuple(slice(None, None, 2) if d != g else slice(None) for g, d in zip(grid, doubled, strict=True))
+    coarse_index = np.arange(len(fine_nodes)).reshape(doubled)[keep].ravel()
+    settings: dict[str, Any] = {
+        "subgrid": subgrid,
+        "threshold": float(integration["threshold"]),
+        "vectors": vectors,
+        "project": project,
+        "magnitude": magnitude,
+        "regularise": regularise,
+    }
+    coarse = refined_sum(fine_nodes[coarse_index], fine_rows[coarse_index], rows_at, grid=grid, **settings)
+    fine = refined_sum(fine_nodes, fine_rows, rows_at, grid=doubled, **settings)
+    printed, printed_doubled = scale * coarse["mean"], scale * fine["mean"]
+    unit = "_S_cm" if family == "AHC" else ""
+    context.log(
+        f"PyATB refined-grid emulation: {coarse['flagged']} of {int(np.prod(grid))} nodes refined "
+        f"({fine['flagged']} on the doubled grid); printed {printed.tolist()}, doubled {printed_doubled.tolist()}"
+    )
+    return {
+        "role": EMULATION_ROLE,
+        "scheme": REFINED_GRID_SCHEME,
+        "judged": "|occupied curvature vector| (A^2)"
+        if family == "AHC"
+        else "|occupied curvature . n| (A^2)",
+        "model": "spin-up channel, occupied once" if context.legacy else "the scfout's spin-orbit model",
+        "grid": grid,
+        "doubled_grid": doubled,
+        "subgrid": subgrid,
+        "threshold_A2": float(integration["threshold"]),
+        f"printed{unit}": printed.tolist(),
+        f"printed_doubled{unit}": printed_doubled.tolist(),
+        f"e_P{unit}": np.abs(printed - printed_doubled).tolist(),
+        "e_P_definition": "|PyATB's refined sum on N - on 2N|, N the coarse grid (QUEER's evaluation of it)",
+        "flagged": coarse["flagged"],
+        "flagged_doubled": fine["flagged"],
+        "threshold_ties": coarse["ties"],
+        f"tie_allowance{unit}": (abs(scale) * coarse["tie_allowance"]).tolist(),
+        f"flag_allowance{unit}": (abs(scale) * coarse["flag_allowance"]).tolist(),
+        "points": int(len(fine_nodes) + coarse["sub_points"] + fine["sub_points"]),
+        "constants": {
+            "e_C": PYATB_E_CHARGE,
+            "hbar_J_s": PYATB_HBAR,
+            "bohr_angstrom": PYATB_BOHR_ANGSTROM,
+            "printed_sign": sign if family == "AHC" else None,
+        },
+    }
+
+
+def _emulations(**blocks: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The ``pyatb_emulation`` block: the emulations that ran, or None."""
+    present = {name: block for name, block in blocks.items() if block is not None}
+    return present or None
+
+
 def _integration_block(
     meta: Mapping[str, Any], native: Mapping[str, Any], evaluation: Mapping[str, Any]
 ) -> dict:
@@ -704,6 +938,7 @@ def run_ahc(context: OpenMXStepContext) -> None:
         "per_k_flagged": physical["per_k_flagged"],
         "flagged": physical["flagged"],
         "raw_curvature_to_S_cm": raw_curvature_to_s_cm(context.model),
+        "pyatb_emulation": _emulations(refined_grid=_pyatb_refined_grid(context, "AHC", sign)),
     }
     record.results["integration"] = {
         **_integration_block(meta, native, physical),
@@ -732,13 +967,20 @@ def _legacy_ahc(context: OpenMXStepContext, physical: Mapping[str, Any]) -> dict
     )
     if model.spin_mode == "nonmagnetic":
         degeneracy = spin_degeneracy(model)
+        scaled = ("c", "c_pyatb_rule", "flip_allowance", "allowance")
         listed = [
-            {**entry, "c": [value / degeneracy for value in entry["c"]]}
+            {**entry, **{key: [value / degeneracy for value in entry[key]] for key in scaled if key in entry}}
             for entry in physical["per_k_flagged"]
         ]
         flagged = physical["flagged"]
         if flagged is not None:
-            flagged = {**flagged, "sum_abs_S_cm": [value / degeneracy for value in flagged["sum_abs_S_cm"]]}
+            flagged = {
+                **flagged,
+                **{
+                    key: [value / degeneracy for value in flagged[key]]
+                    for key in ("sum_abs_S_cm", "pair_shift_S_cm", "flip_allowance_S_cm", "allowance_S_cm")
+                },
+            }
         integration = dict(physical.get("integration") or {})
         convergence = integration.get("self_convergence")
         if isinstance(convergence, Mapping) and convergence.get("e_Q") is not None:
@@ -785,14 +1027,20 @@ def _warn_integration(
         context.record.warn(
             WARN_FLAGGED,
             f"{flagged['count']} of {flagged['points']} k-points have a level within "
-            f"{flagged['delta_ef_eV']:.3g} eV of E_F or an occupied-empty pair closer than "
-            f"{PAIR_GAP_EV:g} eV; their contributions are listed in per_k_flagged",
+            f"{flagged['delta_ef_eV']:.3g} eV of E_F"
+            + (
+                f" or an occupied-empty pair closer than {PAIR_GAP_EV:g} eV"
+                if native["engine"] == "direct"
+                else ""
+            )
+            + "; their contributions and PyATB allowances are listed in per_k_flagged",
         )
     if meta.get("refinement") == "threshold" and not context.params.self_convergence:
         context.record.warn(
             WARN_SELF_CONVERGENCE_SKIPPED,
             "the grid refinement places other nodes than PyATB's and no self-convergence estimate was "
-            "requested (self_convergence true): a parity comparison of this run is not possible",
+            "requested (self_convergence true), so neither e_Q nor PyATB's own refinement error e_P is known: "
+            "a parity comparison of this run is not possible",
         )
 
 
@@ -824,15 +1072,32 @@ def _chern_grid(
     value = float(fluxes.sum(axis=0)[0] / (2 * np.pi))
     counts = rows[:, 11]
     contributions = fluxes[:, 0] / (2 * np.pi)
-    listed, summary = context.flagged(points, rows, contributions[:, None])
+    listed, summary = context.flagged(
+        points,
+        rows,
+        contributions[:, None],
+        stage=f"Chern flagged points ({label})",
+        model=model,
+        engine=native["engine"],
+        projection=plane_projection(*cartesian),
+        scale=1.0 / (grid[0] * grid[1] * 2 * np.pi),
+        occupied_bands=occupied,
+    )
     for entry in listed:
-        entry["c"] = entry["c"][0]
+        for key in ("c", "c_pyatb_rule", "flip_allowance", "allowance"):
+            entry[key] = entry[key][0]
     return {
         "value": value,
         "gapped": bool(np.all(counts == counts[0])) if len(counts) else False,
         "occupied_count": int(counts[0]) if len(counts) and np.all(counts == counts[0]) else None,
         "per_k_flagged": listed,
-        "flagged": {**summary, "sum_abs": float(summary["sum_abs"][0])} if summary else None,
+        "flagged": {
+            **summary,
+            **{
+                key: float(summary[key][0])
+                for key in ("sum_abs", "pair_shift", "flip_allowance", "allowance")
+            },
+        },
         "integration": {"points": int(len(points)), "node_placement": "gamma_origin", "error_estimate": None},
     }
 
@@ -957,6 +1222,7 @@ def run_chern(context: OpenMXStepContext) -> None:
         "legacy_single_channel": legacy,
         "per_k_flagged": physical["per_k_flagged"],
         "flagged": physical["flagged"],
+        "pyatb_emulation": _emulations(refined_grid=_pyatb_refined_grid(context, "CHERN_NUMBER")),
     }
     record.results["integration"] = {
         **_integration_block(meta, native, physical),
