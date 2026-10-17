@@ -489,6 +489,75 @@ def test_a_capability_refusal_is_not_comparable_and_other_failures_fail(runs, tm
     assert report["verdict"] == NOT_COMPARABLE and _preconditions(report) == {"parameters"}
 
 
+def test_a_run_failing_before_its_scfout_is_staged_is_judged_on_the_same_scfout(runs, tmp_path, monkeypatch):
+    import queer.compat.generator.runner as runner
+
+    # PyATB runs a zero absolute_error to its generation cap; QUEER refuses it while it
+    # translates the parameters, before the scfout is staged.
+    adaptive = {"integrate_mode": "Adaptive", "initial_grid": [32, 32, 1], "absolute_error": 0.0}
+    reference = reference_from(tmp_path / "reference", runs["openmx"])
+    echo = read(reference / "Out/input.json")
+    for key in ("integrate_grid", "adaptive_grid", "adaptive_grid_threshold"):
+        echo["AHC"].pop(key)
+    echo["AHC"].update(adaptive, relative_error=1e-4)
+    write(reference / "Out/input.json", echo)
+    refused = tmp_path / "refused"
+    refused.mkdir()
+    qwz_spinor_scfout(refused / "scf.scfout")
+    params = read(runs["openmx"] / "queer_params.json")
+    for key in ("integrate_grid", "adaptive_grid", "adaptive_grid_threshold"):
+        params["parameters"].pop(key)
+    params["parameters"].update(adaptive, relative_error=1e-4)
+    write(refused / "queer_params.json", params)
+    assert run(None, refused / "queer_params.json", refused, log=lambda line: None) == 2
+    document = read(refused / "queer_results.json")
+    assert document["error"]["code"] == "queer_bad_params" and "model" not in document
+    assert document["provenance"]["inputs"]["scf.scfout"]["sha256"] == sha256(refused / "scf.scfout")
+    report = compare("AHC", reference, refused)
+    assert report["verdict"] == NOT_COMPARABLE and _preconditions(report) == {"capability"}, render_markdown(
+        report
+    )
+    assert "zero tolerance" in report["preconditions"][-1]["detail"]
+
+    # A defect in QUEER's parameter translation fails against the completed PyATB run.
+    def broken(params, step=None):
+        raise KeyError("integrate_grid")
+
+    monkeypatch.setattr(runner, "translate_openmx", broken)
+    crashed = copy(runs["openmx"], tmp_path / "crashed")
+    (crashed / "queer_results.json").unlink()
+    assert run(None, crashed / "queer_params.json", crashed, log=lambda line: None) == 1
+    document = read(crashed / "queer_results.json")
+    assert document["error"]["code"] == "queer_internal_error"
+    assert document["provenance"]["inputs"]["scf.scfout"]["sha256"] == sha256(crashed / "scf.scfout")
+    report = compare("AHC", reference_from(tmp_path / "plain", runs["openmx"]), crashed)
+    assert report["verdict"] == FAIL and classes(report) == {"status": UNEXPLAINED}, render_markdown(report)
+    # Without a staged scfout there is no digest: the missing input is the failure compared.
+    (crashed / "scf.scfout").unlink()
+    monkeypatch.undo()
+    assert run(None, crashed / "queer_params.json", crashed, log=lambda line: None) == 2
+    document = read(crashed / "queer_results.json")
+    assert (
+        document["error"]["code"] == "queer_missing_input"
+        and "scf.scfout" not in document["provenance"]["inputs"]
+    )
+    report = compare("AHC", reference_from(tmp_path / "missing", runs["openmx"]), crashed)
+    assert report["verdict"] == FAIL and "before it read a scfout" in report["preconditions"][2]["detail"]
+
+
+def test_a_chern_reference_without_hall_convention_compares(runs, tmp_path):
+    # A Chern number carries no Hall sign: a pre-key echo (no hall_convention, read as pyatb)
+    # against a candidate built from its Input (auto, read as openmx) still compares.
+    reference = calibration_reference("h_chern_fermi", tmp_path / "reference")
+    echo = read(reference / "Out/input.json")
+    assert echo["INPUT_PARAMETERS"].pop("hall_convention") == "openmx"
+    write(reference / "Out/input.json", echo)
+    candidate_dir = template(runs, tmp_path / "chern", "h_chern_fermi", chern=-0.9999999999999989)
+    assert read(candidate_dir / "queer_params.json")["input_parameters"]["hall_convention"] == "auto"
+    report = compare("CHERN_NUMBER", reference, candidate_dir)
+    assert report["verdict"] == PASS and classes(report)["chern_number"] == AGREE, render_markdown(report)
+
+
 def test_a_budget_refusal_of_a_real_run_is_not_comparable(runs, tmp_path, monkeypatch):
     import queer.compat.generator.openmx_steps as steps
 

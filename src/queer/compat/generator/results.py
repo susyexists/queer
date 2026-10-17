@@ -28,7 +28,7 @@ import sys
 import tempfile
 import time
 import traceback
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -389,6 +389,7 @@ def execute(
     translate: Callable[[Mapping[str, Any], str | None], Any] | None = None,
     approximation: str | None = None,
     record_params: bool = False,
+    staged: Callable[[Mapping[str, Any]], Sequence[str]] | None = None,
 ) -> int:
     """Run one step in ``workspace`` and write ``queer_results.json`` whatever happens.
 
@@ -397,7 +398,10 @@ def execute(
     default), whose result names ``step`` and ``counterpart``, and
     ``run(parameters, record, log)`` fills ``record``. ``approximation`` replaces
     the Wannier steps' approximation note and ``record_params`` records the
-    parameter file among the inputs. The document is written on success and on
+    parameter file among the inputs. ``staged(params)`` names staged input files
+    (relative to the workspace) whose size and SHA-256 are recorded as soon as the
+    parameter file is read, before ``translate``, whenever they are files, so a run
+    that fails early still records its inputs. The document is written on success and on
     every failure, with the blocks computed so far, and the return value is the
     process exit code. Blocks that are not JSON give way to a
     ``queer_internal_error`` document without them. An interrupt propagates after
@@ -420,6 +424,9 @@ def execute(
         params = read_params(params_path)
         if record_params:
             record.record_input(Path(params_path).name, params_path)
+        for name in staged(params) if staged is not None else ():
+            if (root / name).is_file():
+                record.record_input(name)
         if step is None:
             document["step_type"] = params.get("step_type")
         parameters = translate(params, step)

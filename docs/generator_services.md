@@ -625,7 +625,9 @@ The preconditions are the family, the scfout digest (and the reference `Input`
 against its recorded digest), the effective parameters (both sides read as the
 runner reads them, text vectors and numbers included; PyATB's defaults applied,
 keys of the other engine and integration mode and the execution-only keys left
-out; an echo without `hall_convention` is `pyatb`), then, for two completed runs,
+out; `hall_convention` only for the direct or Kubo AHC, since the FHS engine
+ignores it and a Chern number carries no Hall sign; an echo without
+`hall_convention` is `pyatb`), then, for two completed runs,
 the Fermi point `|E_F^Q / HARTREE_EV - E_F^P / 27.211324570273| <= 1e-6 /
 27.211324570273` Hartree (E_F^P from the input echo, or the six decimals
 `running.log` prints for `Auto`; the eV difference is `agree_after_convention`),
@@ -657,8 +659,11 @@ are classified from its logs, Slurm's `slurm-*.err` and `slurm-*.out` included
 (the Generator's batch script does not redirect PyATB's output; an nspin conflict
 is `bad_params`, a memory failure `oom`). A QUEER refusal at a documented limit of
 QUEER's (`queer_validation_failed`, or `queer_bad_params` for an integration
-larger than the job's memory) against a completed PyATB run is `not_comparable`
-with the reason.
+larger than the job's memory or a zero Adaptive tolerance) against a completed
+PyATB run is `not_comparable` with the reason. The runner records the scfout's
+size and SHA-256 before it translates the parameters, so a run that fails that
+early is still compared on the same scfout; only a missing scfout leaves no
+digest (`queer_missing_input`).
 
 **Calibration.** On a kagome Chern insulator with spin-orbit coupling (101 kB
 scfout; E_F -2.35 eV on its sigma_xy plateau, -2.12 eV in a band, -2.60 eV below

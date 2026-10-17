@@ -9,7 +9,9 @@ from queer.compat.generator.openmx_params import (
     STEP_CHERN,
     effective_parameters,
     is_openmx_step,
+    limit_refusal,
     params_from_pyatb_input,
+    staged_scfout,
     translate_openmx,
 )
 from queer.compat.generator.pyatb_files import read_input
@@ -124,6 +126,31 @@ def test_a_zero_adaptive_tolerance_is_refused(key):
     assert translate_openmx(ahc_params(**{key: 0})).parameters[key] == 0.0
 
 
+def test_only_queers_documented_limits_are_limit_refusals():
+    zero = {"integrate_mode": "Adaptive", "initial_grid": [8, 8, 8], "absolute_error": 0, "relative_error": 0}
+    with pytest.raises(RunnerError) as both:
+        translate_openmx(ahc_params(**zero))
+    assert limit_refusal(both.value.code, str(both.value))
+    # A zero tolerance beside a genuine problem is a bad parameter, not a limit of QUEER's.
+    with pytest.raises(RunnerError) as mixed:
+        translate_openmx(ahc_params(**{**zero, "initial_grid": "7 7"}))
+    assert "initial_grid" in str(mixed.value) and not limit_refusal(mixed.value.code, str(mixed.value))
+    budget = "the integration grid 9x9x9 (729 cells) exceeds QUEER's integration budget of 10 cells"
+    assert limit_refusal("queer_bad_params", budget)
+    assert not limit_refusal("queer_bad_params", "Invalid QUEER parameters: unknown keys for QUEER_AHC: x")
+    assert not limit_refusal("queer_internal_error", str(both.value))
+
+
+def test_the_staged_scfout_is_named_before_the_parameters_are_translated():
+    assert staged_scfout({}) == ["scf.scfout"] and staged_scfout({"scfout": "run/a.scfout"}) == [
+        "run/a.scfout"
+    ]
+    for unsafe in ("/abs/scf.scfout", "../scf.scfout", 7):
+        assert staged_scfout({"scfout": unsafe}) == []
+        with pytest.raises(RunnerError, match="a file name relative to the workspace"):
+            translate_openmx({**ahc_params(), "scfout": unsafe})
+
+
 def test_a_key_less_echo_is_a_pre_key_pyatb_with_its_native_sign():
     # PyATB resolves hall_convention before it writes Out/input.json, so an echo
     # without the key comes from a build older than the key: the native sign.
@@ -204,3 +231,7 @@ def test_effective_parameters_apply_pyatb_defaults_and_drop_inapplicable_keys():
     assert fhs["input"] == {}
     chern = effective_parameters(STEP_CHERN, {}, {"integrate_grid": [10, 10, 7], "integrate_mode": "Grid"})
     assert chern["function"]["integrate_grid"] == [10, 10, 1] and chern["function"]["occ_band"] == -1
+    # A Chern number carries no Hall sign: whatever the convention or its absence, it is not compared.
+    for inputs, missing in (({"hall_convention": "pyatb"}, "auto"), ({}, "pyatb"), ({}, "auto")):
+        resolved = effective_parameters(STEP_CHERN, {"nspin": 4, **inputs}, {}, missing_convention=missing)
+        assert resolved["input"] == {"nspin": 4}

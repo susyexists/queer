@@ -55,6 +55,10 @@ DEFAULT_SCFOUT = "scf.scfout"
 # Every refusal of an integration too large for the job's memory says this, so a
 # parity comparison can tell QUEER's own limit from a failed calculation.
 BUDGET_REFUSAL = "exceeds QUEER's integration budget"
+# The refusal of a zero Adaptive tolerance, another of QUEER's documented limits.
+ZERO_TOLERANCE_REFUSAL = "an adaptive integral never meets a zero tolerance"
+PARAMS_REFUSAL = "Invalid QUEER parameters: "
+ADAPTIVE_TOLERANCES = ("relative_error", "absolute_error")
 
 TOP_LEVEL_KEYS: tuple[str, ...] = (
     "step_type",
@@ -349,13 +353,7 @@ def translate_openmx(params: Mapping[str, Any], step: str | None = None) -> Open
     )
     problems += found
     if function.get("integrate_mode") == "Adaptive":
-        for key in ("relative_error", "absolute_error"):
-            if function.get(key) == 0:
-                problems.append(
-                    f"parameters.{key} = 0: an adaptive integral never meets a zero tolerance (PyATB runs to "
-                    "its generation cap, QUEER's cubature would refine until its budget runs out); give a "
-                    "positive value"
-                )
+        problems += [_zero_tolerance(key) for key in ADAPTIVE_TOLERANCES if function.get(key) == 0]
     workers = params.get("workers")
     if workers is not None:
         try:
@@ -364,14 +362,13 @@ def translate_openmx(params: Mapping[str, Any], step: str | None = None) -> Open
             problems.append(f"workers = {params.get('workers')!r}: {error}")
             workers = None
     scfout = params.get("scfout") or DEFAULT_SCFOUT
-    path = PurePosixPath(str(scfout))
-    if not isinstance(scfout, str) or path.is_absolute() or ".." in path.parts or not path.name:
+    if not staged_scfout(params):
         problems.append(f"scfout = {scfout!r}: a file name relative to the workspace")
     self_convergence = params.get("self_convergence")
     if self_convergence is not None and not isinstance(self_convergence, bool):
         problems.append(f"self_convergence = {self_convergence!r}: true or false")
     if problems:
-        raise RunnerError(ERR_BAD_PARAMS, "Invalid QUEER parameters: " + "; ".join(problems))
+        raise RunnerError(ERR_BAD_PARAMS, PARAMS_REFUSAL + "; ".join(problems))
     parameters = OpenMXStepParameters(
         resolved,
         COUNTERPARTS[resolved],
@@ -384,6 +381,43 @@ def translate_openmx(params: Mapping[str, Any], step: str | None = None) -> Open
     # The translation's own checks (combinations, Auto with FHS) on a placeholder E_F.
     parameters.recipe(fermi_energy=0.0)
     return parameters
+
+
+def _zero_tolerance(key: str) -> str:
+    return (
+        f"parameters.{key} = 0: {ZERO_TOLERANCE_REFUSAL} (PyATB runs to its generation cap, QUEER's "
+        "cubature would refine until its budget runs out); give a positive value"
+    )
+
+
+def staged_scfout(params: Mapping[str, Any]) -> list[str]:
+    """The scfout a parameter file names (``scf.scfout`` when it names none), if it is a plain file name
+    relative to the workspace; else nothing."""
+    scfout = params.get("scfout") or DEFAULT_SCFOUT
+    if not isinstance(scfout, str):
+        return []
+    path = PurePosixPath(scfout)
+    return [] if path.is_absolute() or ".." in path.parts or not path.name else [scfout]
+
+
+def limit_refusal(code: Any, message: Any) -> bool:
+    """Whether a ``queer_bad_params`` failure is QUEER refusing at a documented limit of its own.
+
+    An integration larger than the job's memory allows, or parameters whose only
+    problems are zero Adaptive tolerances, which PyATB accepts and runs to its
+    generation cap.
+    """
+    text = str(message or "")
+    if code != ERR_BAD_PARAMS:
+        return False
+    if BUDGET_REFUSAL in text:
+        return True
+    if not text.startswith(PARAMS_REFUSAL):
+        return False
+    rest = text[len(PARAMS_REFUSAL) :]
+    for key in ADAPTIVE_TOLERANCES:
+        rest = rest.replace(_zero_tolerance(key), "")
+    return rest != text[len(PARAMS_REFUSAL) :] and not rest.replace(";", "").strip()
 
 
 def _resolved(key: str, value: Any) -> Any:
@@ -418,10 +452,11 @@ def effective_parameters(
     Values are normalized as :func:`translate_openmx` reads them (``"100 100 1"``
     is ``[100, 100, 1]``, ``"1e30"`` is ``1e30``). The function block keeps the keys
     of the selected engine and integration mode; a Chern grid's third axis is 1,
-    as PyATB sets it. ``input`` holds ``nspin`` and the resolved
-    ``hall_convention`` (omitted for the FHS engine, which ignores it); a missing
-    convention is ``missing_convention``: ``auto`` for an ``Input`` file, ``pyatb``
-    for PyATB's resolved echo, which names the key once PyATB has one.
+    as PyATB sets it. ``input`` holds ``nspin`` and, for the direct or Kubo AHC,
+    the resolved ``hall_convention`` (the FHS engine ignores it and a Chern number
+    carries no Hall sign); a missing convention is ``missing_convention``: ``auto``
+    for an ``Input`` file, ``pyatb`` for PyATB's resolved echo, which names the key
+    once PyATB has one.
     Execution-only settings and the Fermi energy (compared by its own rule) are
     left out.
     """
@@ -466,7 +501,7 @@ def effective_parameters(
         inputs["nspin"] = int(
             _comparable("nspin", input_parameters["nspin"], lambda k, v: _input_value(k, v, None))
         )
-    if engine != "fhs":
+    if resolved == STEP_AHC and engine != "fhs":
         convention = input_parameters.get("hall_convention")
         inputs["hall_convention"] = resolve_hall_convention(
             missing_convention if convention is None else convention

@@ -16,7 +16,8 @@ verdicts of :mod:`~queer.compat.generator.parity`.
 - the same parameters: the function block and ``nspin``/``hall_convention`` of
   ``Out/input.json`` against the candidate's ``queer_params.json``, both read as
   the runner reads them (text vectors and numbers included), PyATB's defaults
-  applied, inapplicable and execution-only keys ignored. An echo without
+  applied, inapplicable and execution-only keys ignored (``hall_convention`` too
+  for the FHS engine and a Chern number, which carry no Hall sign). An echo without
   ``hall_convention`` comes from a PyATB build older than the key, which printed
   its native sign: it is ``pyatb`` (a missing key in an ``Input`` is ``auto``);
 - the same Fermi point: ``|E_F^Q / HARTREE_EV - E_F^P / PYATB_HARTREE_EV| <=
@@ -83,8 +84,10 @@ Runs are judged after the scfout and parameter preconditions. Two failed runs
 pass when their failures are equivalent: a PyATB failure is classified from its
 logs, Slurm's ``slurm-*.err``/``slurm-*.out`` included (an nspin conflict is
 ``bad_params``, a memory failure ``oom``). A QUEER refusal at its own documented
-limit (``queer_validation_failed``, or an integration larger than the job's
-memory) against a completed PyATB run is ``not_comparable``.
+limit (``queer_validation_failed``, an integration larger than the job's memory or
+a zero Adaptive tolerance) against a completed PyATB run is ``not_comparable``.
+The candidate records the scfout's digest before it translates its parameters, so
+a run that fails early is still compared on the same inputs.
 """
 
 from __future__ import annotations
@@ -100,7 +103,6 @@ from typing import Any
 import numpy as np
 
 from .openmx_params import (
-    BUDGET_REFUSAL,
     COUNTERPARTS,
     FUNCTION_BLOCKS,
     PARAMS_FILENAME,
@@ -108,6 +110,7 @@ from .openmx_params import (
     STEP_CHERN,
     canonical_openmx_step,
     effective_parameters,
+    limit_refusal,
 )
 from .parity import (
     AFTER_CONVENTION,
@@ -150,7 +153,6 @@ from .pyatb_files import (
 )
 from .results import (
     CHERN_INTEGER_TOL,
-    ERR_BAD_PARAMS,
     ERR_MISSING_INPUT,
     ERR_VALIDATION,
     RESULTS_FILENAME,
@@ -466,13 +468,14 @@ class _PyatbComparison:
 
         ``queer_validation_failed`` (a refining Chern integral on a metallic plane,
         an integration that ran out of its budget) and a ``queer_bad_params``
-        refusal of an integration larger than the job's memory allows.
+        refusal of an integration larger than the job's memory allows or of a zero
+        Adaptive tolerance (:func:`~.openmx_params.limit_refusal`).
         """
         if self.candidate.ok:
             return None
         error = self.candidate.document.get("error") or {}
         code, message = str(error.get("code") or ""), str(error.get("message") or "")
-        if code == ERR_VALIDATION or (code == ERR_BAD_PARAMS and BUDGET_REFUSAL in message):
+        if code == ERR_VALIDATION or limit_refusal(code, message):
             return f"{code}: {message}"
         return None
 

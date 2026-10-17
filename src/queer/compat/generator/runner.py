@@ -6,7 +6,8 @@ and on every failure. A Wannier step (``QUEER_BANDS``, ``QUEER_TOPOLOGY``,
 ``QUEER_BERRY``, ``QUEER_SLAB`` or its ``PYTHTB_`` name) builds and validates its
 model from the staged ``wannier90`` files; an OpenMX step (``QUEER_AHC``,
 ``QUEER_CHERN_NUMBER`` or its ``PYATB_`` name) reads the staged scfout and the
-``queer_params.json`` of :mod:`~queer.compat.generator.openmx_params`. The exit
+``queer_params.json`` of :mod:`~queer.compat.generator.openmx_params`, recording
+the scfout's size and SHA-256 before it translates the parameters. The exit
 code follows the Generator PythTB driver: 0 success, 2 a failure reported with a
 stable code, 3 out of memory (``queer_oom``), 1 anything unexpected
 (``queer_internal_error``, whose message ends with the innermost frames of the
@@ -40,7 +41,7 @@ from typing import Any
 
 from .bands import run_bands
 from .berry import run_berry
-from .openmx_params import OPENMX_STEPS, is_openmx_step, translate_openmx
+from .openmx_params import OPENMX_STEPS, is_openmx_step, staged_scfout, translate_openmx
 from .openmx_steps import APPROXIMATION_NOTE as OPENMX_APPROXIMATION_NOTE
 from .openmx_steps import openmx_step_body
 from .pythtb_params import STEP_BANDS, STEP_BERRY, STEP_SLAB, STEP_TOPOLOGY, WannierStepParameters
@@ -117,6 +118,7 @@ def run(
             translate=translate_openmx,
             approximation=OPENMX_APPROXIMATION_NOTE,
             record_params=True,
+            staged=staged_scfout,
         )
     return execute(workspace, params_path, step_body, step=step, log=log)
 
