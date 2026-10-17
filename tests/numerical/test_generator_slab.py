@@ -4,7 +4,7 @@ The vendored driver runs its own ``run_slab`` on a stand-in context holding the
 step's folded table, so the levels, the per-state edge weights, the crossing
 flows, the path and the outputs are compared one to one. A Chern layer's ribbon
 carries one chiral mode per edge; a trivial one shows nothing in its window, which
-is not certified as 0.
+its bulk Chern number of 0, on a bulk mesh that resolves the gap, certifies.
 """
 
 import json
@@ -111,7 +111,7 @@ def assert_matches_the_driver(core, monkeypatch, directory, document, values):
 
 
 @pytest.mark.parametrize(
-    ("staggered", "net", "status"), [(0.2, 1, "resolved"), (1.5, 0, "unresolved")], ids=["chern", "trivial"]
+    ("staggered", "net", "status"), [(0.2, 1, "resolved"), (1.5, 0, "resolved")], ids=["chern", "trivial"]
 )
 def test_a_haldane_ribbon_has_one_chiral_mode_per_edge_exactly_as_the_driver(
     generator_core, monkeypatch, tmp_path, staggered, net, status
@@ -132,8 +132,11 @@ def test_a_haldane_ribbon_has_one_chiral_mode_per_edge_exactly_as_the_driver(
     assert bulk["metal"] is False and bulk["k_points"] == [42, 80]
     # The bulk Chern number of the bands below E_F, the periodic axis first, is the left net.
     assert bulk["chern"] == net and bulk["berry_phase_step"] < np.pi / 2
-    if status == "unresolved":
-        assert crossings["reason"].startswith("no level lies within the window at any k")
+    if net == 0:
+        # Nothing in the window, and a bulk Chern number of 0 on a mesh that resolves the gap.
+        assert crossings["reason"].startswith(
+            "the bulk Chern number is 0 and no level crosses the gap: no level lies within the window"
+        )
     produced = assert_matches_the_driver(generator_core, monkeypatch, tmp_path, document, values)
     # 41 points round up to 42, half a step off -1/2, 0 and 1/2.
     k = np.asarray(produced["kpoints_frac"])

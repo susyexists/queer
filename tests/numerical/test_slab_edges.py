@@ -86,9 +86,10 @@ def test_trivial_haldane_ribbon_has_no_edge_crossings_in_serial_or_parallel_runs
     model = haldane(staggered=1.0)
     assert abs(float(chern_number(model, grid=(12, 12, 1))["chern_number"])) < 1e-10
     tally = ribbon_flow(model, ribbon_kpoints(40), 20)
-    # Nothing crosses, and nothing lies in the gap: a count of 0 is not certified from absence.
-    assert tally["left"]["net"] == tally["right"]["net"] == 0 and tally["status"] == "unresolved"
-    assert "rest on absence" in tally["reason"] and "the bulk Chern number is +0" in tally["reason"]
+    # Nothing crosses and nothing lies in the window: on a bulk mesh that resolves the gap the
+    # bulk Chern number, 0, certifies the empty gap; absence alone would not.
+    assert tally["left"]["net"] == tally["right"]["net"] == 0 and tally["status"] == "resolved"
+    assert tally["reason"].startswith("the bulk Chern number is 0 and no level crosses the gap")
     assert all(row["left_flow"] == 0.0 for row in tally["per_energy"])
     spectrum = slab_edge_spectrum(model, ribbon_kpoints(40), finite_axis=1, cells=20, window=0.5)
     options = ExecutionOptions(workers=2, batch_size=4)

@@ -25,15 +25,18 @@ cutoffs):
 - ``bulk_at_fermi`` says whether the bulk bands cross E_F at the same in-plane
   k-points, sampled along the finite axis at least as finely as the slab samples
   its own k, and gives the bulk gap around E_F and, over a ribbon's closed zone,
-  the Chern number of the bands below E_F (:func:`bulk_levels_at_fermi`);
+  the Chern number of the bands below E_F, with how far the gap's edges can lie
+  beyond the samples (:func:`bulk_levels_at_fermi`);
 - ``edge_crossings_at_fermi`` is the driver's weighted spectral flow of the
   first-half weight through E_F, the last ribbon point paired with the first
   (:func:`~queer.compat.generator.estimators.edge_crossings`), checked at 9
-  energies across the bulk gap: ``status`` is ``resolved`` (every flow on the same
-  integer, the bulk Chern number), ``unresolved`` (with a ``reason`` and the
-  failed ``checks``), ``metal`` or, for a slab's open surface path,
-  ``open_path``. The counts are informational; the bulk Chern number is the
-  invariant.
+  energies across the bulk gap the bulk mesh guarantees: ``status`` is
+  ``resolved`` (every flow on the same integer, the bulk Chern number, or an
+  empty gap on a trusted bulk Chern number of 0), ``unresolved`` (with a
+  ``reason`` and the failed ``checks``, ``k_mesh`` where the bulk mesh does not
+  resolve the gap), ``metal`` or, for a slab's open surface path,
+  ``open_path``. The counts are informational, ``up`` and ``down`` upper
+  bounds; the bulk Chern number is the invariant.
 
 The step writes ``Out/ribbon_bands.json`` or ``Out/slab_bands.json``
 (``k_distance``, fractional for a ribbon and in 1/Å with 2 pi for a slab;
@@ -54,6 +57,7 @@ import numpy as np
 from ...observables.surface import slab_eigensystem
 from ...physics.slab import edge_cells_used
 from .estimators import (
+    bulk_aliasing,
     bulk_k_perp_points,
     bulk_row,
     bulk_summary,
@@ -68,7 +72,10 @@ from .plots import new_figure, save_figure, tick_marks
 from .results import ERR_BAD_PARAMS, OUT_DIR, WARN_PLOT_SKIPPED, RunnerError, write_json_atomic
 from .wannier_steps import WannierStepContext
 
-CROSSINGS_NOTE = "Crossing counts are informational: the bulk Chern number is the invariant."
+CROSSINGS_NOTE = (
+    "Crossing counts are informational: the bulk Chern number is the invariant. up and down are "
+    "upper bounds, the most crossings each k-step allows; their difference is the net."
+)
 # Orbitals above which the default slab is thinner.
 LARGE_MODEL_ORBITALS = 60
 # Matrices per k-point of one slab solve the driver plans a worker's memory with.
@@ -142,7 +149,9 @@ def bulk_levels_at_fermi(
     :func:`~queer.compat.generator.estimators.bulk_k_perp_points` points, one in-plane
     k per task (:func:`~queer.compat.generator.estimators.bulk_row`); over a ribbon's
     ``closed`` zone also the Chern number of the bands below E_F
-    (:func:`~queer.compat.generator.estimators.bulk_summary`).
+    (:func:`~queer.compat.generator.estimators.bulk_summary`), and how far the gap's edges can lie
+    beyond the samples, with the hoppings the meshes cannot resolve
+    (:func:`~queer.compat.generator.estimators.bulk_aliasing`).
     """
     translations = np.asarray(context.table_R)
     hoppings = np.array(context.table_H, dtype=complex, copy=True)
@@ -166,7 +175,12 @@ def bulk_levels_at_fermi(
         list(kpoints),
         options,
     )
-    return bulk_summary(rows, n_perp, closed)
+    # Over a ribbon's zone, how much the hoppings the in-plane and finite-axis meshes cannot
+    # resolve may move a band between neighbouring points.
+    aliased = None
+    if closed:
+        aliased = bulk_aliasing(translations, hoppings, [periodic[0], finite], [len(kpoints), n_perp])
+    return bulk_summary(rows, n_perp, closed, aliased)
 
 
 def run_slab(context: WannierStepContext) -> None:

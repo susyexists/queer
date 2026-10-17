@@ -22,6 +22,7 @@ from generator_golden_cases import CASES, write_case  # noqa: E402
 
 from queer.compat.generator import parity  # noqa: E402
 from queer.compat.generator.estimators import (  # noqa: E402
+    CROSSING_ENERGY_TOL,
     dos_at_fermi,
     edge_crossings,
     gaussian_dos,
@@ -517,11 +518,11 @@ def test_slab_levels_at_the_window_edge_on_one_side_pass(runs, tmp_path):
     assert "slab.levels" in report["summary"]["unexplained"]
 
 
-def synthetic_ribbon(source, target, touch, inner=0.0):
+def synthetic_ribbon(source, target, touch, inner=0.0, gap=(-1.0, 1.0)):
     """A run whose ribbon is two chiral modes and a flat left level reaching ``touch`` eV at one k-point.
 
-    ``inner`` is that level's middle-half weight there. The document's crossings and bulk
-    check are rewritten from the file, so the run is consistent with itself.
+    ``inner`` is that level's middle-half weight there, ``gap`` the bulk gap. The document's
+    crossings and bulk check are rewritten from the file, so the run is consistent with itself.
     """
     target = copy(source, target)
     ribbon = read(target / "Out" / "ribbon_bands.json")
@@ -546,7 +547,7 @@ def synthetic_ribbon(source, target, touch, inner=0.0):
     slab = document["slab"]
     slab["bulk_at_fermi"] = {
         "metal": False,
-        "gap_eV": [-1.0, 1.0],
+        "gap_eV": list(gap),
         "k_points": [count, 2 * slab["cells"]],
         "chern": 1,
         "berry_phase_step": 0.1,
@@ -561,11 +562,13 @@ def synthetic_ribbon(source, target, touch, inner=0.0):
 
 
 def test_a_crossing_decided_within_tolerance_of_e_f_is_documented(runs, tmp_path):
-    # A level reaching just below E_F in one run and just above it in the other: one run
-    # counts it up and down again at E_F, the other not at all. Within τ_E either is right.
+    # The flow at E_F is taken just below it: a level within 1e-5 eV of E_F counts as at it.
+    # A level reaching just below that reference in one run and just above it in the other:
+    # one run counts it up and down again at E_F, the other not at all. Within τ_E either is
+    # right.
     source = runs["haldane_slab"][1]
-    reference = synthetic_ribbon(source, tmp_path / "below", -2e-9)
-    candidate = synthetic_ribbon(source, tmp_path / "above", 2e-9)
+    reference = synthetic_ribbon(source, tmp_path / "below", -CROSSING_ENERGY_TOL - 2e-9)
+    candidate = synthetic_ribbon(source, tmp_path / "above", -CROSSING_ENERGY_TOL + 2e-9)
     crossings = [
         read(run / QUEER_RESULTS)["slab"]["edge_crossings_at_fermi"] for run in (reference, candidate)
     ]
@@ -589,8 +592,9 @@ def test_a_crossing_decided_within_tolerance_of_e_f_is_documented(runs, tmp_path
         # reference's edges share it, the candidate's do not, and that decision is near.
         ((0.25 + 1e-9, 0.25 - 1e-9), (-0.06, -0.06), DOCUMENTED),
         # The same status difference from weights 0.4 apart is unexplained, although both runs
-        # hold a level within τ_E of E_F: a near decision elsewhere excuses nothing.
-        ((0.5, 0.1), (2e-9, 2e-9), UNEXPLAINED),
+        # hold a level within τ_E of the reference the flow at E_F is taken at: a near decision
+        # elsewhere excuses nothing.
+        ((0.5, 0.1), (-CROSSING_ENERGY_TOL + 2e-9, -CROSSING_ENERGY_TOL + 2e-9), UNEXPLAINED),
     ],
 )
 def test_a_status_difference_is_documented_only_where_its_checks_differ(
@@ -611,6 +615,93 @@ def test_a_status_difference_is_documented_only_where_its_checks_differ(
         item["detail"] for item in report["quantities"] if item["name"] == "slab.edge_crossings_status"
     )
     assert "hybridised" in detail
+
+
+@pytest.mark.parametrize(
+    ("offsets", "expected"),
+    [
+        # The fifth sample lies 2e-9 eV inside E_F's tolerance in one run and 2e-9 eV outside it in
+        # the other: one run folds it into E_F's row, the other keeps it. Both are near.
+        ((CROSSING_ENERGY_TOL - 2e-9, CROSSING_ENERGY_TOL + 2e-9), DOCUMENTED),
+        # Near the tolerance in one run only, the samples 4e-5 eV apart: nothing excuses a row more.
+        ((CROSSING_ENERGY_TOL - 2e-9, 5e-5), UNEXPLAINED),
+    ],
+)
+def test_a_row_more_is_documented_only_where_both_runs_sample_at_e_fs_tolerance(
+    runs, tmp_path, offsets, expected
+):
+    # The window caps the gap at 0.5 eV above E_F; a bulk gap starting at -0.5 eV + 2x puts the
+    # fifth of the samples, which lie a reach inside both edges, at x.
+    source = runs["haldane_slab"][1]
+    reference = synthetic_ribbon(source, tmp_path / "reference", -0.06, gap=(-0.5 + 2 * offsets[0], 1.0))
+    candidate = synthetic_ribbon(source, tmp_path / "candidate", -0.06, gap=(-0.5 + 2 * offsets[1], 1.0))
+    blocks = [read(run / QUEER_RESULTS)["slab"]["edge_crossings_at_fermi"] for run in (reference, candidate)]
+    assert [len(block["per_energy"]) for block in blocks] == [9, 10]
+    assert blocks[0]["status"] == blocks[1]["status"]
+    report = compare("QUEER_SLAB", reference, candidate)
+    assert classes(report)["slab.edge_crossings_per_energy"] == expected, report["summary"]
+
+
+def synthetic_levels(source, target, energies, half, middle, bulk):
+    """A run whose ribbon holds the given levels, first-half and middle-half weights and bulk check.
+
+    The document's crossings are rewritten from them, so the run is consistent with itself.
+    """
+    target = copy(source, target)
+    ribbon = read(target / "Out" / "ribbon_bands.json")
+    count = len(energies)
+    ribbon.update(
+        kpoints_frac=[[-0.5 + (i + 0.5) / count, 0.0, 0.0] for i in range(count)],
+        k_distance=[-0.5 + (i + 0.5) / count for i in range(count)],
+        energies_eV=[list(map(float, row)) for row in energies],
+        left_weight=[list(map(float, row)) for row in half],
+        right_weight=[[1.0 - float(x) for x in row] for row in half],
+        left_half_weight=[list(map(float, row)) for row in half],
+        interior_weight=[list(map(float, row)) for row in middle],
+    )
+    write(target / "Out" / "ribbon_bands.json", ribbon)
+    document = read(target / QUEER_RESULTS)
+    slab = document["slab"]
+    slab["bulk_at_fermi"] = bulk
+    slab["edge_crossings_at_fermi"] = to_jsonable(
+        edge_crossings(energies, half, middle, periodic=True, window=slab["window_eV"], bulk=bulk)
+    )
+    write(target / QUEER_RESULTS, document)
+    return target
+
+
+def test_counts_at_e_f_follow_a_step_shift_within_tolerance_of_flipping(runs, tmp_path):
+    # One level 0.4 τ_E higher in the candidate: an alignment at a tie of offset costs sets a
+    # step shift of 0.35 eV in the reference and 0.25 eV in the candidate, which moves the reach
+    # and the levels taking part at E_F, and with them the right edge's tallies there (one
+    # crossing each way against one up); nothing at E_F itself is near a flip.
+    # Levels on a 0.05 eV grid, as integers times 0.05 (the tie is one of rounding).
+    levels = [
+        [float(n * 0.05) for n in row]
+        for row in ([-6, -4, -2, -1, 2], [-7, -3, 2, 6, 8], [-8, -6, -5, 6], [-6, -2])
+    ]
+    half = [
+        [0.0, 0.98, 0.02, 0.98, 1.0],
+        [0.2, 0.02, 0.0, 0.0, 0.98],
+        [0.02, 0.98, 0.2, 0.8],
+        [0.02, 0.2],
+    ]
+    middle = [[0.3, 0.3, 0.3, 0.1, 0.3], [0.3, 0.0, 0.0, 0.1, 0.0], [0.1, 0.1, 0.3, 0.3], [0.1, 0.0]]
+    bulk = {"metal": False, "gap_eV": [-0.25, 0.3], "k_points": [4, 8], "chern": -1, "berry_phase_step": 0.3}
+    source = runs["haldane_slab"][1]
+    reference = synthetic_levels(source, tmp_path / "reference", levels, half, middle, bulk)
+    moved = [list(row) for row in levels]
+    moved[1][2] += 4e-9
+    candidate = synthetic_levels(source, tmp_path / "candidate", moved, half, middle, bulk)
+    blocks = [read(run / QUEER_RESULTS)["slab"]["edge_crossings_at_fermi"] for run in (reference, candidate)]
+    assert blocks[0]["step_shift_eV"] == pytest.approx(0.35)
+    assert blocks[1]["step_shift_eV"] == pytest.approx(0.25)
+    assert (blocks[0]["right"], blocks[1]["right"]) == (
+        {"up": 1, "down": 1, "net": 1},
+        {"up": 1, "down": 0, "net": 1},
+    )
+    report = compare("QUEER_SLAB", reference, candidate)
+    assert classes(report)["slab.edge_crossings_at_fermi"] == DOCUMENTED, report["summary"]
 
 
 def test_the_checks_two_blocks_differ_in_name_the_energies_they_differ_at():

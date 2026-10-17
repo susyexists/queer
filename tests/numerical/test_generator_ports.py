@@ -308,6 +308,67 @@ BULK_CHECKS = (
     {"metal": False, "gap_eV": [-0.2, 0.3], "k_points": [3, 4], "chern": 0, "berry_phase_step": 0.2},
     {"metal": False, "gap_eV": [None, 0.1], "k_points": [3, 4], "chern": 1, "berry_phase_step": 2.0},
     {"metal": False, "gap_eV": [-0.6, None], "k_points": [3, 4], "chern": None, "berry_phase_step": None},
+    # With the overshoot of its edges: a mesh that resolves the gap, one that does not, one
+    # whose guaranteed edge passes E_F, and gaps with one edge.
+    {
+        "metal": False,
+        "gap_eV": [-0.2, 0.3],
+        "k_points": [3, 4],
+        "chern": 0,
+        "berry_phase_step": 0.2,
+        "overshoot_eV": [0.05, 0.02],
+    },
+    {
+        "metal": False,
+        "gap_eV": [-0.2, 0.3],
+        "k_points": [3, 4],
+        "chern": 0,
+        "berry_phase_step": 0.2,
+        "overshoot_eV": [0.2, 0.1],
+    },
+    {
+        "metal": False,
+        "gap_eV": [-0.02, 0.3],
+        "k_points": [3, 4],
+        "chern": 1,
+        "berry_phase_step": 0.2,
+        "overshoot_eV": [0.05, 0.01],
+    },
+    {
+        "metal": False,
+        "gap_eV": [None, 0.1],
+        "k_points": [3, 4],
+        "chern": 1,
+        "berry_phase_step": 2.0,
+        "overshoot_eV": [None, 0.01],
+    },
+    {
+        "metal": False,
+        "gap_eV": [-0.6, None],
+        "k_points": [3, 4],
+        "chern": 0,
+        "berry_phase_step": 0.0,
+        "overshoot_eV": [0.1, None],
+    },
+    # A band pair across E_F whose steps exceed half its own gap, and one within it.
+    {
+        "metal": False,
+        "gap_eV": [-0.2, 0.3],
+        "k_points": [3, 4],
+        "chern": 0,
+        "berry_phase_step": 0.2,
+        "overshoot_eV": [0.01, 0.01],
+        "local_overshoot_eV": [0.4, 0.6],
+    },
+    {
+        "metal": False,
+        "gap_eV": [-0.2, 0.3],
+        "k_points": [3, 4],
+        "chern": 0,
+        "berry_phase_step": 0.2,
+        "overshoot_eV": [0.01, 0.01],
+        "local_overshoot_eV": [0.2, 0.6],
+    },
 )
 
 
@@ -356,15 +417,50 @@ def test_the_bulk_check_equals_the_generator(generator_core):
             for closed in (False, True):
                 port = estimators.bulk_at_fermi(cube, hopping, 1, points, n_perp, closed=closed)
                 assert port == generator_core.bulk_at_fermi(cube, hopping, 1, points, n_perp, closed=closed)
-                rows = [estimators.bulk_row(cube, hopping, 1, k, n_perp, berry=closed) for k in points]
-                assert rows == [
-                    generator_core.bulk_row(cube, hopping, 1, k, n_perp, berry=closed) for k in points
-                ]
+                for k in points:
+                    row = estimators.bulk_row(cube, hopping, 1, k, n_perp, berry=closed)
+                    original = generator_core.bulk_row(cube, hopping, 1, k, n_perp, berry=closed)
+                    assert_array_equal(row.pop("levels"), original.pop("levels"))
+                    assert row == original
     for points in (2, 24, 41, 80, 200):
         for cells in (1, 4, 6, 12, 20, 40):
             assert estimators.bulk_k_perp_points(points, cells) == generator_core.bulk_k_perp_points(
                 points, cells
             )
+
+
+def test_the_bulk_overshoot_and_the_mesh_resolution_equal_the_generator(generator_core):
+    # The hoppings each mesh cannot resolve, how far the gap's edges can lie beyond the samples,
+    # and the gap the mesh guarantees with why it does not resolve one.
+    rng = np.random.default_rng(65)
+    cube = np.array([[a, b, 0] for a in (-2, -1, 0, 1, 2) for b in (-3, -1, 0, 1, 3)])
+    for _ in range(12):
+        hopping = random_complex(rng, (len(cube), 2, 2))
+        for axes in ([0, 1], [1, 0]):
+            for points in ([2, 2], [3, 7], [4, 4], [5, 6], [200, 216]):
+                assert estimators.bulk_aliasing(cube, hopping, axes, points) == generator_core.bulk_aliasing(
+                    cube, hopping, axes, points
+                )
+    for _ in range(80):
+        bands = int(rng.integers(1, 6))
+        below = int(rng.integers(0, bands + 1))
+        shape = (int(rng.integers(1, 9)), int(rng.integers(1, 9)), bands)
+        levels = np.sort(rng.normal(scale=0.3, size=shape), axis=-1)
+        levels[..., :below] = -np.abs(levels[..., :below]) - 0.01
+        levels[..., below:] = np.abs(levels[..., below:])
+        levels = np.sort(levels, axis=-1)
+        aliased = tuple(rng.choice([0.0, 0.01, 0.3], size=2))
+        assert estimators.bulk_overshoot(levels, below, aliased) == generator_core.bulk_overshoot(
+            levels, below, aliased
+        )
+    for _ in range(300):
+        lo = None if rng.uniform() < 0.15 else -float(rng.uniform(0.0, 0.5))
+        hi = None if rng.uniform() < 0.15 else float(rng.uniform(0.0, 0.5))
+        overshoot = [None if edge is None else float(rng.uniform(0.0, 0.4)) for edge in (lo, hi)]
+        local = None if rng.uniform() < 0.3 else [float(rng.uniform(0.0, 0.5)), float(rng.uniform(0.01, 1.0))]
+        assert estimators.mesh_resolution(lo, hi, overshoot, local) == generator_core._resolution(
+            lo, hi, overshoot, local
+        )
 
 
 def join(*models):
@@ -379,6 +475,39 @@ def join(*models):
             blocks[index, start : start + model.nbnd, start : start + model.nbnd] = block
         start += model.nbnd
     return WannierModel(keys, blocks, lattice=models[0].lattice)
+
+
+def rebased(model, rows, scale=1.0):
+    """``model`` in the in-plane lattice vectors a'_i = sum_j rows[i][j] a_j, its hops scaled by ``scale``."""
+    plane = np.rint(model.translations[:, :2] @ np.linalg.inv(np.array(rows, float))).astype(int)
+    assert np.array_equal(plane @ np.array(rows), model.translations[:, :2])
+    translations = np.column_stack([plane, model.translations[:, 2]])
+    return WannierModel(translations, scale * np.asarray(model.hopping_matrices), lattice=model.lattice)
+
+
+def shifted(model, energy):
+    """``model`` with every level raised by ``energy``."""
+    hopping = np.array(model.hopping_matrices, dtype=complex)
+    hopping[np.flatnonzero(np.all(model.translations == 0, axis=1))[0]] += energy * np.eye(model.nbnd)
+    return WannierModel(model.translations, hopping, lattice=model.lattice)
+
+
+def with_flat_dangling(model, onsite):
+    """``model`` plus an X and a Z orbital bonded along a2 alone: a flat band at ``onsite`` on a
+    ribbon's last cell."""
+    n = model.nbnd
+    table = {
+        tuple(int(x) for x in r): np.pad(np.asarray(h, complex), ((0, 2), (0, 2)))
+        for r, h in zip(model.translations, model.hopping_matrices)
+    }
+    for key in ((0, 1, 0), (0, -1, 0)):
+        table.setdefault(key, np.zeros((n + 2, n + 2), complex))
+    table[(0, 0, 0)][n, n] += onsite
+    table[(0, 0, 0)][n + 1, n + 1] += 0.8
+    table[(0, 1, 0)][n, n + 1] += 2.0
+    table[(0, -1, 0)][n + 1, n] += 2.0
+    keys = sorted(table)
+    return WannierModel(keys, [table[key] for key in keys], lattice=model.lattice)
 
 
 def ribbon_levels(model, cells, points, window=0.5, fermi=0.0):
@@ -411,6 +540,11 @@ def ribbon_levels(model, cells, points, window=0.5, fermi=0.0):
         ("chern_2_mode_out_of_gap", "unresolved"),
         ("haldane_metal", "metal"),
         ("haldane_4", "unresolved"),
+        ("hot_spots", "unresolved"),
+        ("two_points", "unresolved"),
+        ("trivial_empty", "resolved"),
+        ("flat_at_e_f", "resolved"),
+        ("kramers_pairs", "resolved"),
     ],
 )
 def test_edge_crossings_on_ribbons_equal_the_generator(generator_core, case, status):
@@ -426,6 +560,19 @@ def test_edge_crossings_on_ribbons_equal_the_generator(generator_core, case, sta
         "chern_2_mode_out_of_gap": (join(qwz(-1.0), qwz(-1.95)), 12, 200, 0.5, 0.0),
         "haldane_metal": (haldane(staggered=0.2), 12, 40, 0.5, 0.9),
         "haldane_4": (haldane(staggered=0.2), 4, 24, 0.5, 0.0),
+        # QWZ at m = -9 meV and 3 eV hops cut along (1, 1): two Dirac points of one sign on k_par
+        # = 1/2, between the offset mesh's samples.
+        "hot_spots": (rebased(qwz(-0.003), [[1, 1], [0, 1]], scale=3.0), 6, 200, 0.5, 0.0),
+        "two_points": (qwz(-1.0), 20, 2, 0.5, 0.0),
+        "trivial_empty": (haldane(staggered=1.5), 20, 60, 0.5, 0.0),
+        "flat_at_e_f": (with_flat_dangling(haldane(staggered=0.2), 0.0), 20, 200, 0.5, 0.0),
+        "kramers_pairs": (
+            join(kane_mele(0.0, rashba=0.0), shifted(kane_mele(0.0, rashba=0.0), 0.1)),
+            20,
+            200,
+            0.5,
+            0.05,
+        ),
     }[case]
     (energies, _, _, half, middle), bulk = ribbon_levels(model, cells, points, window, fermi)
     original_bulk = generator_core.bulk_at_fermi(
@@ -463,6 +610,27 @@ def test_edge_crossings_on_ribbons_equal_the_generator(generator_core, case, sta
     if case == "chern_2_mode_out_of_gap":
         # One copy's modes leave the bulk gap; the other's give a clean flow the bulk contradicts.
         assert tally["checks"] == {"chern": []} and abs(bulk["chern"]) == 2
+    if case == "hot_spots":
+        # Their flux wraps to a small step in one strip and the winding misses a unit; the sampled
+        # gap overstates the true one: the mesh does not resolve the gap, so neither is trusted.
+        assert bulk["chern"] == 0 and tally["checks"] == {"k_mesh": []}
+        assert tally["reason"] == (
+            "the k mesh does not resolve the bulk gap (v*dk = 213.1 meV against a sampled gap of "
+            "95.8 meV): raise slab_kpoints"
+        )
+    if case == "two_points":
+        # The two wrapped steps of the winding cancel; the hops the mesh cannot resolve bound it.
+        assert "k_mesh" in tally["checks"] and bulk["chern"] == 0
+    if case == "trivial_empty":
+        assert tally["reason"].startswith("the bulk Chern number is 0 and no level crosses the gap")
+    if case == "flat_at_e_f":
+        # The flat band at E_F counts as at it and crosses nothing; the right edge's up and down
+        # bound its one crossing down.
+        assert tally["right"]["down"] - tally["right"]["up"] == 1 and tally["right"]["down"] <= 2
+    if case == "kramers_pairs":
+        # Two Kramers pairs per edge cross E_F once each way: up and down bound 2.
+        for side in ("left", "right"):
+            assert tally[side]["up"] == tally[side]["down"] >= 2
 
 
 def test_two_levels_swapping_across_e_f_carry_their_weight_as_in_the_generator(generator_core):
@@ -522,11 +690,15 @@ def test_crossing_margins_name_the_decisions_near_a_flip():
     # every middle-half weight 1/4 from the bulk-like bound: nothing is near a flip.
     assert min(result["energies"].values()) > 1
     assert all(result["checks"][check] > 1 for check in ("gap_edge", "absence", "hybridised", "chern"))
-    # A level exactly at E_F at one k is a decision at zero margin.
+    # The flow at E_F is taken just below it, a level within the tolerance counting as at E_F:
+    # a level at that reference at one k is a decision at zero margin, one exactly at E_F is not.
     moved = list(energies)
-    moved[10] = np.array([0.0, -0.075])
+    moved[10] = np.array([-estimators.CROSSING_ENERGY_TOL, -0.075])
     _, result = margins(moved, half, middle)
     assert result["energies"][0.0] == 0.0
+    moved[10] = np.array([0.0, -0.075])
+    _, result = margins(moved, half, middle)
+    assert result["energies"][0.0] == pytest.approx(estimators.CROSSING_ENERGY_TOL / 1e-6)
     # A first-half weight at 1/2 decides the edge a crossing at E_F is counted on.
     shares = [row.copy() for row in half]
     shares[9] = np.array([0.5, 0.0])

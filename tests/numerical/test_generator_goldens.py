@@ -34,7 +34,7 @@ DRIVER_CORE_SHA256 = "56fda912ba570e2293b3a9b4bf20d11038c64efa5d2f192c8ac03c6150
 # The slab golden is the driver's that counts edge crossings as a weighted flow of
 # half-ribbon weight across the bulk gap, checked against the bulk Chern number; the
 # other cases' results did not change with it.
-CASE_CORE_SHA256 = {"haldane_slab": "d75fb8fc3c08b87d776023f804fe0e6d122d231cd655ef61ba9fecb86544d49b"}
+CASE_CORE_SHA256 = {"haldane_slab": "f4a73779a891de356cc53e55d8c077f0fdc6befce931a6ed0bf9782973f5551b"}
 # Extrema tied at several k-points (K and K' of the honeycomb models) are picked
 # by rounding, which differs between BLAS kernels and machines. Only those picks
 # may differ from a golden, as documented ties; everything else must agree.

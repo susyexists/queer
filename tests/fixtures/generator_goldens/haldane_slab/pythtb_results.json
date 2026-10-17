@@ -3,13 +3,13 @@
  "status": "ok",
  "step_type": "PYTHTB_SLAB",
  "provenance": {
-  "core_sha256": "d75fb8fc3c08b87d776023f804fe0e6d122d231cd655ef61ba9fecb86544d49b",
+  "core_sha256": "f4a73779a891de356cc53e55d8c077f0fdc6befce931a6ed0bf9782973f5551b",
   "params_sha256": "1fe2c606542b4c99708d2e2b8a43dd28b98db2c54aeb51d3a89ad2b513db7e73",
   "python": "3.12.12",
   "numpy": "2.5.4",
   "host": "golden",
   "cpus": 16,
-  "memory_available_bytes": 12799803392,
+  "memory_available_bytes": 19746156544,
   "pythtb": "2.0.2",
   "scipy": "1.18.1",
   "matplotlib": "3.11.2",
@@ -65,8 +65,8 @@
     "processes": 1
    }
   ],
-  "wall_seconds": 0.47,
-  "peak_rss_bytes": 115724288,
+  "wall_seconds": 0.59,
+  "peak_rss_bytes": 116371456,
   "peak_worker_rss_bytes": 0
  },
  "citation": "T. Cole, S. Coh and D. Vanderbilt, Python Tight Binding (PythTB), doi:10.5281/zenodo.12721315",
@@ -193,7 +193,15 @@
     24
    ],
    "chern": 1,
-   "berry_phase_step": 0.626379975221429
+   "berry_phase_step": 0.626379975221429,
+   "overshoot_eV": [
+    0.07213873269341176,
+    0.07213873269341198
+   ],
+   "local_overshoot_eV": [
+    0.2689529679294209,
+    1.3150142042245019
+   ]
   },
   "edge_crossings_at_fermi": {
    "left": {
@@ -284,7 +292,7 @@
    "tolerance": 0.1,
    "checks": {}
   },
-  "note": "Crossing counts are informational: the bulk Chern number is the invariant."
+  "note": "Crossing counts are informational: the bulk Chern number is the invariant. up and down are upper bounds, the most crossings each k-step allows; their difference is the net."
  },
  "warnings": [],
  "outputs": [

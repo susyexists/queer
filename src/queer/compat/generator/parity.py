@@ -102,6 +102,7 @@ from .berry import plane_file_stem
 from .estimators import (
     CROSSING_METHOD,
     CROSSING_REACH,
+    CROSSING_RESOLUTION,
     crossing_margins,
     dos_at_fermi,
     edge_crossings,
@@ -163,6 +164,9 @@ SLAB_HALF_WEIGHT_MARGIN = 1e-6
 SLAB_EDGE_THRESHOLD = 0.5
 # Two runs' bulk Berry-phase steps between neighbouring k-points agree to this (rad).
 BERRY_PHASE_TOL = 1e-6
+# Two runs' overshoots of the bulk gap's edges (a sampled level plus half of two steps
+# between levels) agree to this many τ_E.
+OVERSHOOT_FACTOR = 4.0
 # Per-level weights of a ribbon or slab file: on the edge cells, then (weighted-flow drivers)
 # on the first half of the cells and on the middle half.
 SLAB_WEIGHT_KEYS = ("left_weight", "right_weight", "left_half_weight", "interior_weight")
@@ -1697,10 +1701,12 @@ class _Comparison:
     def compare_bulk_at_fermi(self, bulk_a: Any, bulk_b: Any, tolerance: float) -> bool:
         """Whether the bulk bands cross E_F, the bulk gap, its mesh and the Chern number of the bands below E_F.
 
-        A metal flag flipped with a gap edge within 2 τ_E of E_F is documented, and so is a
-        Chern number that differs where a run's bulk Berry phase steps within tolerance of pi
-        between neighbouring k-points (where its winding is ambiguous). Returns whether the
-        two runs' metal flags differ at such an edge.
+        Also how far the gap's edges can lie beyond the samples and how close the closest band
+        pair across E_F comes to the mesh's bound, each to 4 τ_E. A metal flag flipped with a
+        gap edge within 2 τ_E of E_F is documented, and so is a Chern number that differs where
+        a run's bulk Berry phase steps within tolerance of pi between neighbouring k-points
+        (where its winding is ambiguous). Returns whether the two runs' metal flags differ at
+        such an edge.
         """
         name = "slab.bulk_at_fermi"
         if bulk_a is None:
@@ -1755,13 +1761,44 @@ class _Comparison:
                     name, UNEXPLAINED, detail=_shorten(f"bulk Berry-phase steps {step_a} vs {step_b}")
                 )
             else:
-                self.bounded(
-                    name,
-                    _edge_difference(gap_a, gap_b),
-                    bound,
-                    f"the bulk gap around E_F to 2 τ_E; the {_brief(bulk_a.get('k_points'))} mesh, the Chern "
-                    f"number {bulk_a.get('chern')} and its Berry-phase step to {BERRY_PHASE_TOL:g} rad",
-                )
+                # How far the gap's edges can lie beyond the samples: each a sampled edge plus half
+                # steps of the bands, which move by up to 4 τ_E between two runs that agree.
+                over_a, over_b = bulk_a.get("overshoot_eV"), bulk_b.get("overshoot_eV")
+                over = 0.0 if over_a is None and over_b is None else _edge_difference(over_a, over_b)
+                local_a, local_b = bulk_a.get("local_overshoot_eV"), bulk_b.get("local_overshoot_eV")
+                if over is not None and (local_a is not None or local_b is not None):
+                    # The pair closest to the mesh's bound may switch between near ties: compare how
+                    # close each run comes, its steps less half its gap.
+                    excess = [
+                        None if pair is None else float(pair[0]) - CROSSING_RESOLUTION * float(pair[1])
+                        for pair in (local_a, local_b)
+                    ]
+                    over = (
+                        None
+                        if excess[0] is None or excess[1] is None
+                        else max(over, abs(excess[0] - excess[1]))
+                    )
+                if over is None or over > OVERSHOOT_FACTOR * tolerance:
+                    self.quantity(
+                        name,
+                        UNEXPLAINED,
+                        over,
+                        OVERSHOOT_FACTOR * tolerance,
+                        _shorten(
+                            f"the bulk gap's overshoot {over_a} vs {over_b}, the closest band pair "
+                            f"{local_a} vs {local_b}"
+                        ),
+                    )
+                else:
+                    self.bounded(
+                        name,
+                        _edge_difference(gap_a, gap_b),
+                        bound,
+                        f"the bulk gap around E_F to 2 τ_E, how far its edges can lie beyond the samples "
+                        f"and how close a band pair comes to the mesh's bound to {OVERSHOOT_FACTOR:g} τ_E; "
+                        f"the {_brief(bulk_a.get('k_points'))} mesh, the Chern number "
+                        f"{bulk_a.get('chern')} and its Berry-phase step to {BERRY_PHASE_TOL:g} rad",
+                    )
         return False
 
     def compare_edge_crossings(
@@ -1828,9 +1865,29 @@ class _Comparison:
                 berry = min(abs(float(step) - math.pi / 2), abs(float(step) - math.pi)) / BERRY_PHASE_TOL
                 margins["checks"]["berry_step"] = abs(float(step) - math.pi / 2) / BERRY_PHASE_TOL
                 margins["checks"]["chern"] = min(margins["checks"].get("chern", math.inf), berry)
+                if (slab.get("bulk_at_fermi") or {}).get("chern") == 0:
+                    # A trusted Chern number of 0 certifies an empty gap or window.
+                    for check in ("absence", "empty_window"):
+                        if check in margins["checks"]:
+                            margins["checks"][check] = min(margins["checks"][check], berry)
             runs.append(margins)
 
+        # The rows one run has and the other has not: where both runs' rows decisions are near,
+        # whatever a check sees at such a row is excused with it.
+        energies_a = [float(x) for x in crossings_a.get("energies_eV") or []]
+        energies_b = [float(x) for x in crossings_b.get("energies_eV") or []]
+        unmatched = [
+            x
+            for mine, other in ((energies_a, energies_b), (energies_b, energies_a))
+            for x in mine
+            if not any(abs(x - y) <= energy_tol for y in other)
+        ]
+
         def near_at(energy: float) -> bool:
+            if any(abs(energy - x) <= energy_tol for x in unmatched) and all(
+                run["checks"].get("rows", math.inf) <= 1.0 for run in runs
+            ):
+                return True
             return any(
                 margin <= 1.0
                 for run in runs
@@ -1841,6 +1898,9 @@ class _Comparison:
         def near_check(check: str) -> bool:
             if check == "metal":
                 return bulk_near
+            if check == "rows":
+                # A row more or fewer: a sample at the tolerance from E_F, or an empty range, in both runs.
+                return all(run["checks"].get(check, math.inf) <= 1.0 for run in runs)
             if check in ("chern", "varying") and any(
                 margin <= 1.0 for run in runs for margin in run["energies"].values()
             ):
@@ -1849,12 +1909,15 @@ class _Comparison:
             return any(run["checks"].get(check, math.inf) <= 1.0 for run in runs)
 
         decided = "a decision of either run lies within tolerance of flipping"
+        # A step shift, a gap or a guaranteed gap within tolerance of flipping moves the reach and
+        # every sampled energy, and with them the levels taking part and what each check sees.
+        moving = any(near_check(check) for check in ("step_shift", "gap", "guaranteed"))
         counts_a = {side: crossings_a.get(side) for side in ("left", "right")}
         counts_b = {side: crossings_b.get(side) for side in ("left", "right")}
         self.discrete(
             "slab.edge_crossings_at_fermi",
             counts_a == counts_b,
-            near_at(0.0),
+            near_at(0.0) or moving,
             _brief(counts_a),
             f"{counts_a} vs {counts_b}",
             f"at E_F {decided}",
@@ -1868,11 +1931,8 @@ class _Comparison:
             status_near = False
         else:
             differing = _differing_checks(checks_a, checks_b, energy_tol)
-            # A step shift or a gap within tolerance of flipping moves every sampled energy, and
-            # with it what each check sees there.
             explained = bool(differing) and (
-                near_check("step_shift")
-                or near_check("gap")
+                moving
                 or all(
                     near_check(check) if not where else any(near_at(energy) for energy in where)
                     for check, where in differing.items()
@@ -1914,13 +1974,12 @@ class _Comparison:
             # Rows or energies that differ follow the gap, the step shift and the status; a flow
             # that differs follows its energy's decisions.
             if worst is None:
-                # A different number of rows: an empty range of samples, or a sample at E_F.
-                near = status_near or any(
-                    near_check(check) for check in ("rows", "step_shift", "gap", "gap_edge", "metal")
-                )
+                # A different number of rows: a sample at the tolerance from E_F or an empty range in
+                # both runs, a metal flag that flips, or a flip that moves every sample.
+                near = moving or any(near_check(check) for check in ("rows", "metal", "empty_window"))
             elif worst > energy_tol:
-                # The same rows at other energies: the gap or the step shift moved them.
-                near = status_near or any(near_check(check) for check in ("step_shift", "gap"))
+                # The same rows at other energies: the gap, the guaranteed gap or the step shift moved them.
+                near = status_near or moving
             else:
                 near = at is not None and near_at(at)
             self.quantity(
