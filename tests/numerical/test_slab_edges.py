@@ -5,7 +5,12 @@ import pytest
 from numpy.testing import assert_allclose, assert_array_equal
 from tight_binding_models import haldane, kane_mele, qwz
 
-from queer.compat.generator.estimators import bulk_at_fermi, edge_crossings, half_ribbon_weights
+from queer.compat.generator.estimators import (
+    bulk_at_fermi,
+    bulk_k_perp_points,
+    edge_crossings,
+    half_ribbon_weights,
+)
 from queer.execution import ExecutionOptions
 from queer.models.wannier import WannierModel
 from queer.observables.geometry import chern_number
@@ -38,8 +43,9 @@ def ribbon_flow(model, points, cells, window=0.5):
     hopping = np.array(model.hopping_matrices, dtype=complex)
     home = np.flatnonzero(np.all(model.translations == 0, axis=1))[0]
     hopping[home] -= model.fermi_energy * np.eye(model.nbnd)
-    bulk = bulk_at_fermi(model.translations, hopping, 1, points, 2 * cells)
-    return edge_crossings(energies, half, middle, periodic=True, window=window, bulk_metal=bulk["metal"])
+    n_perp = bulk_k_perp_points(len(points), cells)
+    bulk = bulk_at_fermi(model.translations, hopping, 1, points, n_perp, closed=True)
+    return edge_crossings(energies, half, middle, periodic=True, window=window, bulk=bulk)
 
 
 def test_open_chain_levels_and_ribbon_levels_equal_independent_constructions():
@@ -82,7 +88,7 @@ def test_trivial_haldane_ribbon_has_no_edge_crossings_in_serial_or_parallel_runs
     tally = ribbon_flow(model, ribbon_kpoints(40), 20)
     # Nothing crosses, and nothing lies in the gap: a count of 0 is not certified from absence.
     assert tally["left"]["net"] == tally["right"]["net"] == 0 and tally["status"] == "unresolved"
-    assert "rest on absence" in tally["reason"]
+    assert "rest on absence" in tally["reason"] and "the bulk Chern number is +0" in tally["reason"]
     assert all(row["left_flow"] == 0.0 for row in tally["per_energy"])
     spectrum = slab_edge_spectrum(model, ribbon_kpoints(40), finite_axis=1, cells=20, window=0.5)
     options = ExecutionOptions(workers=2, batch_size=4)

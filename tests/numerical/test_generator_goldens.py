@@ -32,8 +32,9 @@ from queer.compat.generator.runner import run  # noqa: E402
 
 DRIVER_CORE_SHA256 = "56fda912ba570e2293b3a9b4bf20d11038c64efa5d2f192c8ac03c615034e215"
 # The slab golden is the driver's that counts edge crossings as a weighted flow of
-# half-ribbon weight; the other cases' results did not change with it.
-CASE_CORE_SHA256 = {"haldane_slab": "dbdf34d11e655e7bca1d49e4e632aa74644a49dd9917cc50d1e7f3059ce7bef5"}
+# half-ribbon weight across the bulk gap, checked against the bulk Chern number; the
+# other cases' results did not change with it.
+CASE_CORE_SHA256 = {"haldane_slab": "d75fb8fc3c08b87d776023f804fe0e6d122d231cd655ef61ba9fecb86544d49b"}
 # Extrema tied at several k-points (K and K' of the honeycomb models) are picked
 # by rounding, which differs between BLAS kernels and machines. Only those picks
 # may differ from a golden, as documented ties; everything else must agree.
@@ -76,3 +77,5 @@ def test_the_driver_golden_of_a_case_passes_against_queer(tmp_path, name):
             "edge_crossings_at_fermi"
         ]
         assert crossings["status"] == "resolved" and crossings["method"] == "half_ribbon_flow"
+        bulk = json.loads((golden / "pythtb_results.json").read_text())["slab"]["bulk_at_fermi"]
+        assert crossings["checks"] == {} and bulk["chern"] == crossings["left"]["net"]

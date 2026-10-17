@@ -20,7 +20,7 @@ from typing import Any
 import numpy as np
 
 from ...physics.slab import edge_cells_used
-from ...physics.topology import largest_gap_midpoint
+from ...physics.topology import chern_from_phases, largest_gap_midpoint
 
 DEFAULT_WINDOW_EV = 2.0
 DOS_AT_FERMI_RULES = ("linear_interpolation", "first_nonnegative_bin")
@@ -593,51 +593,143 @@ def half_ribbon_weights(
     return first @ cells, middle @ cells
 
 
-def bulk_at_fermi(
-    translations, hopping_matrices, finite_axis: int, k_par, n_perp: int, chunk: int = 64
-) -> dict[str, Any]:
-    """Whether the bulk bands cross E_F (energy zero) at the slab's in-plane k-points.
+def bulk_points(k_par, finite_axis: int, n_perp: int) -> np.ndarray:
+    """The bulk k-points of one in-plane k: ``n_perp`` points i / n_perp along ``finite_axis``."""
+    kpts = np.repeat(np.asarray(k_par, float).reshape(1, 3), n_perp, axis=0)
+    kpts[:, finite_axis] = np.arange(n_perp) / n_perp
+    return kpts
 
-    The bulk levels of H(k) = sum_R exp(2 pi i k.R) H(R) are sampled at every
-    in-plane k of ``k_par`` and at ``n_perp`` points i / n_perp along
-    ``finite_axis``. A band below E_F at one sample and at or above it at another
-    crosses E_F in between: ``metal``. A pocket between samples can be missed; the
-    slab's own levels then show it. Otherwise ``gap_eV`` holds the highest sampled
-    level below E_F and the lowest at or above it (None on a side without one).
+
+def bulk_row(
+    translations, hopping_matrices, finite_axis: int, k_par, n_perp: int, berry: bool = False
+) -> dict[str, Any]:
+    """The bulk levels at one in-plane k, sampled at ``n_perp`` points along ``finite_axis``; the driver's.
+
+    H(k) = sum_R exp(2 pi i k.R) H(R). ``below`` holds the fewest and the most levels
+    below E_F (energy zero) at one point, ``under`` the highest level below it and
+    ``over`` the lowest at or above it (None when there is none). With ``berry`` and
+    the same number of levels below E_F at every point, ``berry_phase`` is the Berry
+    phase of those bands around the finite axis, -sum arg det of the overlaps of
+    neighbouring points (H(k) is periodic, so the loop closes on the first point);
+    otherwise None.
     """
     R = np.asarray(translations, dtype=float)
     H = np.asarray(hopping_matrices)
     n = H.shape[1]
-    points = np.asarray(k_par, dtype=float).reshape(-1, 3)
-    kpts = np.repeat(points, n_perp, axis=0)
-    kpts[:, finite_axis] = np.tile(np.arange(n_perp) / n_perp, len(points))
-    blocks = []
-    for start in range(0, len(kpts), chunk):
-        phases = np.exp(2j * np.pi * (kpts[start : start + chunk] @ R.T))
-        hk = (phases @ H.reshape(len(R), n * n)).reshape(len(phases), n, n)
-        blocks.append(np.linalg.eigvalsh(hk))
-    levels = np.concatenate(blocks) if blocks else np.zeros((0, n))
-    below = (levels < 0.0).sum(axis=1)
-    metal = bool(below.size and int(np.min(below)) != int(np.max(below)))
+    kpts = bulk_points(k_par, finite_axis, n_perp)
+    phases = np.exp(2j * np.pi * (kpts @ R.T))
+    hk = (phases @ H.reshape(len(R), n * n)).reshape(len(kpts), n, n)
+    if berry:
+        levels, vectors = np.linalg.eigh(hk)
+    else:
+        levels, vectors = np.linalg.eigvalsh(hk), None
+    counts = (levels < 0.0).sum(axis=1)
+    fewest, most = int(np.min(counts)), int(np.max(counts))
     under, over = levels[levels < 0.0], levels[levels >= 0.0]
-    gap = None
+    row: dict[str, Any] = {
+        "below": (fewest, most),
+        "under": float(under.max()) if under.size else None,
+        "over": float(over.min()) if over.size else None,
+        "berry_phase": None,
+    }
+    if vectors is not None and fewest == most:
+        if fewest == 0:
+            row["berry_phase"] = 0.0
+        else:
+            u = vectors[:, :, :fewest]
+            links = np.einsum("jia,jib->jab", u.conj(), np.roll(u, -1, axis=0))
+            row["berry_phase"] = float(-np.angle(np.linalg.det(links)).sum())
+    return row
+
+
+def bulk_summary(rows: Sequence[Mapping[str, Any]], n_perp: int, closed: bool = False) -> dict[str, Any]:
+    """The driver's bulk check from :func:`bulk_row` at each in-plane k.
+
+    ``metal`` when the number of levels below E_F varies: a band crosses E_F between
+    samples. Otherwise ``gap_eV`` holds the highest level below E_F and the lowest at or
+    above it over every sample (None on a side without one), and, over a ``closed``
+    in-plane loop (a ribbon's 1D zone), ``chern`` is the Chern number of the bands below
+    E_F from the winding of their Berry phase along the loop
+    (:func:`~queer.physics.topology.chern_from_phases`), with ``berry_phase_step`` the
+    largest wrapped change of that phase between neighbouring in-plane k: the winding is
+    trustworthy only while it stays well below pi.
+    """
+    counts = [count for row in rows for count in row["below"]]
+    metal = bool(counts) and min(counts) != max(counts)
+    gap: list[float | None] | None = None
+    chern: int | None = None
+    step: float | None = None
     if not metal:
-        gap = [float(under.max()) if under.size else None, float(over.min()) if over.size else None]
-    return {"metal": metal, "gap_eV": gap, "k_perp_points": int(n_perp)}
+        under = [row["under"] for row in rows if row["under"] is not None]
+        over = [row["over"] for row in rows if row["over"] is not None]
+        gap = [max(under) if under else None, min(over) if over else None]
+        phases = [row["berry_phase"] for row in rows]
+        if closed and phases and all(phase is not None for phase in phases):
+            value, step = chern_from_phases(phases)
+            chern = int(round(value))
+    return {
+        "metal": metal,
+        "gap_eV": gap,
+        "k_points": [len(rows), int(n_perp)],
+        "chern": chern,
+        "berry_phase_step": step,
+    }
 
 
-# Edge crossings, a weighted spectral flow: the rank offsets tried per k-step and the
-# ranks around the reference energy they compare, the energies sampled across the gap
-# besides E_F, the middle-half weight from which a level is bulk-like, the reach of one
-# k-step in units of the largest level step seen, and how close to an integer a
-# weighted net must be to count as that integer.
+def bulk_at_fermi(
+    translations, hopping_matrices, finite_axis: int, k_par, n_perp: int, closed: bool = False
+) -> dict[str, Any]:
+    """Whether the bulk bands cross E_F (energy zero) at the slab's in-plane k, and the bulk gap; the driver's.
+
+    The bulk levels are sampled at every in-plane k of ``k_par`` and at ``n_perp``
+    points i / n_perp along ``finite_axis`` (:func:`bulk_row`, :func:`bulk_summary`). A
+    band below E_F at one sample and at or above it at another crosses E_F in between:
+    ``metal``. A sampled metal is a metal; a pocket narrower than the mesh step can be
+    missed. Otherwise ``gap_eV`` is the bulk gap around E_F at these in-plane k, and
+    over a ``closed`` loop ``chern`` is the Chern number of the bands below E_F.
+    """
+    points = np.asarray(k_par, float).reshape(-1, 3)
+    rows = [bulk_row(translations, hopping_matrices, finite_axis, k, n_perp, berry=closed) for k in points]
+    return bulk_summary(rows, n_perp, closed)
+
+
+def bulk_k_perp_points(n_k_par: int, cells: int) -> int:
+    """Points along the finite axis for the driver's bulk check.
+
+    A whole multiple of twice the slab's cells (twice the resolution of its standing
+    waves, so every such sample is kept), and at least as many as the slab's k-points
+    along its periodic axis: the bulk is resolved along the finite axis at least as
+    finely as the slab resolves its own k.
+    """
+    base = 2 * max(1, int(cells))
+    return base * max(1, math.ceil(int(n_k_par) / base))
+
+
+# Edge crossings, a weighted spectral flow: the rank offsets tried per k-step around no
+# crossing and around the change in the count below the reference (the levels entering or
+# leaving at the window edges in one step), the ranks around the reference energy they
+# compare, the energies sampled across the gap besides E_F, the middle-half weight from
+# which a level is bulk-like, the reach of one k-step in units of the largest level step
+# seen, how close to an integer a weighted net must be to count as that integer, and the
+# largest step of the bulk Berry phase between neighbouring k-points at which the bulk
+# Chern number is trusted (the TOPOLOGY step's own bound).
 CROSSING_MAX_OFFSET = 3
 CROSSING_RANKS = (-3, 2)
 CROSSING_GAP_SAMPLES = 9
 CROSSING_BULK_INTERIOR = 0.25
 CROSSING_REACH = 1.5
 CROSSING_TOLERANCE = 0.1
+CROSSING_BERRY_STEP = math.pi / 2
 CROSSING_METHOD = "half_ribbon_flow"
+
+
+def _offsets(i0: int, j0: int) -> range:
+    """The offsets :func:`align_ranks` tries: within 3 of none and of the count change i0 - j0."""
+    change = i0 - j0
+    return range(
+        min(-CROSSING_MAX_OFFSET, change - CROSSING_MAX_OFFSET),
+        max(CROSSING_MAX_OFFSET, change + CROSSING_MAX_OFFSET) + 1,
+    )
 
 
 def _offset_costs(
@@ -647,7 +739,7 @@ def _offset_costs(
     i0 = int(np.searchsorted(a, e_ref))
     j0 = int(np.searchsorted(b, e_ref))
     keys: list[tuple[float, int, int]] = []
-    for o in range(-CROSSING_MAX_OFFSET, CROSSING_MAX_OFFSET + 1):
+    for o in _offsets(i0, j0):
         crossed = range(-o, 0) if o > 0 else range(0, -o)
         if not all(0 <= i0 + r < len(a) and 0 <= j0 + r + o < len(b) for r in crossed):
             continue
@@ -673,12 +765,14 @@ def align_ranks(
     """Ranks of the ascending levels ``a`` (k_j) and ``b`` (k_(j+1)) and their offset.
 
     Rank 0 is the lowest level at or above ``e_ref``; rank r at k_j pairs with rank
-    r + o at k_(j+1), o in [-3, 3]. o > 0: ranks -o..-1 crossed upwards; o < 0:
-    ranks 0..|o|-1 downwards. The offset minimizes the mean step over ranks -3..2:
-    a pair's energy step, and for a level without a partner the distance to the
-    window edge it must have crossed (none can lack one without a ``window``). The
-    levels an offset says crossed must have partners; ties go to the smaller |o|,
-    then the lower o. Returns ``(i0, j0, o)``, o None when no offset pairs a level.
+    r + o at k_(j+1). o > 0: ranks -o..-1 crossed upwards; o < 0: ranks 0..|o|-1
+    downwards. The offsets tried lie within 3 of 0 and within 3 of the change in the
+    number of levels below ``e_ref`` (:func:`_offsets`), so copies crossing together are
+    followed however many there are. The offset minimizes the mean step over ranks
+    -3..2: a pair's energy step, and for a level without a partner the distance to the
+    window edge it must have crossed (none can lack one without a ``window``). The levels
+    an offset says crossed must have partners; ties go to the smaller |o|, then the lower
+    o. Returns ``(i0, j0, o)``, o None when no offset pairs a level.
     """
     i0, j0, keys = _offset_costs(a, b, e_ref, window)
     return i0, j0, keys[0][2] if keys else None
@@ -729,6 +823,26 @@ def taking_part(
     return list(range(lo, hi + 1)), loose
 
 
+def exchanges(
+    below_a: Sequence[float], above_a: Sequence[float], below_b: Sequence[float], above_b: Sequence[float]
+) -> tuple[int, int, int, int]:
+    """Crossings of each edge in one step from the first-half weights of the levels taking part.
+
+    A level belongs to the first half when more than 1/2 of it lies there and to the
+    last when less does. Every level of an edge below the reference at k_j may end above
+    it at k_(j+1) and every one above may end below, so each edge counts the most
+    exchanges its levels allow: up = min(its levels below at k_j, above at k_(j+1)),
+    down = min(above at k_j, below at k_(j+1)). Two helical modes of one edge crossing in
+    the same step count one each way; up - down is the change of the edge's level count
+    below the reference. Returns (first up, first down, last up, last down).
+    """
+    counts = []
+    for side in (lambda p: p > 0.5, lambda p: p < 0.5):
+        groups = [sum(1 for p in group if side(p)) for group in (below_a, above_a, below_b, above_b)]
+        counts += [min(groups[0], groups[3]), min(groups[1], groups[2])]
+    return counts[0], counts[1], counts[2], counts[3]
+
+
 def flow_at(
     levels: Sequence[np.ndarray],
     half: Sequence[np.ndarray],
@@ -742,20 +856,22 @@ def flow_at(
 
     Per step, over the pairs taking part (:func:`taking_part`), the first-half weight
     below the reference at k_j minus that at k_(j+1), averaged with the first-half
-    weight above it at k_(j+1) minus that at k_j: a level rising through the
-    reference adds the mean of its endpoints' weights, two that swap across it add
-    the weight that moved up, and any pairing within the set gives the same sum.
-    Returns the first-half (``left``) and middle-half (``bulk``) flows, the net level
-    count (``net``), the left flow per step, the bulk-like crossings, whether a
-    bulk-like level took part, and the levels that appear or disappear farther than
-    ``reach`` inside the window or could swap with the set without a partner.
+    weight above it at k_(j+1) minus that at k_j: a level rising through the reference
+    adds the mean of its endpoints' weights, two that swap across it add the weight that
+    moved up, and any pairing within the set gives the same sum. Returns the first-half
+    (``left``) and middle-half (``bulk``) flows, the net level count (``net``), per step
+    the left flow, the offset and the crossings of each edge (:func:`exchanges`), the
+    bulk-like crossings, whether a bulk-like level took part, the levels that appear or
+    disappear farther than ``reach`` inside the window (``strays``), and those without a
+    partner that could swap with the levels taking part (``loose``).
     """
     left = bulk = 0.0
     net = 0
-    per_step: list[tuple[float, int]] = []
+    per_step: list[tuple[float, int, tuple[int, int, int, int]]] = []
     bulk_crossings = 0
     touches = False
     strays: list[float] = []
+    loose_levels: list[float] = []
     for j, j1 in steps:
         a, b = levels[j], levels[j1]
         i0, j0, o = align_ranks(a, b, e_ref, window)
@@ -770,14 +886,17 @@ def flow_at(
         if o is None:
             continue
         ranks, loose = taking_part(a, b, i0, j0, o, reach)
-        strays += loose
+        loose_levels += loose
         step_left = 0.0
+        sides: tuple[list[float], list[float], list[float], list[float]] = ([], [], [], [])
         for r in ranks:
             ia, ib = i0 + r, j0 + r + o
             sa = 1.0 if a[ia] < e_ref else -1.0
             sb = 1.0 if b[ib] < e_ref else -1.0
             step_left += 0.5 * (float(half[j][ia]) * sa - float(half[j1][ib]) * sb)
             bulk += 0.5 * (float(middle[j][ia]) * sa - float(middle[j1][ib]) * sb)
+            sides[0 if sa > 0 else 1].append(float(half[j][ia]))
+            sides[2 if sb > 0 else 3].append(float(half[j1][ib]))
             inner = (float(middle[j][ia]), float(middle[j1][ib]))
             if max(inner) >= CROSSING_BULK_INTERIOR:
                 touches = True
@@ -785,7 +904,7 @@ def flow_at(
                     bulk_crossings += 1
         left += step_left
         net += o
-        per_step.append((step_left, o))
+        per_step.append((step_left, o, exchanges(*sides)))
     return {
         "left": left,
         "bulk": bulk,
@@ -794,6 +913,7 @@ def flow_at(
         "bulk_crossings": bulk_crossings,
         "touches": touches,
         "strays": strays,
+        "loose": loose_levels,
     }
 
 
@@ -819,14 +939,60 @@ def step_shift(
     return worst
 
 
-def _crossing_tally(per_step: Sequence[tuple[float, int]], side: str) -> dict[str, int]:
-    """Crossings of one edge: each step's flow on that side, rounded (attributed past 1/2)."""
-    up = down = 0
-    for left, net in per_step:
-        count = int(round(left if side == "left" else net - left))
-        up += max(count, 0)
-        down += max(-count, 0)
-    return {"up": up, "down": down}
+def _crossing_tally(
+    per_step: Sequence[tuple[float, int, tuple[int, int, int, int]]], side: str
+) -> dict[str, int]:
+    """Crossings of one edge at one energy: each step's exchanges (:func:`exchanges`), summed."""
+    first = 0 if side == "left" else 2
+    return {
+        "up": sum(step[2][first] for step in per_step),
+        "down": sum(step[2][first + 1] for step in per_step),
+    }
+
+
+def talking_levels(
+    levels: Sequence[np.ndarray],
+    half: Sequence[np.ndarray],
+    middle: Sequence[np.ndarray],
+    gap: Sequence[float],
+    energies: Sequence[float],
+    reach: float,
+) -> tuple[list[float], float | None]:
+    """Levels inside ``gap``, within the span of ``energies``, that the two edges share.
+
+    Inside a bulk gap only edge states live, so a level there is spread over the ribbon
+    when it is bulk-like, or shared by its two halves when its first-half weight is
+    farther than half the tolerance from 0 and 1: a mode that holds more than that on the
+    far half moves a flow by more than the tolerance over its pair. Levels at one k within
+    ``reach`` of each other take part in a step together and the flow sees only their
+    summed weight, so such a cluster is shared only when that sum lies farther than half
+    the tolerance per level from a whole number (two degenerate modes of opposite edges
+    mixed by a splitting the k-step cannot resolve are not). Returns the energies of these
+    levels, and the narrowest splitting of two of them that neighbour each other at one k
+    (the finite-size gap the hybridization opens where it is sampled; None without such a
+    pair).
+    """
+    found: list[float] = []
+    narrowest: float | None = None
+    for e, p, m in zip(levels, half, middle):
+        inside = np.flatnonzero((e > gap[0]) & (e < gap[1]))
+        if not inside.size:
+            continue
+        cuts = np.flatnonzero(np.diff(e[inside]) > reach) + 1
+        shared = np.zeros(len(e), bool)
+        for group in np.split(inside, cuts):
+            total = float(p[group].sum())
+            mixed = abs(total - round(total)) > 0.5 * CROSSING_TOLERANCE * len(group)
+            for index in group:
+                within = min(energies) <= float(e[index]) <= max(energies)
+                if within and (mixed or m[index] >= CROSSING_BULK_INTERIOR):
+                    shared[index] = True
+        found += [float(x) for x in e[shared]]
+        pairs = np.flatnonzero(shared[:-1] & shared[1:])
+        if pairs.size:
+            split = float(np.min(e[pairs + 1] - e[pairs]))
+            narrowest = split if narrowest is None else min(narrowest, split)
+    return found, narrowest
 
 
 def _mev(value: float) -> str:
@@ -841,42 +1007,56 @@ def edge_crossings(
     periodic: bool = False,
     window: float | None = None,
     interior: bool = True,
-    bulk_metal: bool | None = None,
+    bulk: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Edge states crossing E_F as a weighted spectral flow, checked across the gap; the driver's rule.
+    """Edge states crossing E_F as a weighted spectral flow, checked across the bulk gap; the driver's rule.
 
-    Energies are relative to E_F; ``half`` and ``middle`` are each level's weight on
-    the first half of the cells and on the middle half (:func:`half_ribbon_weights`).
-    A level is bulk-like when its middle-half weight is at least 1/4. Per step
-    k_j -> k_(j+1) (the last point back to the first when ``periodic``, a ribbon's 1D
-    zone) the levels are aligned by rank around the reference (:func:`align_ranks`)
-    and the first-half weight that moves through it is summed (:func:`flow_at`): the
-    left flow, a real number. The right flow is the net level count minus it; the two
-    close to zero around a ribbon's zone.
+    Energies are relative to E_F; ``half`` and ``middle`` are each level's
+    weight on the first half of the cells and on the middle half
+    (:func:`half_ribbon_weights`). A level is bulk-like when its middle-half
+    weight is at least 1/4. Per step k_j -> k_j+1 (the last point back to the
+    first when ``periodic``, a ribbon's 1D zone) the levels are aligned by rank
+    around the reference (:func:`align_ranks`) and the first-half weight that moves
+    through it is summed (:func:`flow_at`): the left flow, a real number. The
+    right flow is the net level count minus it; the two close to zero around a
+    ribbon's zone.
 
-    The gap around E_F (``window_eV``) runs from the highest bulk-like level below E_F
-    to the lowest at or above it over all k (± ``window`` on a side without one;
-    without a ``window`` the largest |E| stored). The reach of a k-step is 1.5 times
-    the largest step of an aligned pair seen (``step_shift_eV``): a band's steepest
-    step falls inside a step where two levels swap, where it is not seen. The flows
-    are evaluated at E_F and at 9 energies evenly across the gap kept a reach from its
-    edges (``per_energy``: ``left_flow``, ``right_flow`` and the middle-half
+    ``bulk`` is the bulk check at the same in-plane k (:func:`bulk_at_fermi`).
+    The gap (``window_eV``) is its bulk gap around E_F within ± ``window``
+    (without a ``window`` the largest |E| stored); without ``bulk`` it runs
+    from the highest bulk-like level below E_F to the lowest at or above it
+    over all k. The reach of a k-step is 1.5 times the largest step of an
+    aligned pair seen (``step_shift_eV``): a band's steepest step falls inside
+    a step where two levels swap, where it is not seen. The flows are evaluated
+    at E_F and at 9 energies evenly across the gap kept a reach from its edges
+    (``per_energy``: ``left_flow``, ``right_flow`` and the middle-half
     ``bulk_flow``).
 
-    ``status`` is ``resolved`` when at every energy the left flow lies within 0.1
-    (``tolerance``) of the same integer and nothing below undermines it; ``metal``
-    when the bulk bands cross E_F (``bulk_metal``, from :func:`bulk_at_fermi`;
-    without it, when a bulk-like level crosses E_F); ``open_path`` for a slab's open
-    surface path, informational; otherwise ``unresolved``, with a ``reason``:
-    bulk-like levels crossing E_F over a bulk gap (edge states spread over the
-    ribbon), a bulk-like level or the window edge within a reach of E_F, no level in
-    the gap (a count of 0 would rest on absence: a trivial gap and edge states
-    hybridized into the bulk look the same), levels appearing or vanishing inside the
-    window (coarse k or a small window), fractional or varying flows (hybridized
-    edges: more cells), or no cell between the two edge regions (``interior`` false).
-    ``left`` and ``right`` hold the crossings at E_F: ``up`` and ``down`` count the
-    steps whose flow on that side rounds to a positive or a negative integer, and
-    ``net`` is the rounded flow, certified only when ``resolved``.
+    ``status`` is ``resolved`` when at every energy the left flow lies within
+    0.1 (``tolerance``) of the same integer, that integer is the bulk Chern
+    number (``bulk["chern"]``, of the bands below E_F with the periodic axis
+    first, where the bulk check has one) and nothing below undermines it;
+    ``metal`` when the bulk bands cross E_F (``bulk["metal"]``; without
+    ``bulk``, when a bulk-like level crosses E_F); ``open_path`` for a slab's
+    open surface path, informational; otherwise ``unresolved``. ``reason``
+    says why and ``checks`` names each check that failed with the energies it
+    failed at (none for a check of the whole gap): ``hybridised``, a level
+    inside the bulk gap between the lowest and highest energy evaluated that is
+    bulk-like or shared by the ribbon's two halves (:func:`talking_levels`);
+    ``chern``, a flow other than the bulk Chern number (a mode hybridised out
+    of the gap), or ``berry_step``, a Chern number the bulk mesh does not
+    resolve; ``gap_edge``, a bulk band edge or the window edge within a reach
+    of E_F; ``absence``, no level in the gap (a count of 0 would rest on
+    absence); ``strays`` and ``loose``, levels appearing or vanishing inside
+    the window (coarse k or a small window); ``touches``, a bulk-like level
+    taking part in a crossing; ``open_loops``, crossings that do not close
+    around the zone; ``fractional`` and ``varying``, flows off an integer or
+    rounding differently across the gap; and ``interior``, ``empty_window``,
+    ``unfollowed``, ``metal`` or ``open_path``. ``left`` and ``right`` hold
+    the crossings at E_F: ``up`` and ``down`` count, step by step, the levels
+    of that edge (more than half of them on its half) that cross upwards and
+    downwards (:func:`exchanges`), and ``net`` is the rounded flow, certified
+    only when ``resolved``.
     """
     levels: list[np.ndarray] = []
     first: list[np.ndarray] = []
@@ -891,20 +1071,28 @@ def edge_crossings(
     steps = [(j, j + 1) for j in range(count - 1)]
     if periodic and count > 1:
         steps.append((count - 1, 0))
-    lo: float | None = None
-    hi: float | None = None
-    for e, m in zip(levels, inner):
-        bulk = m >= CROSSING_BULK_INTERIOR
-        below, above = e[bulk & (e < 0.0)], e[bulk & (e >= 0.0)]
-        if below.size:
-            lo = float(below.max()) if lo is None else max(lo, float(below.max()))
-        if above.size:
-            hi = float(above.min()) if hi is None else min(hi, float(above.min()))
     if window is not None:
         span = float(window)
     else:
         span = max((float(np.abs(e).max()) for e in levels if e.size), default=0.0)
-    gap = [-span if lo is None else lo, span if hi is None else hi]
+    bulk_metal = None if bulk is None else bool(bulk.get("metal"))
+    bulk_gap = None if bulk is None or bulk_metal else bulk.get("gap_eV")
+    lo: float | None = None
+    hi: float | None = None
+    if bulk_gap is not None:
+        lo, hi = bulk_gap[0], bulk_gap[1]
+    else:
+        for e, m in zip(levels, inner):
+            spread_out = m >= CROSSING_BULK_INTERIOR
+            below, above = e[spread_out & (e < 0.0)], e[spread_out & (e >= 0.0)]
+            if below.size:
+                lo = float(below.max()) if lo is None else max(lo, float(below.max()))
+            if above.size:
+                hi = float(above.min()) if hi is None else min(hi, float(above.min()))
+    gap = [
+        -span if lo is None else max(-span, float(lo)),
+        span if hi is None else min(span, float(hi)),
+    ]
     provisional = [
         gap[0] + (gap[1] - gap[0]) * i / (CROSSING_GAP_SAMPLES + 1)
         for i in range(1, CROSSING_GAP_SAMPLES + 1)
@@ -924,7 +1112,7 @@ def edge_crossings(
                     flows[energy] = flow_at(levels, first, inner, steps, energy, reach, window)
     at_fermi = flows.get(0.0)
     spread = at_fermi["bulk_crossings"] if at_fermi is not None else 0
-    metal = bool(bulk_metal) if bulk_metal is not None else spread > 0
+    metal = bulk_metal if bulk_metal is not None else spread > 0
     rows = [
         {
             "energy_eV": energy,
@@ -935,85 +1123,212 @@ def edge_crossings(
         for energy, flow in sorted(flows.items())
     ]
     span_mev = f"[{_mev(gap[0])}, {_mev(gap[1])}] meV"
+    # Each reason: the check that failed, the energies it failed at (none for a
+    # check of the whole gap) and its text.
+    problems: list[tuple[str, list[float], str]] = []
     if not periodic:
         status = "open_path"
-        reason = "an open path, not a closed loop: the counts are informational"
+        problems.append(
+            (
+                "open_path",
+                [],
+                "an open path, not a closed loop: the counts are informational",
+            )
+        )
     elif metal:
         status = "metal"
         if bulk_metal:
-            reason = "the bulk bands cross E_F: no gap around E_F"
+            text = "the bulk bands cross E_F: no gap around E_F"
         else:
-            reason = f"bulk-like levels cross E_F ({spread} crossings): no gap around E_F"
+            text = f"bulk-like levels cross E_F ({spread} crossings): no gap around E_F"
+        problems.append(("metal", [], text))
     elif not interior:
         status = "unresolved"
-        reason = "no cell lies between the two edge regions: use more slab_cells"
+        problems.append(
+            (
+                "interior",
+                [],
+                "no cell lies between the two edge regions: use more slab_cells",
+            )
+        )
     elif not any(e.size for e in levels):
         status = "unresolved"
-        reason = "no level lies within the window at any k: nothing to count, and a count of 0 would rest on absence"
+        problems.append(
+            (
+                "empty_window",
+                [],
+                "no level lies within the window at any k: nothing to count, and a "
+                "count of 0 would rest on absence",
+            )
+        )
     elif shift is None:
         status = "unresolved"
-        reason = "no level is followed from one k-point to the next: use more slab_kpoints or a wider slab_window_eV"
+        problems.append(
+            (
+                "unfollowed",
+                [],
+                "no level is followed from one k-point to the next: use more "
+                "slab_kpoints or a wider slab_window_eV",
+            )
+        )
     else:
         reach_mev = f"{reach * 1e3:.1f} meV"
-        problems: list[str] = []
-        if spread:
+        bounds = "the bulk gap" if bulk_gap is not None else "the gap"
+        chern = None if bulk is None else bulk.get("chern")
+        mesh = "x".join(str(n) for n in (bulk or {}).get("k_points") or [])
+        talking, narrowest = talking_levels(levels, first, inner, gap, sorted(flows), reach)
+        if talking:
+            opened = (
+                f"finite-size gap {narrowest * 1e3:.1f} meV inside {bounds} {span_mev}"
+                if narrowest is not None
+                else f"inside {bounds} {span_mev}"
+            )
+            plural = "s" if len(talking) != 1 else ""
             problems.append(
-                f"{spread} levels with a quarter or more of their weight in the middle half cross E_F over a "
-                "bulk gap: edge states spread over the ribbon: use more slab_cells"
+                (
+                    "hybridised",
+                    [],
+                    f"edge modes hybridise across the ribbon ({opened}: "
+                    f"{len(talking)} level{plural} from {_mev(min(talking))} to "
+                    f"{_mev(max(talking))} meV bulk-like or shared by its two "
+                    "halves): use more slab_cells",
+                )
             )
         if not lo_c < 0.0 < hi_c:
+            edge = "a bulk band edge" if bulk_gap is not None else "a bulk-like level"
             problems.append(
-                f"a bulk-like level or the window edge lies within a k-step's reach ({reach_mev}) of E_F, in the "
-                f"gap {span_mev}: use more slab_kpoints, or more slab_cells if edge states bound the gap"
+                (
+                    "gap_edge",
+                    [],
+                    f"{edge} or the window edge lies within a k-step's reach "
+                    f"({reach_mev}) of E_F, in {bounds} {span_mev}: use more "
+                    "slab_kpoints, or more slab_cells if edge states bound the gap",
+                )
             )
         if not any(
             np.any((e > gap[0]) & (e < gap[1]) & (m < CROSSING_BULK_INTERIOR)) for e, m in zip(levels, inner)
         ):
             problems.append(
-                f"no level lies in the gap {span_mev} at any k: a count of 0 would rest on absence (a trivial "
-                "gap and edge states hybridised into the bulk look the same): use more slab_cells; the bulk "
-                "Chern number decides"
+                (
+                    "absence",
+                    [],
+                    f"no level lies in {bounds} {span_mev} at any k: a count of 0 "
+                    "would rest on absence (a trivial gap and edge states hybridised "
+                    "out of the gap look the same): use more slab_cells"
+                    + ("" if chern is None else f"; the bulk Chern number is {chern:+d}"),
+                )
             )
-        strays = [abs(x) for flow in flows.values() for x in flow["strays"]]
-        if strays:
+        strays = {e: [abs(x) for x in flow["strays"]] for e, flow in flows.items()}
+        if any(strays.values()):
+            nearest = min(x for values in strays.values() for x in values)
             problems.append(
-                f"levels appear or disappear between neighbouring k-points {(span - min(strays)) * 1e3:.1f} meV "
-                f"inside the window, beyond a k-step's reach ({reach_mev}): use more slab_kpoints or a wider "
-                "slab_window_eV"
+                (
+                    "strays",
+                    [e for e, values in strays.items() if values],
+                    "levels appear or disappear between neighbouring k-points "
+                    f"{(span - nearest) * 1e3:.1f} meV inside the window, beyond a "
+                    f"k-step's reach ({reach_mev}): use more slab_kpoints or a wider "
+                    "slab_window_eV",
+                )
+            )
+        loose = [(e, x) for e, flow in flows.items() for x in flow["loose"]]
+        if loose:
+            energy, x = min(loose, key=lambda item: span - abs(item[1]))
+            problems.append(
+                (
+                    "loose",
+                    sorted({e for e, _ in loose}),
+                    f"a level within a k-step's reach ({reach_mev}) of the levels "
+                    f"crossing {_mev(energy)} meV has no partner at the neighbouring "
+                    f"k-point: it enters or leaves the window "
+                    f"{(span - abs(x)) * 1e3:.1f} meV inside its edge: use more "
+                    "slab_kpoints or a wider slab_window_eV",
+                )
             )
         touched = [e for e, flow in flows.items() if flow["touches"]]
         if touched:
-            problems.append(f"a bulk-like level takes part in a crossing at {_mev(min(touched))} meV")
+            problems.append(
+                (
+                    "touches",
+                    touched,
+                    f"a bulk-like level takes part in a crossing at {_mev(min(touched))} meV",
+                )
+            )
         open_loops = [e for e, flow in flows.items() if flow["net"]]
         if open_loops:
             problems.append(
-                f"the crossings at {_mev(open_loops[0])} meV do not close around the zone: use more slab_kpoints"
+                (
+                    "open_loops",
+                    open_loops,
+                    f"the crossings at {_mev(open_loops[0])} meV do not close around "
+                    "the zone: use more slab_kpoints",
+                )
             )
         lefts = [row["left_flow"] for row in rows]
-        far = [x for x in lefts if abs(x - round(x)) >= CROSSING_TOLERANCE]
+        far = [
+            row["energy_eV"]
+            for row in rows
+            if abs(row["left_flow"] - round(row["left_flow"])) >= CROSSING_TOLERANCE
+        ]
         if far:
+            values = [flows[e]["left"] for e in far]
             problems.append(
-                f"the left flow is {min(far):+.3f} to {max(far):+.3f} at {len(far)} of {len(rows)} energies, "
-                f"not within {CROSSING_TOLERANCE} of an integer: the edges hybridise or their modes are not "
-                "separated: use more slab_cells"
+                (
+                    "fractional",
+                    far,
+                    f"the left flow is {min(values):+.3f} to {max(values):+.3f} at "
+                    f"{len(far)} of {len(rows)} energies, not within "
+                    f"{CROSSING_TOLERANCE} of an integer: the edges hybridise or their "
+                    "modes are not separated: use more slab_cells",
+                )
             )
         rounded = sorted({int(round(x)) for x in lefts})
         if len(rounded) > 1:
             problems.append(
-                "the rounded left flow varies with energy across the gap ("
-                + "/".join(f"{v:+d}" if v else "0" for v in rounded)
-                + ")"
+                (
+                    "varying",
+                    [],
+                    "the rounded left flow varies with energy across the gap ("
+                    + "/".join(f"{v:+d}" if v else "0" for v in rounded)
+                    + ")",
+                )
             )
+        if chern is not None:
+            step = float((bulk or {}).get("berry_phase_step") or 0.0)
+            if step >= CROSSING_BERRY_STEP:
+                problems.append(
+                    (
+                        "berry_step",
+                        [],
+                        f"the bulk Berry phase changes by {step:.2f} rad between "
+                        f"neighbouring k-points of the {mesh} bulk mesh, so its Chern "
+                        "number is not resolved: use more slab_kpoints",
+                    )
+                )
+            elif len(rounded) == 1 and rounded[0] != chern:
+                problems.append(
+                    (
+                        "chern",
+                        [],
+                        f"the left flow rounds to {rounded[0]:+d}, not to the bulk "
+                        f"Chern number {chern:+d} of the bands below E_F ({mesh} "
+                        "mesh): an edge mode hybridised out of the gap or is missed: "
+                        "use more slab_cells",
+                    )
+                )
         if problems:
             status = "unresolved"
-            reason = "; ".join(problems)
         else:
-            status = "resolved"
             worst = max(abs(x - round(x)) for x in lefts)
+            agrees = "" if chern is None else ", the bulk Chern number,"
+            status = "resolved"
             reason = (
-                f"left {rounded[0]:+d}, right {-rounded[0]:+d} at {len(rows)} energies across the gap "
-                f"{span_mev}, each within {worst:.3f} of the integer"
+                f"left {rounded[0]:+d}{agrees} and right {-rounded[0]:+d} at "
+                f"{len(rows)} energies across {bounds} {span_mev}, each within "
+                f"{worst:.3f} of the integer"
             )
+    if problems:
+        reason = "; ".join(text for _, _, text in problems)
     per_step = at_fermi["per_step"] if at_fermi is not None else []
     net_left = int(round(at_fermi["left"])) if at_fermi is not None else 0
     net_right = int(round(at_fermi["net"] - at_fermi["left"])) if at_fermi is not None else 0
@@ -1028,6 +1343,7 @@ def edge_crossings(
         "energies_eV": [row["energy_eV"] for row in rows],
         "per_energy": rows,
         "tolerance": CROSSING_TOLERANCE,
+        "checks": {check: where for check, where, _ in problems},
     }
 
 
@@ -1039,19 +1355,42 @@ def crossing_margins(
     *,
     periodic: bool,
     window: float | None,
-) -> dict[float, tuple[float, float, float]]:
-    """How close each decision behind ``crossings`` came to flipping, per evaluated energy.
+    tolerances: Mapping[str, float],
+    bulk: Mapping[str, Any] | None = None,
+) -> dict[str, dict[float | str, float]]:
+    """How close each decision behind ``crossings`` came to flipping, in units of its tolerance.
 
-    For every energy in ``crossings["energies_eV"]``, over the k-steps: the gap between
-    the chosen offset's cost and the next valid one, and at an o = 0 step the distance of
-    the two cross steps of ranks -1 and 0 from the reach (eV); then, for the levels
-    taking part (:func:`taking_part`), their distance from the energy and of each swap
-    test with a neighbour from the reach (eV), their middle-half weight's distance from
-    1/4, and each step's left and right flow's distance from a half-integer, where the
-    crossing count of a step rounds. Returns ``{energy: (eV, weight, flow margin)}``
-    (inf where nothing was decided); a comparison excuses a difference only where these
-    are within tolerance.
+    ``crossings`` is the block :func:`edge_crossings` made from these levels and weights;
+    ``tolerances`` holds how far an ``energy`` (eV), a ``weight`` and a ``flow`` may move
+    between two runs that agree; ``bulk`` is the run's bulk check. Returns ``energies``, for every
+    energy the flow was evaluated at the smallest margin of the decisions taken there, and
+    ``checks``, for each check of the whole gap its own; a margin of 1 or less is a decision
+    within tolerance of flipping (inf where nothing was decided).
+
+    At an energy: the gap between the chosen offset's cost and the next valid one at each
+    k-step; every swap test of :func:`taking_part` (the first two ranks, each extension and
+    the one that stopped it) and every test of a level without a partner against the reach;
+    every unpaired level's distance inside the window against the reach (a stray); every
+    level's distance from the energy, at every k; the middle-half weights of the levels
+    taking part against 1/4 (a bulk-like level taking part, a bulk-like crossing) and their
+    first-half weights against 1/2 (the edge a crossing is counted on); and the left and
+    right flows against a half-integer (rounding) and against the tolerance from an integer.
+    Of the whole gap: ``rows``, a sampled energy against E_F (where it is no row of its own)
+    and the range of sampled energies against empty; ``step_shift``, 0 when the step shift could move (an alignment at E_F or
+    at a provisional energy across the gap within tolerance of another, through a near-tie of
+    offset costs or a level at that energy, giving a larger step or losing the one step that
+    sets it), inf otherwise; ``gap``, without
+    a bulk gap, each level's middle-half weight against 1/4, which may move the gap the
+    ribbon's bulk-like levels leave; ``gap_edge``, E_F against the reach inside the gap
+    edges; ``absence``, whether a non-bulk-like level could enter or leave the gap;
+    ``hybridised``, each level of :func:`talking_levels` against the gap edges, the evaluated
+    span, 1/4 and its cluster's bound, and each cluster cut against the reach; ``varying``
+    and ``chern``, the flows against a half-integer (the caller adds the bulk Berry-phase
+    step to ``chern`` and ``berry_step``); ``empty_window``, a level against the window edge.
     """
+    energy_tol = float(tolerances["energy"])
+    weight_tol = float(tolerances["weight"])
+    flow_tol = float(tolerances["flow"])
     levels: list[np.ndarray] = []
     first: list[np.ndarray] = []
     inner: list[np.ndarray] = []
@@ -1065,53 +1404,205 @@ def crossing_margins(
     steps = [(j, j + 1) for j in range(count - 1)]
     if periodic and count > 1:
         steps.append((count - 1, 0))
+    if window is not None:
+        span = float(window)
+    else:
+        span = max((float(np.abs(e).max()) for e in levels if e.size), default=0.0)
+    every = np.concatenate(levels) if levels else np.zeros(0)
+    checks: dict[float | str, float] = {}
+    if every.size:
+        checks["empty_window"] = float(np.min(np.abs(span - np.abs(every)))) / energy_tol
     shift = crossings.get("step_shift_eV")
-    if shift is None:
-        return {}
+    gap = crossings.get("window_eV")
+    margins: dict[float | str, float] = {}
+    if shift is None or not isinstance(gap, list) or len(gap) != 2:
+        return {"energies": margins, "checks": checks}
     reach = CROSSING_REACH * float(shift)
-    margins: dict[float, tuple[float, float, float]] = {}
+    lo, hi = float(gap[0]), float(gap[1])
+
+    def flow_margin(flow: float) -> float:
+        distance = abs(flow - round(flow))
+        return min(abs(distance - 0.5), abs(distance - CROSSING_TOLERANCE)) / flow_tol
+
+    rows = {float(row["energy_eV"]): row for row in crossings.get("per_energy") or []}
     for e_ref in crossings.get("energies_eV") or []:
         e_ref = float(e_ref)
-        by_energy = by_weight = by_flow = math.inf
+        margin = float(np.min(np.abs(every - e_ref))) / energy_tol if every.size else math.inf
+        row = rows.get(e_ref)
+        if row is not None:
+            for key in ("left_flow", "right_flow"):
+                margin = min(margin, flow_margin(float(row[key])))
         for j, j1 in steps:
             a, b = levels[j], levels[j1]
             i0, j0, keys = _offset_costs(a, b, e_ref, window)
             if not keys:
+                unpaired = [*a, *b]
+                o = None
+            else:
+                o = keys[0][2]
+                if len(keys) > 1:
+                    margin = min(margin, (keys[1][0] - keys[0][0]) / energy_tol)
+                lo_r = max(-i0, -(j0 + o))
+                hi_r = min(len(a) - i0, len(b) - j0 - o) - 1
+                unpaired = [
+                    *a[: i0 + lo_r],
+                    *a[i0 + hi_r + 1 :],
+                    *b[: j0 + lo_r + o],
+                    *b[j0 + hi_r + o + 1 :],
+                ]
+            if window is not None:
+                for x in unpaired:
+                    margin = min(margin, abs(window - abs(float(x)) - reach) / energy_tol)
+            if o is None:
                 continue
-            o = keys[0][2]
-            if len(keys) > 1:
-                by_energy = min(by_energy, keys[1][0] - keys[0][0])
 
             def paired(r: int) -> bool:
                 return 0 <= i0 + r < len(a) and 0 <= j0 + r + o < len(b)
 
-            def swap_margin(lo: int, hi: int) -> float:
-                up = abs(float(b[j0 + hi + o]) - float(a[i0 + lo]))
-                down = abs(float(a[i0 + hi]) - float(b[j0 + lo + o]))
-                return min(abs(up - reach), abs(down - reach))
+            def tested(lo_s: int, hi_s: int) -> bool:
+                up = abs(float(b[j0 + hi_s + o]) - float(a[i0 + lo_s]))
+                down = abs(float(a[i0 + hi_s]) - float(b[j0 + lo_s + o]))
+                nonlocal margin
+                margin = min(margin, abs(up - reach) / energy_tol, abs(down - reach) / energy_tol)
+                return up <= reach and down <= reach
 
-            if o == 0 and paired(-1) and paired(0):
-                by_energy = min(by_energy, swap_margin(-1, 0))
-            ranks, _ = taking_part(a, b, i0, j0, o, reach)
-            if not ranks:
+            if o > 0:
+                low, high = -o, -1
+            elif o < 0:
+                low, high = 0, -o - 1
+            elif paired(-1) and paired(0) and tested(-1, 0):
+                low, high = -1, 0
+            else:
                 continue
-            if paired(ranks[0] - 1):
-                by_energy = min(by_energy, swap_margin(ranks[0] - 1, ranks[0]))
-            if paired(ranks[-1] + 1):
-                by_energy = min(by_energy, swap_margin(ranks[-1], ranks[-1] + 1))
-            step_left = 0.0
-            for r in ranks:
+            while paired(low - 1) and tested(low - 1, low):
+                low -= 1
+            while paired(high + 1) and tested(high, high + 1):
+                high += 1
+            for r, end in ((low - 1, low), (high + 1, high)):
+                if paired(r):
+                    continue
                 ia, ib = i0 + r, j0 + r + o
-                sa = 1.0 if a[ia] < e_ref else -1.0
-                sb = 1.0 if b[ib] < e_ref else -1.0
-                step_left += 0.5 * (float(first[j][ia]) * sa - float(first[j1][ib]) * sb)
-                by_energy = min(by_energy, abs(float(a[ia]) - e_ref), abs(float(b[ib]) - e_ref))
-                for weight in (inner[j][ia], inner[j1][ib]):
-                    by_weight = min(by_weight, abs(float(weight) - CROSSING_BULK_INTERIOR))
-            for flow in (step_left, o - step_left):
-                by_flow = min(by_flow, abs(abs(flow - math.floor(flow)) - 0.5))
-        margins[e_ref] = (by_energy, by_weight, by_flow)
-    return margins
+                if 0 <= ia < len(a):
+                    margin = min(margin, abs(abs(float(b[j0 + end + o]) - float(a[ia])) - reach) / energy_tol)
+                if 0 <= ib < len(b):
+                    margin = min(margin, abs(abs(float(a[i0 + end]) - float(b[ib])) - reach) / energy_tol)
+            for r in range(low, high + 1):
+                ia, ib = i0 + r, j0 + r + o
+                inner_pair = (float(inner[j][ia]), float(inner[j1][ib]))
+                margin = min(margin, abs(max(inner_pair) - CROSSING_BULK_INTERIOR) / weight_tol)
+                if (a[ia] < e_ref) != (b[ib] < e_ref):
+                    margin = min(margin, abs(0.5 * sum(inner_pair) - CROSSING_BULK_INTERIOR) / weight_tol)
+                for weight in (first[j][ia], first[j1][ib]):
+                    margin = min(margin, abs(float(weight) - 0.5) / weight_tol)
+        margins[e_ref] = margin
+    # Checks of the whole gap.
+    provisional = [
+        lo + (hi - lo) * i / (CROSSING_GAP_SAMPLES + 1) for i in range(1, CROSSING_GAP_SAMPLES + 1)
+    ]
+
+    # The step shift is the largest aligned step at E_F and at these energies: it moves only
+    # where an alignment within tolerance of another (a near-tie of offset costs, or a level
+    # within tolerance of the energy, which moves the rank origin) would give a larger step,
+    # or would lose the step that alone sets it.
+    def largest(a: np.ndarray, b: np.ndarray, e_ref: float, alternative: bool) -> list[float]:
+        i0, j0, keys = _offset_costs(a, b, e_ref, window)
+        chosen = keys[1:2] if alternative else keys[:1]
+        out = []
+        for _, _, o in chosen:
+            pairs = [
+                abs(float(a[i0 + r]) - float(b[j0 + r + o]))
+                for r in range(CROSSING_RANKS[0], CROSSING_RANKS[1] + 1)
+                if 0 <= i0 + r < len(a) and 0 <= j0 + r + o < len(b)
+            ]
+            out.append(max(pairs, default=-math.inf))
+        return out
+
+    setting, alternatives = 0, []
+    shift_value = float(shift)
+    for e_ref in (0.0, *provisional):
+        for j, j1 in steps:
+            a, b = levels[j], levels[j1]
+            _, _, keys = _offset_costs(a, b, e_ref, window)
+            current = largest(a, b, e_ref, False)
+            if current and current[0] >= shift_value - energy_tol:
+                setting += 1
+            options: list[float] = []
+            if len(keys) > 1 and keys[1][0] - keys[0][0] <= energy_tol:
+                options += largest(a, b, e_ref, True)
+            if np.any(np.abs(a - e_ref) <= energy_tol) or np.any(np.abs(b - e_ref) <= energy_tol):
+                for moved in (e_ref - 2 * energy_tol, e_ref + 2 * energy_tol):
+                    options += largest(a, b, moved, False)
+            if options:
+                alternatives.append((bool(current) and current[0] >= shift_value - energy_tol, options))
+    moves = any(top > shift_value + energy_tol for _, options in alternatives for top in options)
+    moves = moves or (
+        setting == 1
+        and any(sets and min(options) < shift_value - energy_tol for sets, options in alternatives)
+    )
+    checks["step_shift"] = 0.0 if moves else math.inf
+    if not isinstance(bulk, Mapping) or bulk.get("metal") or bulk.get("gap_eV") is None:
+        interior_weights = np.concatenate(inner) if inner else np.zeros(0)
+        if interior_weights.size:
+            checks["gap"] = float(np.min(np.abs(interior_weights - CROSSING_BULK_INTERIOR))) / weight_tol
+    lo_c, hi_c = lo + reach, hi - reach
+    checks["gap_edge"] = min(abs(lo_c), abs(hi_c)) / energy_tol
+    # Which rows there are: whether the range of sampled energies is empty, and whether a
+    # sampled energy coincides with E_F (one row then, two otherwise).
+    samples = [
+        lo_c + (hi_c - lo_c) * i / (CROSSING_GAP_SAMPLES + 1) for i in range(1, CROSSING_GAP_SAMPLES + 1)
+    ]
+    checks["rows"] = min([abs(hi_c - lo_c), *(abs(x) for x in samples)]) / energy_tol
+    rounding = [
+        abs(abs(float(row["left_flow"]) - round(float(row["left_flow"]))) - 0.5) for row in rows.values()
+    ]
+    checks["varying"] = min(rounding, default=math.inf) / flow_tol
+    checks["chern"] = checks["varying"]
+    # Absence: whether some level could enter the gap with a middle-half weight below 1/4,
+    # or every one inside could leave.
+    qualifying, could_enter = [], math.inf
+    for e, m in zip(levels, inner):
+        for x, w in zip(e, m):
+            inside = lo < x < hi
+            edge = min(abs(x - lo), abs(x - hi)) / energy_tol
+            interior = abs(float(w) - CROSSING_BULK_INTERIOR) / weight_tol
+            if inside and w < CROSSING_BULK_INTERIOR:
+                qualifying.append(min(edge, interior))
+            else:
+                could_enter = min(
+                    could_enter, max(0.0 if inside else edge, 0.0 if w < CROSSING_BULK_INTERIOR else interior)
+                )
+    checks["absence"] = max(qualifying) if qualifying else could_enter
+    # The levels the edges may share: every decision of talking_levels on the levels in the gap.
+    evaluated = [float(x) for x in crossings.get("energies_eV") or []]
+    hybridised = math.inf
+    if evaluated:
+        bottom, top = min(evaluated), max(evaluated)
+        for e, p, m in zip(levels, first, inner):
+            near_gap = np.flatnonzero((e > lo - energy_tol) & (e < hi + energy_tol))
+            if not near_gap.size:
+                continue
+            spacing = np.diff(e[near_gap])
+            if spacing.size:
+                hybridised = min(hybridised, float(np.min(np.abs(spacing - reach))) / energy_tol)
+            inside = np.flatnonzero((e > lo) & (e < hi))
+            cuts = np.flatnonzero(np.diff(e[inside]) > reach) + 1
+            for group in np.split(inside, cuts) if inside.size else []:
+                total = float(p[group].sum())
+                bound = 0.5 * CROSSING_TOLERANCE * len(group)
+                hybridised = min(
+                    hybridised, abs(abs(total - round(total)) - bound) / (weight_tol * len(group))
+                )
+            for index in near_gap:
+                x = float(e[index])
+                if not bottom - energy_tol <= x <= top + energy_tol:
+                    continue
+                hybridised = min(
+                    hybridised,
+                    min(abs(x - lo), abs(x - hi), abs(x - bottom), abs(x - top)) / energy_tol,
+                    abs(float(m[index]) - CROSSING_BULK_INTERIOR) / weight_tol,
+                )
+    checks["hybridised"] = hybridised
+    return {"energies": margins, "checks": checks}
 
 
 def legacy_edge_crossings(

@@ -517,11 +517,11 @@ def test_slab_levels_at_the_window_edge_on_one_side_pass(runs, tmp_path):
     assert "slab.levels" in report["summary"]["unexplained"]
 
 
-def synthetic_ribbon(source, target, touch):
-    """A run whose ribbon is two chiral modes and a level reaching ``touch`` eV at one k-point.
+def synthetic_ribbon(source, target, touch, inner=0.0):
+    """A run whose ribbon is two chiral modes and a flat left level reaching ``touch`` eV at one k-point.
 
-    The document's crossings and bulk check are rewritten from the file, so the run is
-    consistent with itself.
+    ``inner`` is that level's middle-half weight there. The document's crossings and bulk
+    check are rewritten from the file, so the run is consistent with itself.
     """
     target = copy(source, target)
     ribbon = read(target / "Out" / "ribbon_bands.json")
@@ -533,7 +533,7 @@ def synthetic_ribbon(source, target, touch):
         energies.append(sorted([3 * k * 0.1, -3 * k * 0.1, top]))
         weights = {3 * k * 0.1: 1.0, -3 * k * 0.1: 0.0, top: 1.0}
         half.append([weights[e] for e in energies[-1]])
-        middle.append([0.0, 0.0, 0.0])
+        middle.append([inner if index == count // 4 and e == top else 0.0 for e in energies[-1]])
     ribbon.update(
         energies_eV=energies,
         left_weight=half,
@@ -544,9 +544,17 @@ def synthetic_ribbon(source, target, touch):
     write(target / "Out" / "ribbon_bands.json", ribbon)
     document = read(target / QUEER_RESULTS)
     slab = document["slab"]
-    slab["bulk_at_fermi"] = {"metal": False, "gap_eV": [-1.0, 1.0], "k_perp_points": 2 * slab["cells"]}
+    slab["bulk_at_fermi"] = {
+        "metal": False,
+        "gap_eV": [-1.0, 1.0],
+        "k_points": [count, 2 * slab["cells"]],
+        "chern": 1,
+        "berry_phase_step": 0.1,
+    }
     slab["edge_crossings_at_fermi"] = to_jsonable(
-        edge_crossings(energies, half, middle, periodic=True, window=slab["window_eV"], bulk_metal=False)
+        edge_crossings(
+            energies, half, middle, periodic=True, window=slab["window_eV"], bulk=slab["bulk_at_fermi"]
+        )
     )
     write(target / QUEER_RESULTS, document)
     return target
@@ -572,6 +580,50 @@ def test_a_crossing_decided_within_tolerance_of_e_f_is_documented(runs, tmp_path
     candidate = synthetic_ribbon(source, tmp_path / "far-above", 2e-3)
     report = compare("QUEER_SLAB", reference, candidate)
     assert classes(report)["slab.edge_crossings_at_fermi"] == UNEXPLAINED
+
+
+@pytest.mark.parametrize(
+    ("inner", "touch", "expected"),
+    [
+        # The level's middle-half weight on either side of the bulk-like bound by 1e-9: the
+        # reference's edges share it, the candidate's do not, and that decision is near.
+        ((0.25 + 1e-9, 0.25 - 1e-9), (-0.06, -0.06), DOCUMENTED),
+        # The same status difference from weights 0.4 apart is unexplained, although both runs
+        # hold a level within τ_E of E_F: a near decision elsewhere excuses nothing.
+        ((0.5, 0.1), (2e-9, 2e-9), UNEXPLAINED),
+    ],
+)
+def test_a_status_difference_is_documented_only_where_its_checks_differ(
+    runs, tmp_path, inner, touch, expected
+):
+    source = runs["haldane_slab"][1]
+    reference = synthetic_ribbon(source, tmp_path / "reference", touch[0], inner=inner[0])
+    candidate = synthetic_ribbon(source, tmp_path / "candidate", touch[1], inner=inner[1])
+    checks = [
+        read(run / QUEER_RESULTS)["slab"]["edge_crossings_at_fermi"]["checks"]
+        for run in (reference, candidate)
+    ]
+    assert "hybridised" in checks[0] and "hybridised" not in checks[1]
+    report = compare("QUEER_SLAB", reference, candidate)
+    kinds = classes(report)
+    assert kinds["slab.edge_crossings_status"] == expected, report["summary"]
+    detail = next(
+        item["detail"] for item in report["quantities"] if item["name"] == "slab.edge_crossings_status"
+    )
+    assert "hybridised" in detail
+
+
+def test_the_checks_two_blocks_differ_in_name_the_energies_they_differ_at():
+    # A check failed in one run only, or at energies that differ beyond the tolerance;
+    # a check of the whole gap failed in both runs does not differ.
+    a = {"hybridised": [], "strays": [0.1], "touches": [0.2]}
+    b = {"strays": [0.1 + 1e-9], "touches": [0.3], "gap_edge": []}
+    assert parity._differing_checks(a, b, 1e-8) == {
+        "gap_edge": [],
+        "hybridised": [],
+        "touches": [0.2, 0.3],
+    }
+    assert parity._differing_checks(a, dict(a), 1e-8) == {}
 
 
 def test_reworded_driver_warnings_are_documented(runs, tmp_path):
@@ -719,8 +771,13 @@ def test_a_nearest_energy_reference_meets_its_count_recomputed_from_the_candidat
     assert kinds["slab.edge_crossings_at_fermi"] == AFTER_CONVENTION
     assert kinds["slab.edge_crossings_status"] == kinds["slab.edge_crossings_per_energy"] == NOT_APPLICABLE
     assert kinds["slab.half_ribbon_weights"] == kinds["slab.bulk_at_fermi"] == NOT_APPLICABLE
-    # The candidate's own weighted flow is still checked against its stored levels.
-    assert kinds["slab.edge_crossings_recomputed"] == AGREE
+    # The candidate's own weighted flow is still checked against its stored levels, after the
+    # reference's convention: its inputs are unverifiable against a nearest-energy reference.
+    assert kinds["slab.edge_crossings_recomputed"] == AFTER_CONVENTION
+    details = {item["name"]: item["detail"] for item in report["quantities"]}
+    assert "the weighted flow is unverifiable against it" in details["slab.edge_crossings_recomputed"]
+    assert "unverifiable" in details["slab.half_ribbon_weights"]
+    assert "unverifiable" in details["slab.bulk_at_fermi"]
     broken = copy(candidate, tmp_path / "candidate")
     document = read(broken / QUEER_RESULTS)
     document["slab"]["edge_crossings_at_fermi"]["left"]["up"] += 5
@@ -777,6 +834,18 @@ def test_the_bulk_check_and_half_ribbon_weights_are_compared(runs, tmp_path):
     document["slab"]["bulk_at_fermi"]["gap_eV"][1] += 1e-6
     write(reference / QUEER_RESULTS, document)
     assert compare("QUEER_SLAB", reference, candidate)["summary"]["unexplained"] == ["slab.bulk_at_fermi"]
+    # The bulk Chern number, its Berry-phase step and the bulk mesh are compared too.
+    for name, change in (
+        ("chern", lambda bulk: bulk.update(chern=bulk["chern"] + 1)),
+        ("step", lambda bulk: bulk.update(berry_phase_step=bulk["berry_phase_step"] + 1e-3)),
+        ("mesh", lambda bulk: bulk.update(k_points=[bulk["k_points"][0], bulk["k_points"][1] + 2])),
+    ):
+        reference = copy(source, tmp_path / f"bulk-{name}")
+        document = read(reference / QUEER_RESULTS)
+        change(document["slab"]["bulk_at_fermi"])
+        write(reference / QUEER_RESULTS, document)
+        report = compare("QUEER_SLAB", reference, candidate)
+        assert "slab.bulk_at_fermi" in report["summary"]["unexplained"], name
     reference = copy(source, tmp_path / "weights")
     ribbon = read(reference / "Out" / "ribbon_bands.json")
     ribbon["interior_weight"][3][0] += 1e-6

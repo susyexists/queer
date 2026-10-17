@@ -302,16 +302,45 @@ def random_flow_inputs(rng):
     return levels, half, middle
 
 
+BULK_CHECKS = (
+    None,
+    {"metal": True, "gap_eV": None, "k_points": [3, 4], "chern": None, "berry_phase_step": None},
+    {"metal": False, "gap_eV": [-0.2, 0.3], "k_points": [3, 4], "chern": 0, "berry_phase_step": 0.2},
+    {"metal": False, "gap_eV": [None, 0.1], "k_points": [3, 4], "chern": 1, "berry_phase_step": 2.0},
+    {"metal": False, "gap_eV": [-0.6, None], "k_points": [3, 4], "chern": None, "berry_phase_step": None},
+)
+
+
 def test_the_weighted_flow_equals_the_generator_on_random_levels(generator_core):
     rng = np.random.default_rng(63)
     for _ in range(60):
         levels, half, middle = random_flow_inputs(rng)
         for periodic in (False, True):
             for window, interior in ((None, True), (0.5, True), (0.4, False)):
-                for bulk_metal in (None, False, True):
-                    options = dict(periodic=periodic, window=window, interior=interior, bulk_metal=bulk_metal)
+                for bulk in BULK_CHECKS:
+                    options = dict(periodic=periodic, window=window, interior=interior, bulk=bulk)
                     port = estimators.edge_crossings(levels, half, middle, **options)
                     assert port == generator_core.edge_crossings(levels, half, middle, **options)
+
+
+def test_the_crossing_helpers_equal_the_generator(generator_core):
+    # The offsets tried around no crossing and around the count change, the crossings of
+    # each edge in one step, and the levels the two edges share inside a gap.
+    for i0 in range(0, 9):
+        for j0 in range(0, 9):
+            assert estimators._offsets(i0, j0) == generator_core._offsets(i0, j0)
+    rng = np.random.default_rng(66)
+    for _ in range(200):
+        groups = [list(rng.choice([0.0, 0.3, 0.5, 0.7, 1.0], size=int(rng.integers(0, 4)))) for _ in range(4)]
+        assert estimators.exchanges(*groups) == generator_core._exchanges(*groups)
+    for _ in range(40):
+        levels, half, middle = random_flow_inputs(rng)
+        levels = [np.sort(e) for e in levels]
+        gap = sorted(rng.uniform(-0.5, 0.5, size=2))
+        energies = list(rng.uniform(gap[0], gap[1], size=int(rng.integers(1, 5))))
+        reach = float(rng.uniform(0.0, 0.2))
+        port = estimators.talking_levels(levels, half, middle, gap, energies, reach)
+        assert port == generator_core._talking_levels(levels, half, middle, gap, energies, reach)
 
 
 def test_the_bulk_check_equals_the_generator(generator_core):
@@ -324,8 +353,32 @@ def test_the_bulk_check_equals_the_generator(generator_core):
         points = np.zeros((int(rng.integers(1, 9)), 3))
         points[:, 0] = rng.uniform(-0.5, 0.5, size=len(points))
         for n_perp in (1, 4, 13):
-            port = estimators.bulk_at_fermi(cube, hopping, 1, points, n_perp)
-            assert port == generator_core.bulk_at_fermi(cube, hopping, 1, points, n_perp)
+            for closed in (False, True):
+                port = estimators.bulk_at_fermi(cube, hopping, 1, points, n_perp, closed=closed)
+                assert port == generator_core.bulk_at_fermi(cube, hopping, 1, points, n_perp, closed=closed)
+                rows = [estimators.bulk_row(cube, hopping, 1, k, n_perp, berry=closed) for k in points]
+                assert rows == [
+                    generator_core.bulk_row(cube, hopping, 1, k, n_perp, berry=closed) for k in points
+                ]
+    for points in (2, 24, 41, 80, 200):
+        for cells in (1, 4, 6, 12, 20, 40):
+            assert estimators.bulk_k_perp_points(points, cells) == generator_core.bulk_k_perp_points(
+                points, cells
+            )
+
+
+def join(*models):
+    """Decoupled copies of models side by side, one block per copy at every translation."""
+    keys = sorted({tuple(int(x) for x in r) for model in models for r in model.translations})
+    size = sum(model.nbnd for model in models)
+    blocks = np.zeros((len(keys), size, size), complex)
+    start = 0
+    for model in models:
+        for r, block in zip(model.translations, model.hopping_matrices):
+            index = keys.index(tuple(int(x) for x in r))
+            blocks[index, start : start + model.nbnd, start : start + model.nbnd] = block
+        start += model.nbnd
+    return WannierModel(keys, blocks, lattice=models[0].lattice)
 
 
 def ribbon_levels(model, cells, points, window=0.5, fermi=0.0):
@@ -340,7 +393,8 @@ def ribbon_levels(model, cells, points, window=0.5, fermi=0.0):
     rows = [slab_levels(table, 1, [0], cells, window, 2, k) for k in kpoints]
     hopping = np.array(model.hopping_matrices, dtype=complex)
     hopping[np.flatnonzero(np.all(model.translations == 0, axis=1))[0]] -= fermi * np.eye(model.nbnd)
-    bulk = estimators.bulk_at_fermi(model.translations, hopping, 1, kpoints, 2 * cells)
+    n_perp = estimators.bulk_k_perp_points(points, cells)
+    bulk = estimators.bulk_at_fermi(model.translations, hopping, 1, kpoints, n_perp, closed=True)
     return [[row[index] for row in rows] for index in range(5)], bulk
 
 
@@ -350,7 +404,11 @@ def ribbon_levels(model, cells, points, window=0.5, fermi=0.0):
         ("haldane_6", "resolved"),
         ("haldane_20", "resolved"),
         ("kane_mele", "resolved"),
+        ("pure_kane_mele", "resolved"),
+        ("haldane_x4", "resolved"),
         ("qwz_thin", "unresolved"),
+        ("haldane_hybridized", "unresolved"),
+        ("chern_2_mode_out_of_gap", "unresolved"),
         ("haldane_metal", "metal"),
         ("haldane_4", "unresolved"),
     ],
@@ -361,7 +419,11 @@ def test_edge_crossings_on_ribbons_equal_the_generator(generator_core, case, sta
         "haldane_6": (haldane(staggered=0.2), 6, 24, 0.5, 0.0),
         "haldane_20": (haldane(staggered=0.2), 20, 60, 0.5, 0.0),
         "kane_mele": (kane_mele(1.0), 12, 60, 0.5, 0.0),
+        "pure_kane_mele": (kane_mele(0.0, rashba=0.0), 20, 200, 0.5, 0.0),
+        "haldane_x4": (join(*[haldane(staggered=0.2)] * 4), 20, 200, 0.5, 0.0),
         "qwz_thin": (qwz(-1.8), 6, 80, 1.0, 0.0),
+        "haldane_hybridized": (haldane(staggered=0.45, t2=0.1), 12, 200, 0.5, 0.0),
+        "chern_2_mode_out_of_gap": (join(qwz(-1.0), qwz(-1.95)), 12, 200, 0.5, 0.0),
         "haldane_metal": (haldane(staggered=0.2), 12, 40, 0.5, 0.9),
         "haldane_4": (haldane(staggered=0.2), 4, 24, 0.5, 0.0),
     }[case]
@@ -372,21 +434,35 @@ def test_edge_crossings_on_ribbons_equal_the_generator(generator_core, case, sta
         - fermi * np.eye(model.nbnd) * np.all(model.translations == 0, axis=1)[:, None, None],
         1,
         np.column_stack([-0.5 + (np.arange(points) + 0.5) / points, np.zeros(points), np.zeros(points)]),
-        2 * cells,
+        generator_core.bulk_k_perp_points(points, cells),
+        closed=True,
     )
     assert bulk == original_bulk
     interior = cells > 4
     results = {}
     for periodic in (True, False):
-        options = dict(periodic=periodic, window=window, interior=interior, bulk_metal=bulk["metal"])
+        options = dict(periodic=periodic, window=window, interior=interior, bulk=bulk)
         results[periodic] = estimators.edge_crossings(energies, half, middle, **options)
         assert results[periodic] == generator_core.edge_crossings(energies, half, middle, **options)
         assert results[periodic]["status"] == (status if periodic else "open_path"), results[periodic][
             "reason"
         ]
+    tally = results[True]
     if status == "resolved":
-        for row in results[True]["per_energy"]:
-            assert abs(row["left_flow"] - results[True]["left"]["net"]) < estimators.CROSSING_TOLERANCE
+        assert tally["left"]["net"] == bulk["chern"] and tally["checks"] == {}
+        for row in tally["per_energy"]:
+            assert abs(row["left_flow"] - tally["left"]["net"]) < estimators.CROSSING_TOLERANCE
+    if case == "pure_kane_mele":
+        # Both helical modes of each edge cross E_F in one step: one each way.
+        assert tally["left"] == tally["right"] == {"up": 1, "down": 1, "net": 0}
+    if case == "haldane_x4":
+        assert tally["left"] == {"up": 4, "down": 0, "net": 4}
+    if case == "haldane_hybridized":
+        assert tally["reason"].startswith("edge modes hybridise across the ribbon (finite-size gap")
+        assert "hybridised" in tally["checks"]
+    if case == "chern_2_mode_out_of_gap":
+        # One copy's modes leave the bulk gap; the other's give a clean flow the bulk contradicts.
+        assert tally["checks"] == {"chern": []} and abs(bulk["chern"]) == 2
 
 
 def test_two_levels_swapping_across_e_f_carry_their_weight_as_in_the_generator(generator_core):
@@ -429,18 +505,38 @@ def test_crossing_margins_name_the_decisions_near_a_flip():
     energies = [np.array([3 * k, -3 * k]) for k in ks]
     half = [np.array([1.0, 0.0]) for _ in ks]
     middle = [np.zeros(2) for _ in ks]
-    crossings = estimators.edge_crossings(energies, half, middle, periodic=True)
-    margins = estimators.crossing_margins(energies, half, middle, crossings, periodic=True, window=None)
-    assert sorted(margins) == crossings["energies_eV"]
-    by_energy, by_weight, by_flow = margins[0.0]
-    # The levels taking part at E_F sit 0.075 eV from it, their middle-half weight is 0,
-    # 1/4 from the bulk-like threshold, and each step's flow is a whole crossing.
-    assert by_energy == pytest.approx(0.075) and by_weight == 0.25 and by_flow == pytest.approx(0.5)
-    # A level taking part exactly at E_F is a decision at zero margin.
-    energies[10] = np.array([0.0, -0.075])
-    crossings = estimators.edge_crossings(energies, half, middle, periodic=True)
-    margins = estimators.crossing_margins(energies, half, middle, crossings, periodic=True, window=None)
-    assert margins[0.0][0] == 0.0
+    bulk = {"metal": False, "gap_eV": [-1.0, 1.0], "k_points": [20, 20], "chern": 1, "berry_phase_step": 0.1}
+    tolerances = {"energy": 1e-6, "weight": 1e-6, "flow": 1e-6}
+
+    def margins(energies, half, middle):
+        crossings = estimators.edge_crossings(energies, half, middle, periodic=True, bulk=bulk)
+        result = estimators.crossing_margins(
+            energies, half, middle, crossings, periodic=True, window=None, tolerances=tolerances
+        )
+        return crossings, result
+
+    crossings, result = margins(energies, half, middle)
+    assert crossings["status"] == "resolved", crossings["reason"]
+    assert sorted(result["energies"]) == crossings["energies_eV"]
+    # Every level sits 0.075 eV or more from E_F, every swap test 0.075 eV from the reach,
+    # every middle-half weight 1/4 from the bulk-like bound: nothing is near a flip.
+    assert min(result["energies"].values()) > 1
+    assert all(result["checks"][check] > 1 for check in ("gap_edge", "absence", "hybridised", "chern"))
+    # A level exactly at E_F at one k is a decision at zero margin.
+    moved = list(energies)
+    moved[10] = np.array([0.0, -0.075])
+    _, result = margins(moved, half, middle)
+    assert result["energies"][0.0] == 0.0
+    # A first-half weight at 1/2 decides the edge a crossing at E_F is counted on.
+    shares = [row.copy() for row in half]
+    shares[9] = np.array([0.5, 0.0])
+    _, result = margins(energies, shares, middle)
+    assert result["energies"][0.0] == 0.0
+    # A middle-half weight at the bulk-like bound inside the bulk gap decides 'hybridised'.
+    spread = [row.copy() for row in middle]
+    spread[9] = np.array([0.25, 0.0])
+    crossings, result = margins(energies, half, spread)
+    assert "hybridised" in crossings["checks"] and result["checks"]["hybridised"] == 0.0
 
 
 @pytest.mark.parametrize("case", ["haldane", "pt_kane_mele"])

@@ -102,7 +102,6 @@ from .berry import plane_file_stem
 from .estimators import (
     CROSSING_METHOD,
     CROSSING_REACH,
-    CROSSING_TOLERANCE,
     crossing_margins,
     dos_at_fermi,
     edge_crossings,
@@ -162,6 +161,8 @@ SLAB_CLUSTER_EV = 1e-5
 SLAB_WEIGHT_TOL = 1e-9
 SLAB_HALF_WEIGHT_MARGIN = 1e-6
 SLAB_EDGE_THRESHOLD = 0.5
+# Two runs' bulk Berry-phase steps between neighbouring k-points agree to this (rad).
+BERRY_PHASE_TOL = 1e-6
 # Per-level weights of a ribbon or slab file: on the edge cells, then (weighted-flow drivers)
 # on the first half of the cells and on the middle half.
 SLAB_WEIGHT_KEYS = ("left_weight", "right_weight", "left_half_weight", "interior_weight")
@@ -1685,27 +1686,35 @@ class _Comparison:
             self.quantity(
                 "slab.half_ribbon_weights",
                 NOT_APPLICABLE,
-                detail="a run that counts by nearest energy stores no first-half or middle-half weights",
+                detail="a run that counts by nearest energy stores no first-half or middle-half weights: "
+                "the candidate's are unverifiable against it",
             )
         bulk_near = self.compare_bulk_at_fermi(
             slab_a.get("bulk_at_fermi"), slab_b.get("bulk_at_fermi"), tolerance
         )
-        self.compare_edge_crossings(kind, slab_a, slab_b, file_b, tolerance, bulk_near)
+        self.compare_edge_crossings(kind, slab_a, slab_b, file_a, file_b, tolerance, bulk_near)
 
     def compare_bulk_at_fermi(self, bulk_a: Any, bulk_b: Any, tolerance: float) -> bool:
-        """Whether the bulk bands cross E_F, and the gap if not; a gap edge within tolerance of E_F excuses a flip.
+        """Whether the bulk bands cross E_F, the bulk gap, its mesh and the Chern number of the bands below E_F.
 
-        Returns whether the two runs' bulk checks differ at such an edge.
+        A metal flag flipped with a gap edge within 2 τ_E of E_F is documented, and so is a
+        Chern number that differs where a run's bulk Berry phase steps within tolerance of pi
+        between neighbouring k-points (where its winding is ambiguous). Returns whether the
+        two runs' metal flags differ at such an edge.
         """
         name = "slab.bulk_at_fermi"
         if bulk_a is None:
-            self.quantity(name, NOT_APPLICABLE, detail="the reference ran no bulk check")
+            self.quantity(
+                name,
+                NOT_APPLICABLE,
+                detail="the reference ran no bulk check: the candidate's is unverifiable against it",
+            )
             return False
         if not isinstance(bulk_a, dict) or not isinstance(bulk_b, dict):
             self.quantity(name, UNEXPLAINED, detail=f"{bulk_a!r} vs {bulk_b!r}")
             return False
         bound = EDGE_FACTOR * tolerance
-        if bulk_a.get("k_perp_points") != bulk_b.get("k_perp_points"):
+        if bulk_a.get("k_points") is None or bulk_a.get("k_points") != bulk_b.get("k_points"):
             self.quantity(name, UNEXPLAINED, detail=_shorten(f"{bulk_a} vs {bulk_b}"))
         elif bool(bulk_a.get("metal")) != bool(bulk_b.get("metal")):
             gap = (bulk_a if not bulk_a.get("metal") else bulk_b).get("gap_eV") or []
@@ -1722,8 +1731,37 @@ class _Comparison:
             gap_a, gap_b = bulk_a.get("gap_eV"), bulk_b.get("gap_eV")
             if gap_a is None and gap_b is None:
                 self.quantity(name, AGREE, 0.0, bound, "the bulk bands cross E_F in both runs")
+                return False
+            step_a, step_b = bulk_a.get("berry_phase_step"), bulk_b.get("berry_phase_step")
+            steps = [step_a, step_b]
+            if bulk_a.get("chern") != bulk_b.get("chern"):
+                ambiguous = any(
+                    step is not None and abs(float(step) - math.pi) <= BERRY_PHASE_TOL for step in steps
+                )
+                self.quantity(
+                    name,
+                    DOCUMENTED if ambiguous else UNEXPLAINED,
+                    detail=_shorten(
+                        f"Chern numbers {bulk_a.get('chern')} vs {bulk_b.get('chern')}"
+                        + ("; a bulk Berry-phase step lies within tolerance of pi" if ambiguous else "")
+                    ),
+                )
+            elif (step_a is None) != (step_b is None) or (
+                step_a is not None
+                and step_b is not None
+                and abs(float(step_a) - float(step_b)) > BERRY_PHASE_TOL
+            ):
+                self.quantity(
+                    name, UNEXPLAINED, detail=_shorten(f"bulk Berry-phase steps {step_a} vs {step_b}")
+                )
             else:
-                self.bounded(name, _edge_difference(gap_a, gap_b), bound, "the bulk gap around E_F, to 2 τ_E")
+                self.bounded(
+                    name,
+                    _edge_difference(gap_a, gap_b),
+                    bound,
+                    f"the bulk gap around E_F to 2 τ_E; the {_brief(bulk_a.get('k_points'))} mesh, the Chern "
+                    f"number {bulk_a.get('chern')} and its Berry-phase step to {BERRY_PHASE_TOL:g} rad",
+                )
         return False
 
     def compare_edge_crossings(
@@ -1731,6 +1769,7 @@ class _Comparison:
         kind: str,
         slab_a: Mapping[str, Any],
         slab_b: Mapping[str, Any],
+        file_a: Mapping[str, Any],
         file_b: Mapping[str, Any],
         tolerance: float,
         bulk_near: bool = False,
@@ -1740,14 +1779,17 @@ class _Comparison:
         A reference whose crossings record no ``method`` counted by nearest energy: its
         counts are compared with that count recomputed from the candidate's levels, and it
         recorded no status or flows. A weighted-flow reference is compared quantity by
-        quantity. Either way the candidate's own block must equal the flow recomputed from
-        its stored levels and weights.
+        quantity, and a difference is documented only where a decision of either run lies
+        within tolerance of flipping there (:func:`~queer.compat.generator.estimators.crossing_margins`).
+        Either way the candidate's own block must equal the flow recomputed from its stored
+        levels and weights.
         """
         crossings_a = slab_a.get("edge_crossings_at_fermi") or {}
         crossings_b = slab_b.get("edge_crossings_at_fermi") or {}
         periodic = kind == "ribbon"
-        self.check_recomputed_crossings(periodic, slab_b, crossings_b, file_b)
-        if "method" not in crossings_a:
+        legacy = "method" not in crossings_a
+        self.check_recomputed_crossings(periodic, slab_b, crossings_b, file_b, legacy_reference=legacy)
+        if legacy:
             self.compare_nearest_energy_crossings(periodic, crossings_a, file_b)
             return
         rules = {crossings_a.get("method"), crossings_b.get("method")}
@@ -1760,57 +1802,133 @@ class _Comparison:
                     f"{crossings_b.get('method')!r}; this comparator knows {CROSSING_METHOD!r}",
                 )
             return
-        flow_tol = SLAB_WEIGHT_TOL * sum(len(row) for row in file_b.get("energies_eV") or [])
-        margins = crossing_margins(
-            file_b.get("energies_eV") or [],
-            file_b.get("left_half_weight") or [],
-            file_b.get("interior_weight") or [],
-            crossings_b,
-            periodic=periodic,
-            window=slab_b.get("window_eV"),
+        flow_tol = SLAB_WEIGHT_TOL * max(
+            sum(len(row) for row in source.get("energies_eV") or []) for source in (file_a, file_b)
         )
-        decision = CROSSING_DECISION_FACTOR * tolerance
-        near_at = {
-            energy
-            for energy, (by_energy, by_weight, by_flow) in margins.items()
-            if by_energy <= decision or by_weight <= SLAB_HALF_WEIGHT_MARGIN or by_flow <= flow_tol
-        }
         energy_tol = CROSSING_ENERGY_FACTOR * tolerance
-        near_status = bulk_near or bool(near_at) or _status_near_threshold(crossings_b, flow_tol, energy_tol)
-        taking_part = "a level taking part in a crossing is within tolerance of a decision"
+        tolerances = {
+            "energy": CROSSING_DECISION_FACTOR * tolerance,
+            "weight": SLAB_HALF_WEIGHT_MARGIN,
+            "flow": flow_tol,
+        }
+        runs = []
+        for slab, source, crossings in ((slab_a, file_a, crossings_a), (slab_b, file_b, crossings_b)):
+            margins = crossing_margins(
+                source.get("energies_eV") or [],
+                source.get("left_half_weight") or [],
+                source.get("interior_weight") or [],
+                crossings,
+                periodic=periodic,
+                window=slab.get("window_eV"),
+                tolerances=tolerances,
+                bulk=slab.get("bulk_at_fermi"),
+            )
+            step = (slab.get("bulk_at_fermi") or {}).get("berry_phase_step")
+            if step is not None:
+                berry = min(abs(float(step) - math.pi / 2), abs(float(step) - math.pi)) / BERRY_PHASE_TOL
+                margins["checks"]["berry_step"] = abs(float(step) - math.pi / 2) / BERRY_PHASE_TOL
+                margins["checks"]["chern"] = min(margins["checks"].get("chern", math.inf), berry)
+            runs.append(margins)
+
+        def near_at(energy: float) -> bool:
+            return any(
+                margin <= 1.0
+                for run in runs
+                for at, margin in run["energies"].items()
+                if abs(float(at) - energy) <= energy_tol
+            )
+
+        def near_check(check: str) -> bool:
+            if check == "metal":
+                return bulk_near
+            if check in ("chern", "varying") and any(
+                margin <= 1.0 for run in runs for margin in run["energies"].values()
+            ):
+                # Both read the rounded flows at every energy evaluated.
+                return True
+            return any(run["checks"].get(check, math.inf) <= 1.0 for run in runs)
+
+        decided = "a decision of either run lies within tolerance of flipping"
         counts_a = {side: crossings_a.get(side) for side in ("left", "right")}
         counts_b = {side: crossings_b.get(side) for side in ("left", "right")}
         self.discrete(
             "slab.edge_crossings_at_fermi",
             counts_a == counts_b,
-            0.0 in near_at,
+            near_at(0.0),
             _brief(counts_a),
             f"{counts_a} vs {counts_b}",
-            f"at E_F {taking_part}",
+            f"at E_F {decided}",
         )
-        keys = ("status", "reason", "method", "tolerance")
-        status_a = {key: crossings_a.get(key) for key in keys}
-        status_b = {key: crossings_b.get(key) for key in keys}
-        self.discrete(
-            "slab.edge_crossings_status",
-            status_a == status_b,
-            near_status,
-            f"{status_a['status']} ({status_a['method']})",
-            _shorten(f"{status_a} vs {status_b}"),
-            f"{taking_part}, or a flow lies within tolerance of {CROSSING_TOLERANCE} from an integer",
-        )
-        worst, flows, where = _flow_differences(crossings_a, crossings_b)
+        status_a = {key: crossings_a.get(key) for key in ("status", "method", "tolerance")}
+        status_b = {key: crossings_b.get(key) for key in ("status", "method", "tolerance")}
+        checks_a, checks_b = crossings_a.get("checks"), crossings_b.get("checks")
+        name = "slab.edge_crossings_status"
+        if not isinstance(checks_a, dict) or not isinstance(checks_b, dict):
+            self.quantity(name, UNEXPLAINED, detail="a weighted-flow block records no checks")
+            status_near = False
+        else:
+            differing = _differing_checks(checks_a, checks_b, energy_tol)
+            # A step shift or a gap within tolerance of flipping moves every sampled energy, and
+            # with it what each check sees there.
+            explained = bool(differing) and (
+                near_check("step_shift")
+                or near_check("gap")
+                or all(
+                    near_check(check) if not where else any(near_at(energy) for energy in where)
+                    for check, where in differing.items()
+                )
+            )
+            status_near = explained or bulk_near
+            summary = f"{status_a['status']} ({status_a['method']})"
+            if status_a == status_b and not differing:
+                if crossings_a.get("reason") == crossings_b.get("reason"):
+                    self.quantity(
+                        name, AGREE, detail=_shorten(f"{summary}: {sorted(checks_a) or 'every check'}")
+                    )
+                else:
+                    self.quantity(
+                        name,
+                        DOCUMENTED,
+                        detail=_shorten(
+                            f"{summary}: the same checks; the reasons differ only in the values they print, "
+                            f"which are compared as quantities: {crossings_a.get('reason')!r} vs "
+                            f"{crossings_b.get('reason')!r}"
+                        ),
+                    )
+            else:
+                where = "; ".join(
+                    f"{check} at {_brief(at)}" if at else check for check, at in differing.items()
+                )
+                self.quantity(
+                    name,
+                    DOCUMENTED if status_near else UNEXPLAINED,
+                    detail=_shorten(
+                        f"{status_a['status']} vs {status_b['status']}; the checks that differ: {where or 'none'}"
+                        + (f": at each {decided}" if status_near else "")
+                    ),
+                )
+        worst, flows, at = _flow_differences(crossings_a, crossings_b)
         name = "slab.edge_crossings_per_energy"
         if worst is None or worst > energy_tol or flows > flow_tol:
-            differing = _shorten(f"{crossings_a.get('per_energy')} vs {crossings_b.get('per_energy')}")
-            # Rows or energies that differ follow a status decision; a flow that differs, its energy's.
-            near = near_status if worst is None or worst > energy_tol else where in near_at
+            differing_rows = _shorten(f"{crossings_a.get('per_energy')} vs {crossings_b.get('per_energy')}")
+            # Rows or energies that differ follow the gap, the step shift and the status; a flow
+            # that differs follows its energy's decisions.
+            if worst is None:
+                # A different number of rows: an empty range of samples, or a sample at E_F.
+                near = status_near or any(
+                    near_check(check) for check in ("rows", "step_shift", "gap", "gap_edge", "metal")
+                )
+            elif worst > energy_tol:
+                # The same rows at other energies: the gap or the step shift moved them.
+                near = status_near or any(near_check(check) for check in ("step_shift", "gap"))
+            else:
+                near = at is not None and near_at(at)
             self.quantity(
                 name,
                 DOCUMENTED if near else UNEXPLAINED,
                 flows if worst is not None else None,
                 flow_tol,
-                f"{differing}: {taking_part}" if near else differing,
+                f"{differing_rows}: {decided}" if near else differing_rows,
             )
         else:
             self.quantity(
@@ -1828,8 +1946,16 @@ class _Comparison:
         slab_b: Mapping[str, Any],
         crossings_b: Mapping[str, Any],
         file_b: Mapping[str, Any],
+        *,
+        legacy_reference: bool = False,
     ) -> None:
-        """The candidate's weighted-flow block equals the flow recomputed from its own stored levels."""
+        """The candidate's weighted-flow block equals the flow recomputed from its own stored levels.
+
+        Against a reference that counted by nearest energy this is all that can be checked
+        of the candidate's weighted flow: such a reference stores no first-half or
+        middle-half weights and no bulk check, so the flow's inputs are unverifiable against
+        it, and the agreement is one after that convention, never a plain one.
+        """
         name = "slab.edge_crossings_recomputed"
         if crossings_b.get("method") != CROSSING_METHOD:
             self.quantity(name, NOT_APPLICABLE, detail="the candidate recorded no weighted flow")
@@ -1846,16 +1972,26 @@ class _Comparison:
             periodic=periodic,
             window=slab_b.get("window_eV"),
             interior=cells > 2 * edge_cells_used(int(slab_b.get("edge_cells") or 2), cells),
-            bulk_metal=bulk.get("metal") if isinstance(bulk, dict) else None,
+            bulk=bulk if isinstance(bulk, dict) else None,
         )
         recount = json.loads(json.dumps(to_jsonable(recount)))
         stored = json.loads(json.dumps(to_jsonable(crossings_b)))
-        if recount == stored:
+        if recount != stored:
+            self.quantity(name, UNEXPLAINED, detail=_shorten(f"{stored} stored vs {recount} recomputed"))
+        elif legacy_reference:
+            self.quantity(
+                name,
+                AFTER_CONVENTION,
+                0.0,
+                0.0,
+                f"{stored.get('status')}: equal to the flow recomputed from the candidate's own levels and "
+                "weights; the reference counted by nearest energy and stores no first-half or middle-half "
+                "weights and no bulk check, so the weighted flow is unverifiable against it",
+            )
+        else:
             self.quantity(
                 name, AGREE, 0.0, 0.0, f"{stored.get('status')}: equal to the flow recomputed from its levels"
             )
-        else:
-            self.quantity(name, UNEXPLAINED, detail=_shorten(f"{stored} stored vs {recount} recomputed"))
 
     def compare_nearest_energy_crossings(
         self, periodic: bool, crossings_a: Mapping[str, Any], file_b: Mapping[str, Any]
@@ -2077,26 +2213,26 @@ def _flow_differences(a: Mapping[str, Any], b: Mapping[str, Any]) -> tuple[float
     return worst_energy, worst_flow, where
 
 
-def _status_near_threshold(crossings: Mapping[str, Any], flow_tol: float, energy_tol: float) -> bool:
-    """Whether a status decision of a weighted-flow block lies within tolerance of flipping.
+def _differing_checks(
+    checks_a: Mapping[str, Any], checks_b: Mapping[str, Any], energy_tol: float
+) -> dict[str, list[float]]:
+    """The checks of two weighted-flow blocks that differ, with the energies they failed at.
 
-    A flow within ``flow_tol`` of its tolerance from an integer or of a half-integer
-    (where it rounds), or E_F within ``energy_tol`` of an edge of the energies the flow
-    can be certified at (a reach inside the gap).
+    A check failed in one run only, with that run's energies; one failed in both at
+    energies that do not match within ``energy_tol``, with both runs' energies. A check of
+    the whole gap has no energies.
     """
-    tolerance = float(crossings.get("tolerance") or CROSSING_TOLERANCE)
-    for row in crossings.get("per_energy") or []:
-        for key in ("left_flow", "right_flow"):
-            flow = float(row.get(key) or 0.0)
-            distance = abs(flow - round(flow))
-            if min(abs(distance - tolerance), abs(distance - 0.5)) <= flow_tol:
-                return True
-    gap, shift = crossings.get("window_eV"), crossings.get("step_shift_eV")
-    if isinstance(gap, list) and len(gap) == 2 and shift is not None:
-        reach = CROSSING_REACH * float(shift)
-        if min(abs(float(gap[0]) + reach), abs(float(gap[1]) - reach)) <= energy_tol:
-            return True
-    return False
+    differing: dict[str, list[float]] = {}
+    for check in sorted(set(checks_a) | set(checks_b)):
+        where_a = [float(x) for x in checks_a.get(check) or []]
+        where_b = [float(x) for x in checks_b.get(check) or []]
+        if check not in checks_a or check not in checks_b:
+            differing[check] = where_a + where_b
+        elif len(where_a) != len(where_b) or any(
+            abs(x - y) > energy_tol for x, y in zip(sorted(where_a), sorted(where_b))
+        ):
+            differing[check] = where_a + where_b
+    return differing
 
 
 def _edge_difference(a: Any, b: Any) -> float | None:

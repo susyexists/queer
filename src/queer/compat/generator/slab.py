@@ -23,15 +23,17 @@ cutoffs):
   weight on the first half of the cells and on the middle half comes from
   :func:`~queer.compat.generator.estimators.half_ribbon_weights`;
 - ``bulk_at_fermi`` says whether the bulk bands cross E_F at the same in-plane
-  k-points, sampled along the finite axis at twice the slab's resolution
-  (:func:`bulk_levels_at_fermi`);
+  k-points, sampled along the finite axis at least as finely as the slab samples
+  its own k, and gives the bulk gap around E_F and, over a ribbon's closed zone,
+  the Chern number of the bands below E_F (:func:`bulk_levels_at_fermi`);
 - ``edge_crossings_at_fermi`` is the driver's weighted spectral flow of the
   first-half weight through E_F, the last ribbon point paired with the first
   (:func:`~queer.compat.generator.estimators.edge_crossings`), checked at 9
-  energies across the gap the bulk-like levels leave around E_F: ``status`` is
-  ``resolved``, ``unresolved`` (with a ``reason``), ``metal`` or, for a slab's
-  open surface path, ``open_path``. The counts are informational; the bulk Chern
-  number is the invariant.
+  energies across the bulk gap: ``status`` is ``resolved`` (every flow on the same
+  integer, the bulk Chern number), ``unresolved`` (with a ``reason`` and the
+  failed ``checks``), ``metal`` or, for a slab's open surface path,
+  ``open_path``. The counts are informational; the bulk Chern number is the
+  invariant.
 
 The step writes ``Out/ribbon_bands.json`` or ``Out/slab_bands.json``
 (``k_distance``, fractional for a ribbon and in 1/Å with 2 pi for a slab;
@@ -52,7 +54,9 @@ import numpy as np
 from ...observables.surface import slab_eigensystem
 from ...physics.slab import edge_cells_used
 from .estimators import (
-    bulk_at_fermi,
+    bulk_k_perp_points,
+    bulk_row,
+    bulk_summary,
     edge_crossings,
     edge_weights,
     half_ribbon_weights,
@@ -69,6 +73,9 @@ CROSSINGS_NOTE = "Crossing counts are informational: the bulk Chern number is th
 LARGE_MODEL_ORBITALS = 60
 # Matrices per k-point of one slab solve the driver plans a worker's memory with.
 SLAB_PER_K_MATRICES = 4
+# Matrices per point along the finite axis of one bulk-check task (an in-plane k):
+# H(k), its eigenvectors and the overlaps of neighbouring ones.
+BULK_PER_POINT_MATRICES = 3
 # Combined edge weight from which a level is drawn as an edge state.
 EDGE_PLOT_WEIGHT = 0.3
 
@@ -121,14 +128,21 @@ def slab_levels(
 
 
 def bulk_levels_at_fermi(
-    context: WannierStepContext, finite: int, periodic: Sequence[int], kpoints: np.ndarray, cells: int
+    context: WannierStepContext,
+    finite: int,
+    periodic: Sequence[int],
+    kpoints: np.ndarray,
+    cells: int,
+    closed: bool,
 ) -> dict[str, Any]:
-    """The driver's bulk check: do the bulk bands cross E_F at the slab's in-plane k-points?
+    """The driver's bulk check: do the bulk bands cross E_F at the slab's in-plane k-points, and the bulk gap.
 
     The folded table with E_F taken off its home-cell block, without hops along a 2D
     model's vacuum axis (the slab drops them too), sampled along the finite axis at
-    twice the resolution of the slab's own standing waves
-    (:func:`~queer.compat.generator.estimators.bulk_at_fermi`).
+    :func:`~queer.compat.generator.estimators.bulk_k_perp_points` points, one in-plane
+    k per task (:func:`~queer.compat.generator.estimators.bulk_row`); over a ribbon's
+    ``closed`` zone also the Chern number of the bands below E_F
+    (:func:`~queer.compat.generator.estimators.bulk_summary`).
     """
     translations = np.asarray(context.table_R)
     hoppings = np.array(context.table_H, dtype=complex, copy=True)
@@ -139,7 +153,20 @@ def bulk_levels_at_fermi(
     kept = np.all(translations[:, vacuum] == 0, axis=1)
     if not kept.all():
         translations, hoppings = translations[kept], hoppings[kept]
-    return bulk_at_fermi(translations, hoppings, finite, kpoints, 2 * cells)
+    n_perp = bulk_k_perp_points(len(kpoints), cells)
+    options = context.parallel(
+        f"bulk check, {len(kpoints)} x {n_perp} k-points",
+        BULK_PER_POINT_MATRICES * n_perp,
+        len(kpoints),
+        chunk=1,
+        n_orb=context.n_orb,
+    )
+    rows = pmap(
+        functools.partial(bulk_row, translations, hoppings, finite, n_perp=n_perp, berry=closed),
+        list(kpoints),
+        options,
+    )
+    return bulk_summary(rows, n_perp, closed)
 
 
 def run_slab(context: WannierStepContext) -> None:
@@ -186,7 +213,7 @@ def run_slab(context: WannierStepContext) -> None:
     right = [row[2] for row in rows]
     half = [row[3] for row in rows]
     middle = [row[4] for row in rows]
-    bulk = bulk_levels_at_fermi(context, finite, periodic, kpoints, cells)
+    bulk = bulk_levels_at_fermi(context, finite, periodic, kpoints, cells, closed=kind == "ribbon")
     # Without a cell between the two edge regions the edges cannot be told apart.
     crossings = edge_crossings(
         energies,
@@ -195,7 +222,7 @@ def run_slab(context: WannierStepContext) -> None:
         periodic=kind == "ribbon",
         window=window,
         interior=cells > 2 * edge_cells_used(edge_cells, cells),
-        bulk_metal=bulk["metal"],
+        bulk=bulk,
     )
     if kind == "ribbon":
         # A ribbon's x axis is its 1D crystal momentum, in units of 2 pi / a.

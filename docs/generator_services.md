@@ -319,57 +319,74 @@ closer than 1e-5 eV) to diagonalize the first-edge projector; inside a cluster
 whose edge projector is degenerate they still depend on the basis.
 
 The Generator's edge-crossing count (`queer.compat.generator.estimators.edge_crossings`,
-the driver's rule since core dbdf34d1…) is a weighted spectral flow. Every level carries
-its weight on the first half of the cells, P_L (an odd ribbon's middle cell counts half;
-P_R = 1 - P_L), and on the middle half, I (cells n/4 to 3n/4, cut cells by their
-overlap), from `half_ribbon_weights`, which rotates each degenerate cluster to
-diagonalize the first-half projector. Both are stored per level in `Out/{kind}_bands.json`
-(`left_half_weight`, `interior_weight`). A level with I ≥ 1/4 is bulk-like. Per step
-k_j → k_j+1 (a ribbon's last point back to its first) the levels are ranked from the
-reference energy, and the offset o in [-3, 3] that minimizes the mean step over the
-ranks -3…2 says how many crossed and which way; a level without a partner costs its
+the driver's rule since core d75fb8fc…) is a weighted spectral flow checked against the
+bulk. Every level carries its weight on the first half of the cells, P_L (an odd ribbon's
+middle cell counts half; P_R = 1 - P_L), and on the middle half, I (cells n/4 to 3n/4,
+cut cells by their overlap), from `half_ribbon_weights`, which rotates each degenerate
+cluster to diagonalize the first-half projector. Both are stored per level in `Out/{kind}_bands.json`
+(`left_half_weight`, `interior_weight`). A level with I ≥ 1/4 is bulk-like.
+
+The bulk check (`slab.bulk_at_fermi`, `bulk_row` per in-plane k and `bulk_summary`) solves
+the bulk H(k) = Σ_R e^{2πik·R} H(R) at the ribbon's in-plane k-points on a mesh along the
+finite axis of `bulk_k_perp_points` points: a whole multiple of twice the cells, and at
+least the ribbon's own k-points, so the finite axis is resolved as finely as the ribbon
+resolves its periodic one (`k_points`: [in-plane, finite]). It reports `metal` when the
+number of levels below E_F varies, otherwise the bulk gap around E_F (`gap_eV`) and, over
+a ribbon's closed zone, the Chern number of the bands below E_F with the periodic axis
+first (`chern`): the winding along the zone of their Berry phase around the finite axis,
+-Σ arg det of neighbouring overlaps, with its largest step (`berry_phase_step`, trusted
+below π/2 as in TOPOLOGY). A resolved left net equals it. A pocket or band extremum
+narrower than one mesh step along both axes is still missed.
+
+Per step k_j → k_j+1 (a ribbon's last point back to its first) the levels are ranked from
+the reference energy, and the offset o that minimizes the mean step over the ranks -3…2
+says how many crossed and which way; the offsets tried lie within 3 of 0 and within 3 of
+the change in the number of levels below the reference (`_offsets`), so any number of
+copies crossing in one step is followed, and a level without a partner costs its
 distance to the window edge it must have crossed (`align_ranks`). The flow adds the P_L
-that moves through the reference over the levels taking part (`taking_part`): the
-crossed ranks; with o = 0, ranks -1 and 0 when each could end where the other ends
-within a step's reach (two levels crossing each other at the reference within one
-step, which energy order hides); then every neighbour that could swap with an end of
-that set. The reach is 1.5 times the largest step of an aligned pair seen
-(`step_shift_eV`): a band's steepest step falls inside a step where two levels swap.
-So a rising level adds the mean P_L of its endpoints, two chiral modes crossing at a
-TRIM add one each, and |C| = 2 or degenerate copies count two with no swap repair.
-The right flow is the net level count minus the left, and both close to zero around
-the zone. A sum of the weight below E_F over a fixed rank window, tried first,
-telescopes around the zone and is exactly 0 once the window holds every level.
+that moves through the reference over the levels taking part (`taking_part`): the crossed
+ranks; with o = 0, ranks -1 and 0 when each could end where the other ends within a
+step's reach (two levels crossing each other at the reference within one step, which
+energy order hides); then every neighbour that could swap with an end of that set. The
+reach is 1.5 times the largest step of an aligned pair seen (`step_shift_eV`). So a rising
+level adds the mean P_L of its endpoints, two chiral modes crossing at a TRIM add one
+each, and |C| = 2 or 4 copies count with no swap repair. The right flow is the net level
+count minus the left, and both close to zero around the zone. Per step, each edge's
+crossings count the levels taking part with more than half of them on its half that end
+on the other side of the reference, as many exchanges as those levels allow
+(`exchanges`): two helical modes of one edge crossing in the same step count one each way.
 
-The flows are evaluated at E_F and at 9 energies evenly across the gap the bulk-like
-levels leave around E_F, kept a reach from its edges (`per_energy`: `left_flow`,
+The flows are evaluated at E_F and at 9 energies evenly across the bulk gap within the
+window, kept a reach from its edges (`window_eV`, `per_energy`: `left_flow`,
 `right_flow`, `bulk_flow`, the last weighted by I). The status is `resolved` when every
-flow lies within 0.1 (`tolerance`) of the same integer: a pair of edge modes then holds
-at most 5% of its weight on the far half. It is `metal` when the bulk bands cross E_F
-(`slab.bulk_at_fermi`: the bulk levels at the same in-plane k-points, sampled along the
-finite axis at twice the slab's resolution, `bulk_at_fermi`) and `open_path` for a
-slab's surface path. It is `unresolved` otherwise, with a reason: bulk-like levels
-crossing E_F over a bulk gap (edge states spread over the ribbon), a bulk-like level or
-the window edge within a reach of E_F, no level in the gap (a trivial gap and edge
-states pushed out of it by hybridization look the same, so a count of 0 would rest on
-absence), levels appearing inside the window between neighbouring k-points (coarse k
-or a small window), fractional or varying flows, or no cell between the two edge
-regions. `left` and `right` hold the crossings at E_F: `up` and `down` count the steps
-whose flow on that side rounds to a positive or negative integer (attributed past 1/2),
-and `net` is the rounded flow, certified only when `resolved`.
+flow lies within 0.1 (`tolerance`) of the same integer and that integer is the bulk Chern
+number: a pair of edge modes then holds at most 5% of its weight on the far half. It is
+`metal` when the bulk bands cross E_F, `open_path` for a slab's surface path, and
+`unresolved` otherwise, with a `reason` and the failed `checks`, each with the energies it
+failed at (none for a check of the whole gap): `hybridised` (a level inside the bulk gap,
+between the lowest and highest energy evaluated, that is bulk-like or shared by the two
+halves, `talking_levels`: inside a bulk gap only edge states live, so the edges talk
+across the ribbon; the reason gives the finite-size gap they open where sampled), `chern`
+(a clean flow other than the bulk Chern number: a mode hybridized out of the gap, which
+leaves nothing in it to see), `berry_step` (a Chern number the bulk mesh does not
+resolve), `gap_edge`, `absence`, `strays` and `loose` (a level entering the window beside
+the levels crossing), `touches`, `open_loops`, `fractional`, `varying`, `interior`,
+`empty_window` and `unfollowed`. `left` and `right` hold the crossings at E_F and `net`
+the rounded flow, certified only when `resolved`.
 
-Validated on numpy ribbons and on 250 random 2- and 4-band models with a gap at E_F on a
-40 x 40 mesh, where no `resolved` count disagrees with the FHS Chern number (the two the
-bulk check calls metals are metals on a 400 x 400 mesh): Haldane ±1 (20 cells, 6 cells
-at 24 k, PythTB's example), two coincident chiral modes per edge (two Haldane or QWZ
-copies) ±2, Kane-Mele net 0 with one mode each way per edge, QWZ at m = -1.9 (a 0.2 eV
-gap, modes spread over ~10 cells) resolved from 34 cells at 200 k and unresolved below,
-also with E_F off the gap centre. Thin ribbons resolve only where their modes are
-localized (QWZ at m = -1 from 5 cells), thin metals are `metal`, and coarse-k and
-tiny-window ribbons are unresolved. The drivers up to core 56fda912… matched each edge state to
-the nearest-energy state of the same edge, unbounded and many to one;
-`legacy_edge_crossings` keeps that rule for comparing their references, and the
-rank-continuity count of core 93167386… was never released.
+Validated on numpy ribbons against the FHS Chern number on fine meshes: 334 named cases
+and 7416 sweep ribbons (plain Haldane and QWZ grids; random perturbed 2- to 6-orbital
+models with dangling edge orbitals), with no wrong `resolved` count and no insulator
+called `metal`. The hybridized ribbons that the gap of the ribbon's own bulk-like levels
+used to certify wrongly (Haldane with Δ = 0.45, t2 = 0.1 at 12 cells, and similar at 6 to
+11 cells; a C = -2 pair with one mode out of the gap; a chiral mode beside a dangling
+edge band) are unresolved; the Haldane case resolves +1 from 24 cells and the C = -2 pair
+from 80. QWZ at m = -1.9 still resolves from 34 cells at 200 k-points. The drivers up to
+core 56fda912… matched each edge state to the nearest-energy state of the same edge,
+unbounded and many to one; `legacy_edge_crossings` keeps that rule for comparing their
+references, and neither the rank-continuity count of core 93167386… nor the first
+weighted flow of core dbdf34d1… (gap from the ribbon's bulk-like levels, no Chern check)
+was released.
 
 `queer.compat.generator.estimators` keeps the Generator's own estimators with
 their exact semantics. The DOS histograms the eigenvalues on bins from
@@ -483,7 +500,7 @@ wrote the reference:
 | Producer | Rules |
 |---|---|
 | driver 9f43886 (`f6c9b7af…`) | DOS(E_F) compared with the candidate's DOS recomputed under the first-nonnegative-bin rule; Fermi surface by its crossing bands only (no plane frame); localization not compared; the DOS mesh recorded on all three axes is read at the candidate's mesh axes; inputs verified by fingerprint |
-| a SLAB reference whose `edge_crossings_at_fermi` records no `method` (every driver up to core 56fda912…, whatever its digest) | edge-crossing counts compared with the nearest-energy count recomputed from the candidate's own levels; the status and flows, which it did not record, are not applicable |
+| a SLAB reference whose `edge_crossings_at_fermi` records no `method` (every driver up to core 56fda912…, whatever its digest) | edge-crossing counts compared with the nearest-energy count recomputed from the candidate's own levels; the status and flows, which it did not record, are not applicable; the candidate's weighted flow is checked only against its own levels and weights (`agree_after_convention`, never `agree`): its inputs are unverifiable against such a reference |
 | a fermi-mode BERRY reference without `berry.conventions` | written before the sign fix: its maps, path curvature and integrals are compared after a factor -1 |
 | QUEER and the vendored driver | current semantics; compared as recorded |
 
@@ -505,8 +522,8 @@ A difference removed by one of these rules is classed `agree_after_convention`.
 | Path curvature | pointwise ≤ 1e-8 max\|Ω\| |
 | SLAB levels | τ_E per k-point; a level within τ_E of the window edge may be missing on one side |
 | SLAB edge and half-ribbon weights | left and right, first-half and middle-half weights summed over clusters of levels within 1e-5 eV ≤ 1e-9; clusters within 1e-5 eV of the window edge are excluded |
-| SLAB bulk check | the same `metal` flag (a flip with a gap edge within 2 τ_E of E_F is documented); the bulk gap ≤ 2 τ_E |
-| SLAB edge crossings | the candidate's block equal to the flow recomputed from its own stored levels and weights, always. Against a weighted-flow reference: counts at E_F and status equal; flows ≤ 1e-9 × the stored level count; gap, step shift and sampled energies ≤ 4 τ_E (each is a level plus 1.5 differences of two). A difference is documented only where the candidate's own decisions for the levels taking part in a crossing lie within tolerance of flipping (an offset cost, a swap test or a level's distance from the energy ≤ 5 τ_E; a middle-half weight within 1e-6 of 1/4; a step's flow within the flow tolerance of a half-integer) or a flow lies within its tolerance of 0.1 from an integer. Against a nearest-energy reference: its counts equal the recount, documented only where moving the 1/2 threshold by 1e-6 changes the recount |
+| SLAB bulk check | the same mesh (`k_points`) and `metal` flag (a flip with a gap edge within 2 τ_E of E_F is documented); the bulk gap ≤ 2 τ_E; the same Chern number (a difference where a run's Berry-phase step lies within 1e-6 rad of π is documented) and Berry-phase step ≤ 1e-6 rad |
+| SLAB edge crossings | the candidate's block equal to the flow recomputed from its own stored levels and weights, always. Against a weighted-flow reference: counts at E_F equal; status, method, tolerance and the failed `checks` equal (a reason that differs only in the values it prints is documented); flows ≤ 1e-9 × the larger stored level count; gap, step shift and sampled energies ≤ 4 τ_E (each is a level plus 1.5 differences of two). A difference is documented only where a decision of either run lies within tolerance of flipping there (`crossing_margins`, on both runs' levels): at an energy, an offset cost, a swap test of the set or its extension, a stray's or an unpartnered level's test against the reach, or any level's distance from the energy ≤ 5 τ_E; a middle-half weight of a level taking part within 1e-6 of 1/4 or its first-half weight within 1e-6 of 1/2; a flow within the flow tolerance of a half-integer or of 0.1 from an integer. For a check of the whole gap its own decisions: E_F against the reach inside the gap (`gap_edge`), a non-bulk-like level entering or leaving the gap (`absence`), each level of the `hybridised` test against the gap, the evaluated span, 1/4 and its cluster's bound, and each cluster cut against the reach, the flows against a half-integer (`varying`, `chern`) and the bulk Berry-phase step against π/2 and π (`chern`, `berry_step`). A status difference is documented only when every check that differs between the runs has such a decision, at the energies where it differs, or an alignment that sets the step shift could give another step shift (`step_shift`: a near-tie of offset costs or a level at E_F or at a provisional energy, giving a larger step or losing the one step that sets it) or, without a bulk gap, a middle-half weight that sets the gap lies within 1e-6 of 1/4 (`gap`): either moves every sampled energy; or the bulk checks' metal flags flip at a gap edge. Sampled energies that differ are documented on the same grounds (status, `step_shift`, `gap`), and a different number of rows also where a sampled energy lies within 5 τ_E of E_F or the sampled range is within 5 τ_E of empty (`rows`), or E_F lies within 5 τ_E of a reach inside the gap (`gap_edge`). Against a nearest-energy reference: its counts equal the recount, documented only where moving the 1/2 threshold by 1e-6 changes the recount |
 | Model and validation blocks | float leaves ≤ 1e-6 relative (the worst is reported), other leaves equal; producer keys are skipped |
 | Warnings | the same codes: `warning_codes` when both runs record them, else codes classified from the messages. Reworded messages with the same codes, such as "PythTB bands" and "Model bands", are documented; plot warnings depend on the plotting environment and are not compared |
 

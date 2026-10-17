@@ -128,7 +128,10 @@ def test_a_haldane_ribbon_has_one_chiral_mode_per_edge_exactly_as_the_driver(
     assert crossings["left"]["net"] == net and crossings["right"]["net"] == -net
     assert crossings["left"]["up"] + crossings["left"]["down"] == abs(net)
     assert crossings["status"] == status and crossings["method"] == "half_ribbon_flow"
-    assert slab["bulk_at_fermi"]["metal"] is False
+    bulk = slab["bulk_at_fermi"]
+    assert bulk["metal"] is False and bulk["k_points"] == [42, 80]
+    # The bulk Chern number of the bands below E_F, the periodic axis first, is the left net.
+    assert bulk["chern"] == net and bulk["berry_phase_step"] < np.pi / 2
     if status == "unresolved":
         assert crossings["reason"].startswith("no level lies within the window at any k")
     produced = assert_matches_the_driver(generator_core, monkeypatch, tmp_path, document, values)
