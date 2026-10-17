@@ -69,5 +69,10 @@ def test_the_driver_golden_of_a_case_passes_against_queer(tmp_path, name):
     assert parameters["detail"] == "identical parameter files (params_sha256)"
     if CASES[name].step == "PYTHTB_SLAB":
         kinds = {item["name"]: item["class"] for item in report["quantities"]}
-        for quantity in ("at_fermi", "status", "per_energy"):
+        for quantity in ("at_fermi", "status", "per_energy", "recomputed"):
             assert kinds[f"slab.edge_crossings_{quantity}"] == AGREE
+        assert kinds["slab.half_ribbon_weights"] == kinds["slab.bulk_at_fermi"] == AGREE
+        crossings = json.loads((golden / "pythtb_results.json").read_text())["slab"][
+            "edge_crossings_at_fermi"
+        ]
+        assert crossings["status"] == "resolved" and crossings["method"] == "half_ribbon_flow"

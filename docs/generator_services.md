@@ -476,13 +476,14 @@ nothing is compared:
   kind, cells and finite axis. A threshold decision that flipped is reported as
   not comparable, not as a failure.
 
-**Reference semantics.** A registry keyed by the producer's `core_sha256` adapts the
-comparison to the revision that wrote the reference:
+**Reference semantics.** A registry keyed by the producer's `core_sha256`, and the
+reference's own structure where it tells, adapt the comparison to the revision that
+wrote the reference:
 
 | Producer | Rules |
 |---|---|
-| driver 9f43886 (`f6c9b7af…`) | DOS(E_F) compared with the candidate's DOS recomputed under the first-nonnegative-bin rule; Fermi surface by its crossing bands only (no plane frame); localization not compared; the DOS mesh recorded on all three axes is read at the candidate's mesh axes; edge crossings as for dcdc104; inputs verified by fingerprint |
-| driver dcdc104 to c1c973b (`56fda912…`, QUEER 1.5.0's oracle) | SLAB edge-crossing counts compared with the nearest-energy count recomputed from the candidate's own levels; the crossing status and per-energy counts, which it did not record, are not applicable |
+| driver 9f43886 (`f6c9b7af…`) | DOS(E_F) compared with the candidate's DOS recomputed under the first-nonnegative-bin rule; Fermi surface by its crossing bands only (no plane frame); localization not compared; the DOS mesh recorded on all three axes is read at the candidate's mesh axes; inputs verified by fingerprint |
+| a SLAB reference whose `edge_crossings_at_fermi` records no `method` (every driver up to core 56fda912…, whatever its digest) | edge-crossing counts compared with the nearest-energy count recomputed from the candidate's own levels; the status and flows, which it did not record, are not applicable |
 | a fermi-mode BERRY reference without `berry.conventions` | written before the sign fix: its maps, path curvature and integrals are compared after a factor -1 |
 | QUEER and the vendored driver | current semantics; compared as recorded |
 
@@ -503,8 +504,9 @@ A difference removed by one of these rules is classed `agree_after_convention`.
 | BERRY, fermi mode | the flagged set F holds the points where the maps disagree beyond 1e-8 max\|Ω\|: a level within τ_E of E_F, or an occupied-empty pair at the 1e-6 eV skip threshold, decides such a point. Its size is reported, it must be a minority of the points carrying curvature, and the integral must agree to 1e-8 + Σ_F (\|Ω_Q\| + \|Ω_P\|)/(n² 2π). Each document's integral must equal its own map |
 | Path curvature | pointwise ≤ 1e-8 max\|Ω\| |
 | SLAB levels | τ_E per k-point; a level within τ_E of the window edge may be missing on one side |
-| SLAB edge weights | left and right weights summed over clusters of levels within 1e-5 eV ≤ 1e-9; clusters within 1e-5 eV of the window edge are excluded |
-| SLAB edge crossings | counts at E_F, status and per-energy nets equal, unless a per-state weight or a left + right sum lies within 1e-6 of 1/2 (documented); per-energy energies and the gap ≤ 2 τ_E |
+| SLAB edge and half-ribbon weights | left and right, first-half and middle-half weights summed over clusters of levels within 1e-5 eV ≤ 1e-9; clusters within 1e-5 eV of the window edge are excluded |
+| SLAB bulk check | the same `metal` flag (a flip with a gap edge within 2 τ_E of E_F is documented); the bulk gap ≤ 2 τ_E |
+| SLAB edge crossings | the candidate's block equal to the flow recomputed from its own stored levels and weights, always. Against a weighted-flow reference: counts at E_F and status equal; flows ≤ 1e-9 × the stored level count; gap, step shift and sampled energies ≤ 4 τ_E (each is a level plus 1.5 differences of two). A difference is documented only where the candidate's own decisions for the levels taking part in a crossing lie within tolerance of flipping (an offset cost, a swap test or a level's distance from the energy ≤ 5 τ_E; a middle-half weight within 1e-6 of 1/4; a step's flow within the flow tolerance of a half-integer) or a flow lies within its tolerance of 0.1 from an integer. Against a nearest-energy reference: its counts equal the recount, documented only where moving the 1/2 threshold by 1e-6 changes the recount |
 | Model and validation blocks | float leaves ≤ 1e-6 relative (the worst is reported), other leaves equal; producer keys are skipped |
 | Warnings | the same codes: `warning_codes` when both runs record them, else codes classified from the messages. Reworded messages with the same codes, such as "PythTB bands" and "Model bands", are documented; plot warnings depend on the plotting environment and are not compared |
 

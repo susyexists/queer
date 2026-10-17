@@ -21,7 +21,12 @@ sys.path.insert(0, str(ROOT / "tests" / "numerical"))
 from generator_golden_cases import CASES, write_case  # noqa: E402
 
 from queer.compat.generator import parity  # noqa: E402
-from queer.compat.generator.estimators import dos_at_fermi, gaussian_dos, legacy_edge_crossings  # noqa: E402
+from queer.compat.generator.estimators import (  # noqa: E402
+    dos_at_fermi,
+    edge_crossings,
+    gaussian_dos,
+    legacy_edge_crossings,
+)
 from queer.compat.generator.parity import (  # noqa: E402
     AFTER_CONVENTION,
     AGREE,
@@ -39,11 +44,17 @@ from queer.compat.generator.parity import (  # noqa: E402
     step_family,
     warning_code,
 )
+from queer.compat.generator.results import to_jsonable  # noqa: E402
 from queer.compat.generator.runner import main, run  # noqa: E402
 
 LEGACY_CORE = "f6c9b7af239b530253cb7eeb9b209847e7d47baaf0237cb835a326c17dd5ec32"
-# The R1 driver (dcdc104 to c1c973b): edge crossings by nearest energy.
-R1_CORE = "56fda912ba570e2293b3a9b4bf20d11038c64efa5d2f192c8ac03c615034e215"
+# Driver cores that counted edge crossings by nearest energy: dcdc104 to c1c973b, and the two
+# between 9f43886 and dcdc104 (aed1f70, ee04213) that were live on main.
+NEAREST_ENERGY_CORES = (
+    "56fda912ba570e2293b3a9b4bf20d11038c64efa5d2f192c8ac03c615034e215",
+    "cfe3b5f6" + "0" * 56,
+    "a171477a" + "0" * 56,
+)
 QUEER_RESULTS = "queer_results.json"
 DRIVER_RESULTS = "pythtb_results.json"
 
@@ -196,7 +207,11 @@ def test_a_changed_edge_crossing_count_fails(runs, tmp_path):
     write(candidate / QUEER_RESULTS, document)
     report = compare("QUEER_SLAB", reference, candidate)
     assert report["verdict"] == FAIL
-    assert report["summary"]["unexplained"] == ["slab.edge_crossings_at_fermi"]
+    # The candidate's block no longer equals the flow recomputed from its own levels either.
+    assert sorted(report["summary"]["unexplained"]) == [
+        "slab.edge_crossings_at_fermi",
+        "slab.edge_crossings_recomputed",
+    ]
 
 
 def tied_valence_maximum(runs, tmp_path, *, move_kpoint):
@@ -478,40 +493,85 @@ def test_bin_crossings_are_allowed_only_with_a_weyl_bound(runs, tmp_path):
     assert report["tolerance_basis"]["eigenvalue_eV"] == pytest.approx(1e-7, rel=1e-3)
 
 
-def test_slab_levels_at_the_window_edge_and_ill_conditioned_crossings(runs, tmp_path):
+def test_slab_levels_at_the_window_edge_on_one_side_pass(runs, tmp_path):
     reference, candidate = runs["haldane_slab"]
     candidate = copy(candidate, tmp_path / "candidate")
     ribbon = read(candidate / "Out" / "ribbon_bands.json")
     window = read(candidate / QUEER_RESULTS)["slab"]["window_eV"]
-    ribbon["energies_eV"][0].append(window)
-    ribbon["left_weight"][0].append(0.1)
-    ribbon["right_weight"][0].append(0.1)
+    # A level at the window edge, absent from the reference, at a k-point whose window is
+    # otherwise empty: far from the levels taking part, it changes no flow.
+    index = next(k for k, levels in enumerate(ribbon["energies_eV"]) if not levels)
+    ribbon["energies_eV"][index].append(window)
+    for key, value in (("left_weight", 0.9), ("right_weight", 0.0), ("left_half_weight", 1.0)):
+        ribbon[key][index].append(value)
+    ribbon["interior_weight"][index].append(0.0)
     write(candidate / "Out" / "ribbon_bands.json", ribbon)
     report = compare("QUEER_SLAB", reference, candidate)
     assert report["verdict"] == PASS, report["summary"]
     assert "window edge" in next(
         item["detail"] for item in report["quantities"] if item["name"] == "slab.levels"
     )
-    ribbon["energies_eV"][0][-1] = 0.0
+    ribbon["energies_eV"][index][-1] = 0.0
     write(candidate / "Out" / "ribbon_bands.json", ribbon)
     report = compare("QUEER_SLAB", reference, candidate)
-    assert report["summary"]["unexplained"] == ["slab.levels"]
+    assert "slab.levels" in report["summary"]["unexplained"]
 
-    candidate = copy(runs["haldane_slab"][1], tmp_path / "half")
-    ribbon = read(candidate / "Out" / "ribbon_bands.json")
-    document = read(candidate / QUEER_RESULTS)
-    document["slab"]["edge_crossings_at_fermi"]["right"]["down"] += 1
-    document["slab"]["edge_crossings_at_fermi"]["right"]["net"] -= 1
-    write(candidate / QUEER_RESULTS, document)
-    row = ribbon["left_weight"][0]
-    reference_ribbon = read(reference / "Out" / "ribbon_bands.json")
-    reference_ribbon["left_weight"][0][0] = row[0] = 0.5 + 1e-7
-    write(candidate / "Out" / "ribbon_bands.json", ribbon)
-    reference = copy(reference, tmp_path / "half-reference")
-    write(reference / "Out" / "ribbon_bands.json", reference_ribbon)
+
+def synthetic_ribbon(source, target, touch):
+    """A run whose ribbon is two chiral modes and a level reaching ``touch`` eV at one k-point.
+
+    The document's crossings and bulk check are rewritten from the file, so the run is
+    consistent with itself.
+    """
+    target = copy(source, target)
+    ribbon = read(target / "Out" / "ribbon_bands.json")
+    count = len(ribbon["energies_eV"])
+    ks = -0.5 + (np.arange(count) + 0.5) / count
+    energies, half, middle = [], [], []
+    for index, k in enumerate(ks):
+        top = touch if index == count // 4 else -0.06
+        energies.append(sorted([3 * k * 0.1, -3 * k * 0.1, top]))
+        weights = {3 * k * 0.1: 1.0, -3 * k * 0.1: 0.0, top: 1.0}
+        half.append([weights[e] for e in energies[-1]])
+        middle.append([0.0, 0.0, 0.0])
+    ribbon.update(
+        energies_eV=energies,
+        left_weight=half,
+        right_weight=[[1.0 - x for x in row] for row in half],
+        left_half_weight=half,
+        interior_weight=middle,
+    )
+    write(target / "Out" / "ribbon_bands.json", ribbon)
+    document = read(target / QUEER_RESULTS)
+    slab = document["slab"]
+    slab["bulk_at_fermi"] = {"metal": False, "gap_eV": [-1.0, 1.0], "k_perp_points": 2 * slab["cells"]}
+    slab["edge_crossings_at_fermi"] = to_jsonable(
+        edge_crossings(energies, half, middle, periodic=True, window=slab["window_eV"], bulk_metal=False)
+    )
+    write(target / QUEER_RESULTS, document)
+    return target
+
+
+def test_a_crossing_decided_within_tolerance_of_e_f_is_documented(runs, tmp_path):
+    # A level reaching just below E_F in one run and just above it in the other: one run
+    # counts it up and down again at E_F, the other not at all. Within τ_E either is right.
+    source = runs["haldane_slab"][1]
+    reference = synthetic_ribbon(source, tmp_path / "below", -2e-9)
+    candidate = synthetic_ribbon(source, tmp_path / "above", 2e-9)
+    crossings = [
+        read(run / QUEER_RESULTS)["slab"]["edge_crossings_at_fermi"] for run in (reference, candidate)
+    ]
+    assert crossings[0]["left"] != crossings[1]["left"]
     report = compare("QUEER_SLAB", reference, candidate)
+    kinds = classes(report)
+    assert kinds["slab.edge_crossings_at_fermi"] == DOCUMENTED, report["summary"]
+    assert kinds["slab.edge_crossings_recomputed"] == AGREE
     assert report["verdict"] == PASS_DOCUMENTED, report["summary"]
-    assert classes(report)["slab.edge_crossings_at_fermi"] == DOCUMENTED
+    # Far from E_F the same difference is unexplained.
+    reference = synthetic_ribbon(source, tmp_path / "far-below", -2e-3)
+    candidate = synthetic_ribbon(source, tmp_path / "far-above", 2e-3)
+    report = compare("QUEER_SLAB", reference, candidate)
+    assert classes(report)["slab.edge_crossings_at_fermi"] == UNEXPLAINED
 
 
 def test_reworded_driver_warnings_are_documented(runs, tmp_path):
@@ -631,11 +691,15 @@ def test_the_compare_command_prints_the_verdict_and_writes_reports(runs, tmp_pat
     assert "unknown step" in capsys.readouterr().err
 
 
-def nearest_energy_slab_reference(source, target, core=R1_CORE):
+def nearest_energy_slab_reference(source, target, core=NEAREST_ENERGY_CORES[0]):
     """A QUEER SLAB run rewritten as a nearest-energy driver recorded it: the counts and nothing else."""
     target = copy(source, target)
     document = as_driver_document(target, "PYTHTB_SLAB", core)
     ribbon = read(target / "Out" / "ribbon_bands.json")
+    for key in ("left_half_weight", "interior_weight"):
+        ribbon.pop(key)
+    write(target / "Out" / "ribbon_bands.json", ribbon)
+    document["slab"].pop("bulk_at_fermi")
     document["slab"]["edge_crossings_at_fermi"] = legacy_edge_crossings(
         ribbon["energies_eV"], ribbon["left_weight"], ribbon["right_weight"], periodic=True
     )
@@ -643,21 +707,27 @@ def nearest_energy_slab_reference(source, target, core=R1_CORE):
     return target
 
 
-def test_a_nearest_energy_reference_meets_its_count_recomputed_from_the_candidate(runs, tmp_path):
+@pytest.mark.parametrize("core", [*NEAREST_ENERGY_CORES, LEGACY_CORE, "0" * 64])
+def test_a_nearest_energy_reference_meets_its_count_recomputed_from_the_candidate(runs, tmp_path, core):
+    # A reference whose crossings record no method counted by nearest energy, whatever its core.
     source, candidate = runs["haldane_slab"]
-    reference = nearest_energy_slab_reference(source, tmp_path / "legacy")
-    # The candidate's own counts do not enter: its levels are recounted under the old rule.
-    candidate = copy(candidate, tmp_path / "candidate")
-    document = read(candidate / QUEER_RESULTS)
-    document["slab"]["edge_crossings_at_fermi"]["left"]["up"] += 5
-    write(candidate / QUEER_RESULTS, document)
+    reference = nearest_energy_slab_reference(source, tmp_path / "legacy", core)
     report = compare("PYTHTB_SLAB", reference, candidate)
     assert report["verdict"] == PASS, report["summary"]
-    assert report["semantics"]["profile"] == "driver-dcdc104" and report["semantics"]["key"] == R1_CORE
-    assert report["semantics"]["rules"]["edge_crossings_rule"] == "nearest_energy"
+    assert report["semantics"]["key"] == core
     kinds = classes(report)
     assert kinds["slab.edge_crossings_at_fermi"] == AFTER_CONVENTION
     assert kinds["slab.edge_crossings_status"] == kinds["slab.edge_crossings_per_energy"] == NOT_APPLICABLE
+    assert kinds["slab.half_ribbon_weights"] == kinds["slab.bulk_at_fermi"] == NOT_APPLICABLE
+    # The candidate's own weighted flow is still checked against its stored levels.
+    assert kinds["slab.edge_crossings_recomputed"] == AGREE
+    broken = copy(candidate, tmp_path / "candidate")
+    document = read(broken / QUEER_RESULTS)
+    document["slab"]["edge_crossings_at_fermi"]["left"]["up"] += 5
+    write(broken / QUEER_RESULTS, document)
+    report = compare("PYTHTB_SLAB", reference, broken)
+    assert report["verdict"] == FAIL
+    assert report["summary"]["unexplained"] == ["slab.edge_crossings_recomputed"]
     # The recount is applied, not skipped: other reference counts fail.
     document = read(reference / DRIVER_RESULTS)
     document["slab"]["edge_crossings_at_fermi"]["right"]["down"] += 1
@@ -666,48 +736,62 @@ def test_a_nearest_energy_reference_meets_its_count_recomputed_from_the_candidat
     report = compare("PYTHTB_SLAB", reference, candidate)
     assert report["verdict"] == FAIL
     assert report["summary"]["unexplained"] == ["slab.edge_crossings_at_fermi"]
-    assert parity.semantics_of({"provenance": {"core_sha256": LEGACY_CORE}})[0].edge_crossings_rule == (
-        "nearest_energy"
-    )
 
 
-def test_the_crossing_status_and_per_energy_counts_are_compared(runs, tmp_path):
-    reference, source = runs["haldane_slab"]
+def test_the_crossing_status_and_flows_are_compared(runs, tmp_path):
+    source, candidate = runs["haldane_slab"]
 
     def status(crossings):
         crossings["status"] = "unresolved"
 
-    def nets(crossings):
-        crossings["per_energy"][2]["left_net"] = 0
+    def flows(crossings):
+        crossings["per_energy"][2]["left_flow"] += 0.01
 
     def shifted(crossings, by):
         crossings["window_eV"] = [value + by for value in crossings["window_eV"]]
 
+    def rule(crossings):
+        crossings["method"] = "rank_continuity"
+
     changes = [
-        ("status", status, "slab.edge_crossings_status"),
-        ("nets", nets, "slab.edge_crossings_per_energy"),
-        ("far", lambda crossings: shifted(crossings, 1e-6), "slab.edge_crossings_per_energy"),
-        ("near", lambda crossings: shifted(crossings, 1e-9), None),
+        ("status", status, ["slab.edge_crossings_status"]),
+        ("flows", flows, ["slab.edge_crossings_per_energy"]),
+        ("far", lambda crossings: shifted(crossings, 1e-6), ["slab.edge_crossings_per_energy"]),
+        ("near", lambda crossings: shifted(crossings, 1e-9), []),
+        ("rule", rule, list(parity.CROSSING_QUANTITIES)),
     ]
     for name, change, expected in changes:
-        candidate = copy(source, tmp_path / name)
-        document = read(candidate / QUEER_RESULTS)
+        reference = copy(source, tmp_path / name)
+        document = read(reference / QUEER_RESULTS)
         change(document["slab"]["edge_crossings_at_fermi"])
-        write(candidate / QUEER_RESULTS, document)
+        write(reference / QUEER_RESULTS, document)
         report = compare("QUEER_SLAB", reference, candidate)
-        if expected is None:
-            assert report["verdict"] == PASS, report["summary"]
-            assert classes(report)["slab.edge_crossings_per_energy"] == AGREE
-        else:
-            assert report["verdict"] == FAIL, name
-            assert report["summary"]["unexplained"] == [expected], name
+        assert sorted(report["summary"]["unexplained"]) == sorted(expected), name
+        assert report["verdict"] == (FAIL if expected else PASS), name
+
+
+def test_the_bulk_check_and_half_ribbon_weights_are_compared(runs, tmp_path):
+    source, candidate = runs["haldane_slab"]
+    reference = copy(source, tmp_path / "bulk")
+    document = read(reference / QUEER_RESULTS)
+    document["slab"]["bulk_at_fermi"]["gap_eV"][1] += 1e-6
+    write(reference / QUEER_RESULTS, document)
+    assert compare("QUEER_SLAB", reference, candidate)["summary"]["unexplained"] == ["slab.bulk_at_fermi"]
+    reference = copy(source, tmp_path / "weights")
+    ribbon = read(reference / "Out" / "ribbon_bands.json")
+    ribbon["interior_weight"][3][0] += 1e-6
+    write(reference / "Out" / "ribbon_bands.json", ribbon)
+    report = compare("QUEER_SLAB", reference, candidate)
+    assert report["summary"]["unexplained"] == ["slab.half_ribbon_weights"]
 
 
 def test_the_registry_names_the_first_driver_revision():
     assert parity.REFERENCE_SEMANTICS[LEGACY_CORE].dos_at_fermi_rule == "first_nonnegative_bin"
     assert parity.semantics_of({"provenance": {"core_sha256": LEGACY_CORE}})[0].name == "driver-9f43886"
-    r1 = parity.semantics_of({"provenance": {"core_sha256": R1_CORE}})[0]
-    assert r1.name == "driver-dcdc104" and r1.edge_crossings_rule == "nearest_energy"
-    assert r1.rules() == {**parity.CURRENT_SEMANTICS.rules(), "edge_crossings_rule": "nearest_energy"}
+    # The edge-crossing rule of a reference is read from its structure, not its core.
+    assert list(parity.REFERENCE_SEMANTICS) == [LEGACY_CORE]
+    for core in NEAREST_ENERGY_CORES:
+        assert parity.semantics_of({"provenance": {"core_sha256": core}})[0] is parity.CURRENT_SEMANTICS
+    assert "edge_crossings_rule" not in parity.CURRENT_SEMANTICS.rules()
     assert parity.semantics_of({"engine": "queer", "provenance": {}})[0] is parity.CURRENT_SEMANTICS
     assert parity.passing({"verdict": PASS_DOCUMENTED}) and not parity.passing({"verdict": UNEXPLAINED})

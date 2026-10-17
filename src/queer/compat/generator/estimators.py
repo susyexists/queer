@@ -1031,6 +1031,89 @@ def edge_crossings(
     }
 
 
+def crossing_margins(
+    energies: Sequence,
+    half: Sequence,
+    middle: Sequence,
+    crossings: Mapping[str, Any],
+    *,
+    periodic: bool,
+    window: float | None,
+) -> dict[float, tuple[float, float, float]]:
+    """How close each decision behind ``crossings`` came to flipping, per evaluated energy.
+
+    For every energy in ``crossings["energies_eV"]``, over the k-steps: the gap between
+    the chosen offset's cost and the next valid one, and at an o = 0 step the distance of
+    the two cross steps of ranks -1 and 0 from the reach (eV); then, for the levels
+    taking part (:func:`taking_part`), their distance from the energy and of each swap
+    test with a neighbour from the reach (eV), their middle-half weight's distance from
+    1/4, and each step's left and right flow's distance from a half-integer, where the
+    crossing count of a step rounds. Returns ``{energy: (eV, weight, flow margin)}``
+    (inf where nothing was decided); a comparison excuses a difference only where these
+    are within tolerance.
+    """
+    levels: list[np.ndarray] = []
+    first: list[np.ndarray] = []
+    inner: list[np.ndarray] = []
+    for e, p, m in zip(energies, half, middle):
+        e = np.asarray(e, float)
+        order = np.argsort(e, kind="stable")
+        levels.append(e[order])
+        first.append(np.asarray(p, float)[order])
+        inner.append(np.asarray(m, float)[order])
+    count = len(levels)
+    steps = [(j, j + 1) for j in range(count - 1)]
+    if periodic and count > 1:
+        steps.append((count - 1, 0))
+    shift = crossings.get("step_shift_eV")
+    if shift is None:
+        return {}
+    reach = CROSSING_REACH * float(shift)
+    margins: dict[float, tuple[float, float, float]] = {}
+    for e_ref in crossings.get("energies_eV") or []:
+        e_ref = float(e_ref)
+        by_energy = by_weight = by_flow = math.inf
+        for j, j1 in steps:
+            a, b = levels[j], levels[j1]
+            i0, j0, keys = _offset_costs(a, b, e_ref, window)
+            if not keys:
+                continue
+            o = keys[0][2]
+            if len(keys) > 1:
+                by_energy = min(by_energy, keys[1][0] - keys[0][0])
+
+            def paired(r: int) -> bool:
+                return 0 <= i0 + r < len(a) and 0 <= j0 + r + o < len(b)
+
+            def swap_margin(lo: int, hi: int) -> float:
+                up = abs(float(b[j0 + hi + o]) - float(a[i0 + lo]))
+                down = abs(float(a[i0 + hi]) - float(b[j0 + lo + o]))
+                return min(abs(up - reach), abs(down - reach))
+
+            if o == 0 and paired(-1) and paired(0):
+                by_energy = min(by_energy, swap_margin(-1, 0))
+            ranks, _ = taking_part(a, b, i0, j0, o, reach)
+            if not ranks:
+                continue
+            if paired(ranks[0] - 1):
+                by_energy = min(by_energy, swap_margin(ranks[0] - 1, ranks[0]))
+            if paired(ranks[-1] + 1):
+                by_energy = min(by_energy, swap_margin(ranks[-1], ranks[-1] + 1))
+            step_left = 0.0
+            for r in ranks:
+                ia, ib = i0 + r, j0 + r + o
+                sa = 1.0 if a[ia] < e_ref else -1.0
+                sb = 1.0 if b[ib] < e_ref else -1.0
+                step_left += 0.5 * (float(first[j][ia]) * sa - float(first[j1][ib]) * sb)
+                by_energy = min(by_energy, abs(float(a[ia]) - e_ref), abs(float(b[ib]) - e_ref))
+                for weight in (inner[j][ia], inner[j1][ib]):
+                    by_weight = min(by_weight, abs(float(weight) - CROSSING_BULK_INTERIOR))
+            for flow in (step_left, o - step_left):
+                by_flow = min(by_flow, abs(abs(flow - math.floor(flow)) - 0.5))
+        margins[e_ref] = (by_energy, by_weight, by_flow)
+    return margins
+
+
 def legacy_edge_crossings(
     energies: Sequence,
     left: Sequence,

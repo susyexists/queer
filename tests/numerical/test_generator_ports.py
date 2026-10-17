@@ -424,6 +424,25 @@ def test_the_legacy_count_keeps_the_nearest_energy_rule():
     assert estimators.legacy_edge_crossings(energies, left, right)["left"] == {"up": 2, "down": 0, "net": 2}
 
 
+def test_crossing_margins_name_the_decisions_near_a_flip():
+    ks = -0.5 + (np.arange(20) + 0.5) / 20
+    energies = [np.array([3 * k, -3 * k]) for k in ks]
+    half = [np.array([1.0, 0.0]) for _ in ks]
+    middle = [np.zeros(2) for _ in ks]
+    crossings = estimators.edge_crossings(energies, half, middle, periodic=True)
+    margins = estimators.crossing_margins(energies, half, middle, crossings, periodic=True, window=None)
+    assert sorted(margins) == crossings["energies_eV"]
+    by_energy, by_weight, by_flow = margins[0.0]
+    # The levels taking part at E_F sit 0.075 eV from it, their middle-half weight is 0,
+    # 1/4 from the bulk-like threshold, and each step's flow is a whole crossing.
+    assert by_energy == pytest.approx(0.075) and by_weight == 0.25 and by_flow == pytest.approx(0.5)
+    # A level taking part exactly at E_F is a decision at zero margin.
+    energies[10] = np.array([0.0, -0.075])
+    crossings = estimators.edge_crossings(energies, half, middle, periodic=True)
+    margins = estimators.crossing_margins(energies, half, middle, crossings, periodic=True, window=None)
+    assert margins[0.0][0] == 0.0
+
+
 @pytest.mark.parametrize("case", ["haldane", "pt_kane_mele"])
 def test_slab_levels_and_cluster_weights_equal_the_generator_windowed_solve(generator_core, case):
     model = haldane() if case == "haldane" else kane_mele(0.0, rashba=0.0)

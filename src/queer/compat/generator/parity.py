@@ -37,12 +37,13 @@ its DOS(E_F) is compared with the candidate's value recomputed under that rule,
 its Fermi surface by the crossing bands only, its localization not at all, and its
 mesh at the candidate's mesh axes. A fermi-mode BERRY reference without
 ``berry.conventions`` predates the sign fix: its maps, path curvature and integrals
-are compared after a factor -1. The drivers up to core 56fda912 (9f43886, and
-dcdc104 to c1c973b) matched each edge state to the nearest-energy state of the same
-edge: such a reference's edge-crossing counts are compared with that count recomputed
-from the candidate's own levels, and the status and per-energy counts it never
-recorded are ``not_applicable``. A difference removed by a recorded convention is
-``agree_after_convention``.
+are compared after a factor -1. A SLAB reference whose edge crossings record no
+``method`` (the drivers up to core 56fda912) matched each edge state to the
+nearest-energy state of the same edge, whatever its producer digest: its counts are
+compared with that count recomputed from the candidate's own levels, and the status
+and flows it never recorded are ``not_applicable``. The candidate's own weighted-flow
+block must equal the flow recomputed from its stored levels and weights in every
+case. A difference removed by a recorded convention is ``agree_after_convention``.
 
 **Tolerances** (data-driven, the same for every material). With δ_W the
 Hermiticity Weyl bound the candidate's model block records (0 when absent),
@@ -62,10 +63,16 @@ carrying curvature and each document's integral must equal its own map. The path
 curvature agrees pointwise to 1e-8 of its largest magnitude. Slab levels follow
 the band tolerance per k-point (a level within τ_E of the window edge may be
 missing on one side), edge weights summed over clusters of levels within 1e-5 eV
-(clusters at the window edge excluded) agree to 1e-9, and the edge-crossing counts,
-their status and the per-energy nets exactly unless a per-state weight or a
-left + right sum lies within 1e-6 of 1/2; the per-energy energies and the gap agree
-to 2 τ_E. Float leaves of the
+(clusters at the window edge excluded) agree to 1e-9, like the first-half and
+middle-half weights; the bulk gap at E_F to 2 τ_E. The edge crossings at E_F and
+their status agree exactly, the weighted flows to 1e-9 times the stored level count
+and the gap, step shift and sampled energies to 4 τ_E; a difference is documented
+only where the candidate's own decisions for the levels taking part in a crossing lie
+within tolerance of flipping (an offset cost, a swap test, a level's distance from the
+energy, to 5 τ_E; a middle-half weight from 1/4, to 1e-6; a step's flow from a
+half-integer, to the flow tolerance), or where a flow lies within its tolerance of
+0.1 from an integer. A nearest-energy count differs as documented only where moving its
+1/2 threshold by 1e-6 changes the recount. Float leaves of the
 model and validation blocks agree to 1e-6 relative, other leaves exactly; the
 warning sets agree by code.
 
@@ -90,8 +97,17 @@ from typing import Any
 
 import numpy as np
 
+from ...physics.slab import edge_cells_used
 from .berry import plane_file_stem
-from .estimators import dos_at_fermi, legacy_edge_crossings
+from .estimators import (
+    CROSSING_METHOD,
+    CROSSING_REACH,
+    CROSSING_TOLERANCE,
+    crossing_margins,
+    dos_at_fermi,
+    edge_crossings,
+    legacy_edge_crossings,
+)
 from .pythtb_params import DEFAULT_PARAMS, step_keys, translate_pythtb
 from .results import (
     OUT_DIR,
@@ -146,6 +162,19 @@ SLAB_CLUSTER_EV = 1e-5
 SLAB_WEIGHT_TOL = 1e-9
 SLAB_HALF_WEIGHT_MARGIN = 1e-6
 SLAB_EDGE_THRESHOLD = 0.5
+# Per-level weights of a ribbon or slab file: on the edge cells, then (weighted-flow drivers)
+# on the first half of the cells and on the middle half.
+SLAB_WEIGHT_KEYS = ("left_weight", "right_weight", "left_half_weight", "interior_weight")
+# A weighted flow's sampled energies sit a reach (1.5 aligned level steps) inside the gap edges:
+# a level plus 1.5 differences of two levels, so two runs agreeing to τ_E per level place them
+# within 4 τ_E; a decision compares two such quantities (5 τ_E).
+CROSSING_ENERGY_FACTOR = 1.0 + 2.0 * CROSSING_REACH
+CROSSING_DECISION_FACTOR = 2.0 + 2.0 * CROSSING_REACH
+CROSSING_QUANTITIES = (
+    "slab.edge_crossings_at_fermi",
+    "slab.edge_crossings_status",
+    "slab.edge_crossings_per_energy",
+)
 BLOCK_RELATIVE = 1e-6
 FINGERPRINT_LATTICE_A = 1e-9
 FINGERPRINT_MEV = 1e-6
@@ -206,7 +235,6 @@ class Semantics:
     fermi_surface_contours: bool = True
     localization: bool = True
     dos_mesh_on_every_axis: bool = False
-    edge_crossings_rule: str = "rank_continuity"
 
     def rules(self) -> dict[str, Any]:
         return {
@@ -214,37 +242,27 @@ class Semantics:
             "fermi_surface_contours_compared": self.fermi_surface_contours,
             "localization_compared": self.localization,
             "dos_mesh_on_every_axis": self.dos_mesh_on_every_axis,
-            "edge_crossings_rule": self.edge_crossings_rule,
         }
 
 
 CURRENT_SEMANTICS = Semantics(
     "current",
     "QUEER and the vendored Generator driver: DOS(E_F) interpolated linearly, Fermi-surface contours in "
-    "the plane frame, DOS mesh per periodic axis, edge crossings by rank continuity checked across the gap",
+    "the plane frame, DOS mesh per periodic axis",
 )
 DRIVER_9F43886 = Semantics(
     "driver-9f43886",
     "the first Generator PythTB driver revision: DOS(E_F) from the first bin centred at or above E_F, "
     "Fermi-surface contours without a plane frame, another localization estimate, the DOS mesh on all "
-    "three axes, edge crossings by nearest energy, no recorded inputs",
+    "three axes, no recorded inputs",
     dos_at_fermi_rule="first_nonnegative_bin",
     fermi_surface_contours=False,
     localization=False,
     dos_mesh_on_every_axis=True,
-    edge_crossings_rule="nearest_energy",
-)
-DRIVER_DCDC104 = Semantics(
-    "driver-dcdc104",
-    "the Generator PythTB driver from dcdc104 to c1c973b (QUEER 1.5.0's oracle): edge crossings by "
-    "matching each edge state to the nearest-energy state of the same edge, with no status or "
-    "per-energy counts",
-    edge_crossings_rule="nearest_energy",
 )
 REFERENCE_SEMANTICS: Mapping[str, Semantics] = MappingProxyType(
     {
         "f6c9b7af239b530253cb7eeb9b209847e7d47baaf0237cb835a326c17dd5ec32": DRIVER_9F43886,
-        "56fda912ba570e2293b3a9b4bf20d11038c64efa5d2f192c8ac03c615034e215": DRIVER_DCDC104,
     }
 )
 
@@ -1593,37 +1611,31 @@ class _Comparison:
             abs(float(self.reference.block("model").get("fermi_energy") or 0)),
         )
         tolerance = eigenvalue_tolerance(self.weyl, magnitude)
+        # Per-level weights: on the edge cells, then (written by the weighted-flow drivers) on
+        # the first half of the cells and on the middle half.
+        names = [name for name in SLAB_WEIGHT_KEYS if name in file_a and name in file_b]
         weights = {
-            side: (
-                [np.asarray(row, float) for row in file_a.get(f"{side}_weight") or []],
-                [np.asarray(row, float) for row in file_b.get(f"{side}_weight") or []],
+            name: (
+                [np.asarray(row, float) for row in file_a.get(name) or []],
+                [np.asarray(row, float) for row in file_b.get(name) or []],
             )
-            for side in ("left", "right")
+            for name in names
         }
-        # Every weight row has its k-point's level count, left (reference, candidate) then right.
+        # Every weight row has its k-point's level count.
         counts = [len(row) for row in levels_a + levels_b]
         weight_counts = [len(row) for pair in weights.values() for rows in pair for row in rows]
-        if len(levels_a) != len(levels_b) or weight_counts != counts * 2:
+        if len(levels_a) != len(levels_b) or weight_counts != counts * len(names):
             self.quantity(
                 "slab.levels", UNEXPLAINED, detail="the k-point lists or weight rows differ in length"
             )
             return
-        worst_level, worst_weight, trimmed, unmatched = 0.0, 0.0, 0, []
-        near_half = False
-        for side in ("left", "right"):
-            for rows in weights[side]:
-                for row in rows:
-                    if np.any(np.abs(row - SLAB_EDGE_THRESHOLD) <= SLAB_HALF_WEIGHT_MARGIN):
-                        near_half = True
-        for lefts, rights in zip(weights["left"], weights["right"]):
-            for left_row, right_row in zip(lefts, rights):
-                if np.any(np.abs(left_row + right_row - SLAB_EDGE_THRESHOLD) <= SLAB_HALF_WEIGHT_MARGIN):
-                    near_half = True
+        worst_level, trimmed, unmatched = 0.0, 0, []
+        worst_weight = dict.fromkeys(names, 0.0)
         for index, (energies_a, energies_b) in enumerate(zip(levels_a, levels_b)):
             order_a, order_b = np.argsort(energies_a), np.argsort(energies_b)
             e_a, e_b = energies_a[order_a], energies_b[order_b]
-            sides_a = [weights[side][0][index][order_a] for side in ("left", "right")]
-            sides_b = [weights[side][1][index][order_b] for side in ("left", "right")]
+            values_a = {name: weights[name][0][index][order_a] for name in names}
+            values_b = {name: weights[name][1][index][order_b] for name in names}
             if len(e_a) != len(e_b):
                 keep_a = np.abs(np.abs(e_a) - window) > tolerance
                 keep_b = np.abs(np.abs(e_b) - window) > tolerance
@@ -1632,17 +1644,18 @@ class _Comparison:
                     continue
                 trimmed += 1
                 e_a, e_b = e_a[keep_a], e_b[keep_b]
-                sides_a = [values[keep_a] for values in sides_a]
-                sides_b = [values[keep_b] for values in sides_b]
+                values_a = {name: values[keep_a] for name, values in values_a.items()}
+                values_b = {name: values[keep_b] for name, values in values_b.items()}
             if len(e_a):
                 worst_level = max(worst_level, float(np.abs(e_a - e_b).max()))
             for start, stop in _clusters(e_a, SLAB_CLUSTER_EV):
                 if np.any(np.abs(np.abs(e_a[start:stop]) - window) < SLAB_CLUSTER_EV):
                     continue
-                for values_a, values_b in zip(sides_a, sides_b):
-                    worst_weight = max(
-                        worst_weight, abs(float(values_a[start:stop].sum() - values_b[start:stop].sum()))
+                for name in names:
+                    difference = abs(
+                        float(values_a[name][start:stop].sum() - values_b[name][start:stop].sum())
                     )
+                    worst_weight[name] = max(worst_weight[name], difference)
         if unmatched:
             self.quantity(
                 "slab.levels",
@@ -1654,122 +1667,244 @@ class _Comparison:
         else:
             note = f"; {trimmed} k-points with a level at the window edge on one side" if trimmed else ""
             self.bounded("slab.levels", worst_level, tolerance, f"ragged levels per k-point{note}")
+        clusters = "summed over clusters of levels within 1e-5 eV"
         self.bounded(
             "slab.edge_weights",
-            worst_weight,
+            max(worst_weight["left_weight"], worst_weight["right_weight"]),
             SLAB_WEIGHT_TOL,
-            "left and right weights summed over clusters of levels within 1e-5 eV",
+            f"left and right weights {clusters}",
         )
-        self.compare_edge_crossings(
-            kind,
-            slab_a.get("edge_crossings_at_fermi") or {},
-            slab_b.get("edge_crossings_at_fermi") or {},
-            file_b,
-            EDGE_FACTOR * tolerance,
-            near_half,
+        if "left_half_weight" in names and "interior_weight" in names:
+            self.bounded(
+                "slab.half_ribbon_weights",
+                max(worst_weight["left_half_weight"], worst_weight["interior_weight"]),
+                SLAB_WEIGHT_TOL,
+                f"first-half and middle-half weights {clusters}",
+            )
+        else:
+            self.quantity(
+                "slab.half_ribbon_weights",
+                NOT_APPLICABLE,
+                detail="a run that counts by nearest energy stores no first-half or middle-half weights",
+            )
+        bulk_near = self.compare_bulk_at_fermi(
+            slab_a.get("bulk_at_fermi"), slab_b.get("bulk_at_fermi"), tolerance
         )
+        self.compare_edge_crossings(kind, slab_a, slab_b, file_b, tolerance, bulk_near)
+
+    def compare_bulk_at_fermi(self, bulk_a: Any, bulk_b: Any, tolerance: float) -> bool:
+        """Whether the bulk bands cross E_F, and the gap if not; a gap edge within tolerance of E_F excuses a flip.
+
+        Returns whether the two runs' bulk checks differ at such an edge.
+        """
+        name = "slab.bulk_at_fermi"
+        if bulk_a is None:
+            self.quantity(name, NOT_APPLICABLE, detail="the reference ran no bulk check")
+            return False
+        if not isinstance(bulk_a, dict) or not isinstance(bulk_b, dict):
+            self.quantity(name, UNEXPLAINED, detail=f"{bulk_a!r} vs {bulk_b!r}")
+            return False
+        bound = EDGE_FACTOR * tolerance
+        if bulk_a.get("k_perp_points") != bulk_b.get("k_perp_points"):
+            self.quantity(name, UNEXPLAINED, detail=_shorten(f"{bulk_a} vs {bulk_b}"))
+        elif bool(bulk_a.get("metal")) != bool(bulk_b.get("metal")):
+            gap = (bulk_a if not bulk_a.get("metal") else bulk_b).get("gap_eV") or []
+            near = any(edge is not None and abs(float(edge)) <= bound for edge in gap)
+            self.quantity(
+                name,
+                DOCUMENTED if near else UNEXPLAINED,
+                detail=_shorten(
+                    f"{bulk_a} vs {bulk_b}" + ("; a gap edge lies within 2 τ_E of E_F" if near else "")
+                ),
+            )
+            return near
+        else:
+            gap_a, gap_b = bulk_a.get("gap_eV"), bulk_b.get("gap_eV")
+            if gap_a is None and gap_b is None:
+                self.quantity(name, AGREE, 0.0, bound, "the bulk bands cross E_F in both runs")
+            else:
+                self.bounded(name, _edge_difference(gap_a, gap_b), bound, "the bulk gap around E_F, to 2 τ_E")
+        return False
 
     def compare_edge_crossings(
         self,
         kind: str,
-        crossings_a: Mapping[str, Any],
-        crossings_b: Mapping[str, Any],
+        slab_a: Mapping[str, Any],
+        slab_b: Mapping[str, Any],
         file_b: Mapping[str, Any],
         tolerance: float,
-        near_half: bool,
+        bulk_near: bool = False,
     ) -> None:
-        """The counts at E_F, then the status and the per-energy counts across the gap.
+        """The crossings at E_F, their status and the flows across the gap, and the candidate's own consistency.
 
-        A reference of a nearest-energy driver is compared with that count recomputed
-        from the candidate's levels; it recorded no status or per-energy counts.
+        A reference whose crossings record no ``method`` counted by nearest energy: its
+        counts are compared with that count recomputed from the candidate's levels, and it
+        recorded no status or flows. A weighted-flow reference is compared quantity by
+        quantity. Either way the candidate's own block must equal the flow recomputed from
+        its stored levels and weights.
         """
-        counts_a = {side: crossings_a.get(side) for side in ("left", "right")}
-        counts_b = {side: crossings_b.get(side) for side in ("left", "right")}
-        near = "a per-state edge weight, or a left + right sum, lies within 1e-6 of 1/2"
-        if self.rules.edge_crossings_rule == "nearest_energy":
-            recount = legacy_edge_crossings(
-                [np.asarray(row, float) for row in file_b.get("energies_eV") or []],
-                [np.asarray(row, float) for row in file_b.get("left_weight") or []],
-                [np.asarray(row, float) for row in file_b.get("right_weight") or []],
-                periodic=kind == "ribbon",
-                threshold=SLAB_EDGE_THRESHOLD,
-            )
-            self.discrete(
-                "slab.edge_crossings_at_fermi",
-                counts_a == recount,
-                near_half,
-                f"{_brief(counts_a)}: the nearest-energy count recomputed from the candidate's levels",
-                f"{counts_a} vs {recount} recomputed from the candidate's levels",
-                near,
-                convention=True,
-            )
-            for name in ("slab.edge_crossings_status", "slab.edge_crossings_per_energy"):
+        crossings_a = slab_a.get("edge_crossings_at_fermi") or {}
+        crossings_b = slab_b.get("edge_crossings_at_fermi") or {}
+        periodic = kind == "ribbon"
+        self.check_recomputed_crossings(periodic, slab_b, crossings_b, file_b)
+        if "method" not in crossings_a:
+            self.compare_nearest_energy_crossings(periodic, crossings_a, file_b)
+            return
+        rules = {crossings_a.get("method"), crossings_b.get("method")}
+        if rules != {CROSSING_METHOD}:
+            for name in CROSSING_QUANTITIES:
                 self.quantity(
                     name,
-                    NOT_APPLICABLE,
-                    detail=f"the reference ({self.semantics.name}) counted by nearest energy and "
-                    "recorded no status or per-energy counts",
+                    UNEXPLAINED,
+                    detail=f"the reference counted by {crossings_a.get('method')!r} and the candidate by "
+                    f"{crossings_b.get('method')!r}; this comparator knows {CROSSING_METHOD!r}",
                 )
             return
+        flow_tol = SLAB_WEIGHT_TOL * sum(len(row) for row in file_b.get("energies_eV") or [])
+        margins = crossing_margins(
+            file_b.get("energies_eV") or [],
+            file_b.get("left_half_weight") or [],
+            file_b.get("interior_weight") or [],
+            crossings_b,
+            periodic=periodic,
+            window=slab_b.get("window_eV"),
+        )
+        decision = CROSSING_DECISION_FACTOR * tolerance
+        near_at = {
+            energy
+            for energy, (by_energy, by_weight, by_flow) in margins.items()
+            if by_energy <= decision or by_weight <= SLAB_HALF_WEIGHT_MARGIN or by_flow <= flow_tol
+        }
+        energy_tol = CROSSING_ENERGY_FACTOR * tolerance
+        near_status = bulk_near or bool(near_at) or _status_near_threshold(crossings_b, flow_tol, energy_tol)
+        taking_part = "a level taking part in a crossing is within tolerance of a decision"
+        counts_a = {side: crossings_a.get(side) for side in ("left", "right")}
+        counts_b = {side: crossings_b.get(side) for side in ("left", "right")}
         self.discrete(
             "slab.edge_crossings_at_fermi",
             counts_a == counts_b,
-            near_half,
+            0.0 in near_at,
             _brief(counts_a),
             f"{counts_a} vs {counts_b}",
-            near,
+            f"at E_F {taking_part}",
         )
-        keys = ("status", "reason", "method", "threshold")
-        if "method" not in crossings_a and "method" not in crossings_b:
-            for name in ("slab.edge_crossings_status", "slab.edge_crossings_per_energy"):
-                self.quantity(
-                    name, NOT_APPLICABLE, detail="neither run recorded a status or per-energy counts"
-                )
-            return
+        keys = ("status", "reason", "method", "tolerance")
         status_a = {key: crossings_a.get(key) for key in keys}
         status_b = {key: crossings_b.get(key) for key in keys}
         self.discrete(
             "slab.edge_crossings_status",
             status_a == status_b,
-            near_half,
+            near_status,
             f"{status_a['status']} ({status_a['method']})",
             _shorten(f"{status_a} vs {status_b}"),
-            near,
+            f"{taking_part}, or a flow lies within tolerance of {CROSSING_TOLERANCE} from an integer",
         )
-        worst = _per_energy_difference(crossings_a, crossings_b)
-        if worst is None:
-            self.discrete(
-                "slab.edge_crossings_per_energy",
-                False,
-                near_half,
-                "",
-                _shorten(f"{crossings_a.get('per_energy')} vs {crossings_b.get('per_energy')}"),
-                near,
+        worst, flows, where = _flow_differences(crossings_a, crossings_b)
+        name = "slab.edge_crossings_per_energy"
+        if worst is None or worst > energy_tol or flows > flow_tol:
+            differing = _shorten(f"{crossings_a.get('per_energy')} vs {crossings_b.get('per_energy')}")
+            # Rows or energies that differ follow a status decision; a flow that differs, its energy's.
+            near = near_status if worst is None or worst > energy_tol else where in near_at
+            self.quantity(
+                name,
+                DOCUMENTED if near else UNEXPLAINED,
+                flows if worst is not None else None,
+                flow_tol,
+                f"{differing}: {taking_part}" if near else differing,
             )
         else:
-            self.bounded(
-                "slab.edge_crossings_per_energy",
-                worst,
-                tolerance,
-                f"{len(crossings_a.get('per_energy') or [])} energies, the same nets; energies to 2 τ_E",
+            self.quantity(
+                name,
+                AGREE,
+                flows,
+                flow_tol,
+                f"{len(crossings_a.get('per_energy') or [])} energies to {CROSSING_ENERGY_FACTOR:g} τ_E "
+                f"(largest {worst:.3g} eV); flows to the weight tolerance times the level count",
+            )
+
+    def check_recomputed_crossings(
+        self,
+        periodic: bool,
+        slab_b: Mapping[str, Any],
+        crossings_b: Mapping[str, Any],
+        file_b: Mapping[str, Any],
+    ) -> None:
+        """The candidate's weighted-flow block equals the flow recomputed from its own stored levels."""
+        name = "slab.edge_crossings_recomputed"
+        if crossings_b.get("method") != CROSSING_METHOD:
+            self.quantity(name, NOT_APPLICABLE, detail="the candidate recorded no weighted flow")
+            return
+        if "left_half_weight" not in file_b or "interior_weight" not in file_b:
+            self.quantity(name, UNEXPLAINED, detail="the candidate's bands file stores no first-half weights")
+            return
+        cells = int(slab_b.get("cells") or 0)
+        bulk = slab_b.get("bulk_at_fermi")
+        recount = edge_crossings(
+            file_b.get("energies_eV") or [],
+            file_b.get("left_half_weight") or [],
+            file_b.get("interior_weight") or [],
+            periodic=periodic,
+            window=slab_b.get("window_eV"),
+            interior=cells > 2 * edge_cells_used(int(slab_b.get("edge_cells") or 2), cells),
+            bulk_metal=bulk.get("metal") if isinstance(bulk, dict) else None,
+        )
+        recount = json.loads(json.dumps(to_jsonable(recount)))
+        stored = json.loads(json.dumps(to_jsonable(crossings_b)))
+        if recount == stored:
+            self.quantity(
+                name, AGREE, 0.0, 0.0, f"{stored.get('status')}: equal to the flow recomputed from its levels"
+            )
+        else:
+            self.quantity(name, UNEXPLAINED, detail=_shorten(f"{stored} stored vs {recount} recomputed"))
+
+    def compare_nearest_energy_crossings(
+        self, periodic: bool, crossings_a: Mapping[str, Any], file_b: Mapping[str, Any]
+    ) -> None:
+        """A nearest-energy reference against that count recomputed from the candidate's levels."""
+        counts_a = {side: crossings_a.get(side) for side in ("left", "right")}
+        arrays = [
+            [np.asarray(row, float) for row in file_b.get(key) or []]
+            for key in ("energies_eV", "left_weight", "right_weight")
+        ]
+        recount = legacy_edge_crossings(*arrays, periodic=periodic, threshold=SLAB_EDGE_THRESHOLD)
+        # Only a weight whose side of the threshold decides a counted crossing excuses a difference.
+        near = any(
+            legacy_edge_crossings(*arrays, periodic=periodic, threshold=SLAB_EDGE_THRESHOLD + shift)
+            != recount
+            for shift in (-SLAB_HALF_WEIGHT_MARGIN, SLAB_HALF_WEIGHT_MARGIN)
+        )
+        self.discrete(
+            "slab.edge_crossings_at_fermi",
+            counts_a == recount,
+            near,
+            f"{_brief(counts_a)}: the nearest-energy count recomputed from the candidate's levels",
+            f"{counts_a} vs {recount} recomputed from the candidate's levels",
+            f"the recount changes when the 1/2 threshold moves by {SLAB_HALF_WEIGHT_MARGIN:g}",
+            convention=True,
+        )
+        for name in ("slab.edge_crossings_status", "slab.edge_crossings_per_energy"):
+            self.quantity(
+                name,
+                NOT_APPLICABLE,
+                detail="the reference counted by nearest energy and recorded no status or flows",
             )
 
     def discrete(
         self,
         name: str,
         equal: bool,
-        near_half: bool,
+        near: bool,
         agreed: str,
         differing: str,
-        near: str,
+        why_near: str,
         *,
         convention: bool = False,
     ) -> None:
-        """A count or label: equal agrees, a difference at a 1/2-weight decision is documented."""
+        """A count or label: equal agrees, a difference at a decision within tolerance is documented."""
         if equal:
             self.quantity(name, self.converted(AGREE) if convention else AGREE, detail=_shorten(agreed))
-        elif near_half:
-            self.quantity(name, DOCUMENTED, detail=_shorten(f"{differing}: {near}"))
+        elif near:
+            self.quantity(name, DOCUMENTED, detail=_shorten(f"{differing}: {why_near}"))
         else:
             self.quantity(name, UNEXPLAINED, detail=_shorten(differing))
 
@@ -1909,22 +2044,72 @@ def _clusters(energies: np.ndarray, gap: float) -> list[tuple[int, int]]:
     return list(zip(edges[:-1], edges[1:]))
 
 
-def _per_energy_difference(a: Mapping[str, Any], b: Mapping[str, Any]) -> float | None:
-    """The largest energy difference of two per-energy count tables, None unless shapes and nets agree."""
+def _flow_differences(a: Mapping[str, Any], b: Mapping[str, Any]) -> tuple[float | None, float, float | None]:
+    """The largest energy and flow differences of two weighted-flow blocks, and the energy of the latter.
+
+    The energies are the gap, the step shift and the sampled energies; the flows are each
+    row's left, right and bulk flows, and the energy returned is the candidate's sampled
+    energy of the largest flow difference. The first value is None when the shapes
+    differ (the row counts, or a gap or step shift recorded on one side only).
+    """
     rows_a, rows_b = a.get("per_energy"), b.get("per_energy")
     if not isinstance(rows_a, list) or not isinstance(rows_b, list) or len(rows_a) != len(rows_b):
-        return None
-    # A metal's gap is null: an empty list here, which a recorded gap never matches.
-    window_a, window_b = a.get("window_eV") or [], b.get("window_eV") or []
-    energies_a, energies_b = a.get("energies_eV") or [], b.get("energies_eV") or []
-    if len(window_a) != len(window_b) or len(energies_a) != len(energies_b):
-        return None
-    pairs = list(zip(window_a, window_b)) + list(zip(energies_a, energies_b))
+        return None, math.inf, None
+    pairs: list[tuple[Any, Any]] = []
+    for key in ("window_eV", "step_shift_eV"):
+        x, y = a.get(key), b.get(key)
+        if (x is None) != (y is None):
+            return None, math.inf, None
+        if x is None:
+            continue
+        xs, ys = (x, y) if isinstance(x, list) else ([x], [y])
+        if not isinstance(ys, list) or len(xs) != len(ys):
+            return None, math.inf, None
+        pairs += list(zip(xs, ys))
+    worst_flow, where = 0.0, None
     for row_a, row_b in zip(rows_a, rows_b):
-        if any(row_a.get(key) != row_b.get(key) for key in ("left_net", "right_net", "bulk_net")):
-            return None
         pairs.append((row_a.get("energy_eV"), row_b.get("energy_eV")))
-    return max((abs(float(x) - float(y)) for x, y in pairs), default=0.0)
+        for key in ("left_flow", "right_flow", "bulk_flow"):
+            difference = abs(float(row_a.get(key) or 0.0) - float(row_b.get(key) or 0.0))
+            if where is None or difference > worst_flow:
+                worst_flow, where = difference, float(row_b.get("energy_eV") or 0.0)
+    worst_energy = max((abs(float(x) - float(y)) for x, y in pairs), default=0.0)
+    return worst_energy, worst_flow, where
+
+
+def _status_near_threshold(crossings: Mapping[str, Any], flow_tol: float, energy_tol: float) -> bool:
+    """Whether a status decision of a weighted-flow block lies within tolerance of flipping.
+
+    A flow within ``flow_tol`` of its tolerance from an integer or of a half-integer
+    (where it rounds), or E_F within ``energy_tol`` of an edge of the energies the flow
+    can be certified at (a reach inside the gap).
+    """
+    tolerance = float(crossings.get("tolerance") or CROSSING_TOLERANCE)
+    for row in crossings.get("per_energy") or []:
+        for key in ("left_flow", "right_flow"):
+            flow = float(row.get(key) or 0.0)
+            distance = abs(flow - round(flow))
+            if min(abs(distance - tolerance), abs(distance - 0.5)) <= flow_tol:
+                return True
+    gap, shift = crossings.get("window_eV"), crossings.get("step_shift_eV")
+    if isinstance(gap, list) and len(gap) == 2 and shift is not None:
+        reach = CROSSING_REACH * float(shift)
+        if min(abs(float(gap[0]) + reach), abs(float(gap[1]) - reach)) <= energy_tol:
+            return True
+    return False
+
+
+def _edge_difference(a: Any, b: Any) -> float | None:
+    """The larger difference of two [below, above] gap edges (None entries must match)."""
+    if not isinstance(a, list) or not isinstance(b, list) or len(a) != 2 or len(b) != 2:
+        return None
+    worst = 0.0
+    for x, y in zip(a, b):
+        if (x is None) != (y is None):
+            return None
+        if x is not None:
+            worst = max(worst, abs(float(x) - float(y)))
+    return worst
 
 
 def _brief(value: Any) -> str:
