@@ -235,10 +235,12 @@ def test_pyatb_shift_export_matches_recorded_eighteen_component_columns(tmp_path
             26.0,
         ],
     )
-    assert (
-        "xxx xxy xxz xyy xyz xzz yxx yxy yxz yyy yyz yzz zxx zxy zxz zyy zyz zzz"
-        in output.read_text().splitlines()[0]
-    )
+    header = output.read_text().splitlines()[0].replace("#", " ").split()
+    assert header == [
+        "omega(eV)",
+        *"xxx xxy xxz xyy xyz xzz yxx yxy yxz yyy yyz yzz zxx zxy zxz zyy zyz zzz".split(),
+        "(uA/V^2)",
+    ]
 
 
 def test_imported_band_payload_has_declared_reference_and_segment_partition():

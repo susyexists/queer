@@ -9,6 +9,9 @@ applied. Electric fields are complex Fourier amplitudes in V/m.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Any
+
 import numpy as np
 from scipy.constants import epsilon_0
 
@@ -376,6 +379,192 @@ def _transition_selection(data, pairs, occupied):
     return mask
 
 
+@dataclass(frozen=True)
+class ShiftCurrentSettings:
+    """The validated per-k settings of :func:`shift_current` (see :func:`shift_current_settings`)."""
+
+    omega: np.ndarray
+    mu: float
+    temperature_kelvin: float
+    eta: float
+    scissors: float
+    degeneracy_tol: float | None
+    smearing: str
+    occupied_bands: Any
+    band_pairs: Any
+    method: str
+    scissors_occupied_bands: Any
+    bin_width: float | None
+    spacing: np.ndarray | None
+    adaptive_scale: float
+    adaptive_min: float
+    adaptive_max: float
+
+
+def shift_current_settings(
+    model,
+    omega,
+    mu,
+    *,
+    eta,
+    temperature_kelvin=0.0,
+    grid=(8, 8, 8),
+    kpoints=None,
+    scissors=0.0,
+    degeneracy_tol=None,
+    smearing="lorentzian",
+    occupied_bands=None,
+    band_pairs=None,
+    method="analytic",
+    scissors_occupied_bands=None,
+    bin_width=None,
+    adaptive_scale=1.0,
+    adaptive_min=1e-4,
+    adaptive_max=1.0,
+    adaptive_spacing=None,
+):
+    """Validate the shift-current options for the resolved ``omega`` and ``mu``; ``ValueError`` names the problem.
+
+    ``omega`` and ``mu`` are the photon energies and chemical potential that
+    :func:`shift_current` resolves; ``degeneracy_tol`` stays as given (None: the
+    model's tolerance at every k-point). A ``none`` smearing without
+    ``bin_width`` takes the uniform step of ``omega``; an ``adaptive`` smearing
+    gets the Cartesian reciprocal cell steps of ``grid`` (zero along an axis of
+    one point when any axis has more).
+    """
+    omega = np.asarray(omega, dtype=float)
+    if method not in {"analytic", "sum_over_states", "sternheimer"}:
+        raise ValueError("shift-current method must be analytic, sum_over_states, or sternheimer")
+    if occupied_bands is not None and temperature_kelvin:
+        raise ValueError("explicit occupied_bands requires zero temperature")
+    if smearing not in {"lorentzian", "gaussian", "none", "adaptive"}:
+        raise ValueError("smearing must be lorentzian, gaussian, none, or adaptive")
+    if smearing == "none":
+        if bin_width is None:
+            if len(omega) < 2 or not np.allclose(np.diff(omega), np.diff(omega)[0]) or np.diff(omega)[0] <= 0:
+                raise ValueError(
+                    "binned no-smearing requires uniform ascending omega or an explicit bin_width"
+                )
+            bin_width = float(np.diff(omega)[0])
+        if not np.isfinite(bin_width) or bin_width <= 0:
+            raise ValueError("bin_width must be finite and positive in eV")
+    spacing = None
+    if smearing == "adaptive":
+        if not np.isfinite([adaptive_scale, adaptive_min, adaptive_max]).all() or (
+            adaptive_scale <= 0 or adaptive_min <= 0 or adaptive_max < adaptive_min
+        ):
+            raise ValueError("adaptive Gaussian scale and width bounds must be positive and ordered")
+        if kpoints is not None and adaptive_spacing is None:
+            raise ValueError("adaptive smearing on explicit kpoints requires adaptive_spacing")
+        spacing = (
+            reciprocal(model) / np.asarray(grid)[:, None]
+            if adaptive_spacing is None
+            else np.asarray(adaptive_spacing, float)
+        )
+        if spacing.shape != (3, 3) or not np.isfinite(spacing).all():
+            raise ValueError("adaptive_spacing must contain three finite Cartesian reciprocal cell steps")
+        if adaptive_spacing is None and np.any(np.asarray(grid) > 1):
+            spacing[np.asarray(grid) == 1] = 0
+    return ShiftCurrentSettings(
+        omega=omega,
+        mu=float(mu),
+        temperature_kelvin=float(temperature_kelvin),
+        eta=eta,
+        scissors=scissors,
+        degeneracy_tol=degeneracy_tol,
+        smearing=smearing,
+        occupied_bands=occupied_bands,
+        band_pairs=band_pairs,
+        method=method,
+        scissors_occupied_bands=scissors_occupied_bands,
+        bin_width=bin_width,
+        spacing=spacing,
+        adaptive_scale=adaptive_scale,
+        adaptive_min=adaptive_min,
+        adaptive_max=adaptive_max,
+    )
+
+
+def shift_current_point(model, k, settings):
+    """The resonant transitions of one k-point: what :func:`shift_current` sums there.
+
+    Returns ``energies`` (the scissored levels, eV), ``gap[n, m] = E_m - E_n``,
+    ``factor[n, m]`` (``f_n - f_m`` on the selected occupied-to-empty pairs above
+    the degeneracy tolerance, else zero), ``integrand[a, b, c, n, m]``
+    (``Im r^b_mn r^c_nm;a`` symmetrized in b, c; Angstrom^3) and the unscissored
+    geometry ``raw``. The conductivity at k is ``sum_nm factor * integrand *
+    delta(omega - gap)`` times the conversion of :func:`shift_current`.
+    """
+    raw = band_geometry(model, k, settings.degeneracy_tol)
+    if settings.method == "sternheimer":
+        raw = _sternheimer_geometry(model, k, raw)
+    gradient, _, _ = _differentiated_geometry(model, k, raw)
+    mu = settings.mu
+    occupied = _occupied_manifold(raw, settings.occupied_bands, mu)
+    pair_mask = _transition_selection(raw, settings.band_pairs, occupied)
+    count = (
+        settings.occupied_bands
+        if settings.scissors_occupied_bands is None
+        else settings.scissors_occupied_bands
+    )
+    data = _scissor_geometry(raw, mu, settings.scissors, count)
+    energy = data["energies"]
+    connection = data["connections"]
+    f, _, _ = _occupation_derivatives(energy, mu, settings.temperature_kelvin, settings.eta)
+    if settings.occupied_bands is not None:
+        f = occupied.astype(float)
+    gap = energy[None, :] - energy[:, None]
+    block = (np.abs(gap) <= raw["degeneracy_tol"]) & (
+        raw["band_channels"][:, None] == raw["band_channels"][None, :]
+    )
+    block_connection = connection * block[None]
+    generalized = gradient - 1j * (
+        np.einsum("anl,blm->abnm", block_connection, connection, optimize=True)
+        - np.einsum("bnl,alm->abnm", connection, block_connection, optimize=True)
+    )
+    factor = (f[:, None] - f[None, :]) * (gap > raw["degeneracy_tol"]) * pair_mask
+    integrand = np.einsum("bmn,acnm->abcnm", connection, generalized)
+    integrand = 0.5 * (integrand + integrand.swapaxes(1, 2)).imag
+    return {"energies": energy, "gap": gap, "factor": factor, "integrand": integrand, "raw": raw}
+
+
+def shift_current_widths(point, settings):
+    """The adaptive Gaussian widths (eV) of a :func:`shift_current_point`'s pairs."""
+    velocities = np.diagonal(point["raw"]["velocities"], axis1=1, axis2=2).real.T
+    cell_changes = (velocities[:, None] - velocities[None, :]) @ settings.spacing.T
+    return np.clip(
+        settings.adaptive_scale * np.linalg.norm(cell_changes, axis=-1) / np.sqrt(12),
+        settings.adaptive_min,
+        settings.adaptive_max,
+    )
+
+
+def shift_current_spectrum(point, settings, frequency_batch):
+    """The unconverted conductivity of one :func:`shift_current_point` at every ``settings.omega``.
+
+    Shape ``(len(omega), 3, 3, 3)``; :func:`shift_current` multiplies the k-sum
+    by its conversion to microA/V^2. ``frequency_batch`` bounds the frequencies
+    held at once.
+    """
+    omega, smearing = settings.omega, settings.smearing
+    gap, factor, integrand = point["gap"], point["factor"], point["integrand"]
+    width = shift_current_widths(point, settings) if smearing == "adaptive" else None
+    bin_width = settings.bin_width
+    answer = np.empty((len(omega), 3, 3, 3))
+    for start in range(0, len(omega), frequency_batch):
+        stop = start + frequency_batch
+        difference = omega[start:stop, None, None] - gap
+        if smearing == "none":
+            lines = ((difference >= -bin_width / 2) & (difference < bin_width / 2)) / bin_width
+        elif smearing == "adaptive":
+            lines = _delta(difference, width, "gaussian")
+        else:
+            lines = _delta(difference, settings.eta, smearing)
+        lines = lines * factor
+        answer[start:stop] = np.einsum("wnm,abcnm->wabc", lines, integrand)
+    return answer
+
+
 def shift_current(
     model,
     omega,
@@ -442,87 +631,33 @@ def shift_current(
         scissors,
         degeneracy_tol,
     )
-    if method not in {"analytic", "sum_over_states", "sternheimer"}:
-        raise ValueError("shift-current method must be analytic, sum_over_states, or sternheimer")
-    if occupied_bands is not None and temperature_kelvin:
-        raise ValueError("explicit occupied_bands requires zero temperature")
-    if smearing not in {"lorentzian", "gaussian", "none", "adaptive"}:
-        raise ValueError("smearing must be lorentzian, gaussian, none, or adaptive")
-    if smearing == "none":
-        if bin_width is None:
-            if len(omega) < 2 or not np.allclose(np.diff(omega), np.diff(omega)[0]) or np.diff(omega)[0] <= 0:
-                raise ValueError(
-                    "binned no-smearing requires uniform ascending omega or an explicit bin_width"
-                )
-            bin_width = float(np.diff(omega)[0])
-        if not np.isfinite(bin_width) or bin_width <= 0:
-            raise ValueError("bin_width must be finite and positive in eV")
-    if smearing == "adaptive":
-        if not np.isfinite([adaptive_scale, adaptive_min, adaptive_max]).all() or (
-            adaptive_scale <= 0 or adaptive_min <= 0 or adaptive_max < adaptive_min
-        ):
-            raise ValueError("adaptive Gaussian scale and width bounds must be positive and ordered")
-        if kpoints is not None and adaptive_spacing is None:
-            raise ValueError("adaptive smearing on explicit kpoints requires adaptive_spacing")
-        spacing = (
-            reciprocal(model) / np.asarray(grid)[:, None]
-            if adaptive_spacing is None
-            else np.asarray(adaptive_spacing, float)
-        )
-        if spacing.shape != (3, 3) or not np.isfinite(spacing).all():
-            raise ValueError("adaptive_spacing must contain three finite Cartesian reciprocal cell steps")
-        if adaptive_spacing is None and np.any(np.asarray(grid) > 1):
-            spacing[np.asarray(grid) == 1] = 0
+    settings = shift_current_settings(
+        model,
+        omega,
+        mu,
+        eta=eta,
+        temperature_kelvin=temperature_kelvin,
+        grid=grid,
+        kpoints=kpoints,
+        scissors=scissors,
+        degeneracy_tol=degeneracy_tol,
+        smearing=smearing,
+        occupied_bands=occupied_bands,
+        band_pairs=band_pairs,
+        method=method,
+        scissors_occupied_bands=scissors_occupied_bands,
+        bin_width=bin_width,
+        adaptive_scale=adaptive_scale,
+        adaptive_min=adaptive_min,
+        adaptive_max=adaptive_max,
+        adaptive_spacing=adaptive_spacing,
+    )
+    bin_width = settings.bin_width
     options = (execution or getattr(model, "execution", None) or ExecutionOptions()).resolved()
     frequency_batch = _frequency_batch(model, len(omega), options, 180, 2, 64)
 
     def point_response(k):
-        raw = band_geometry(model, k, degeneracy_tol)
-        if method == "sternheimer":
-            raw = _sternheimer_geometry(model, k, raw)
-        gradient, _, _ = _differentiated_geometry(model, k, raw)
-        occupied = _occupied_manifold(raw, occupied_bands, mu)
-        pair_mask = _transition_selection(raw, band_pairs, occupied)
-        count = occupied_bands if scissors_occupied_bands is None else scissors_occupied_bands
-        data = _scissor_geometry(raw, mu, scissors, count)
-        energy = data["energies"]
-        connection = data["connections"]
-        f, _, _ = _occupation_derivatives(energy, mu, temperature_kelvin, eta)
-        if occupied_bands is not None:
-            f = occupied.astype(float)
-        gap = energy[None, :] - energy[:, None]
-        block = (np.abs(gap) <= raw["degeneracy_tol"]) & (
-            raw["band_channels"][:, None] == raw["band_channels"][None, :]
-        )
-        block_connection = connection * block[None]
-        generalized = gradient - 1j * (
-            np.einsum("anl,blm->abnm", block_connection, connection, optimize=True)
-            - np.einsum("bnl,alm->abnm", connection, block_connection, optimize=True)
-        )
-        factor = (f[:, None] - f[None, :]) * (gap > raw["degeneracy_tol"]) * pair_mask
-        if smearing == "adaptive":
-            velocities = np.diagonal(raw["velocities"], axis1=1, axis2=2).real.T
-            cell_changes = (velocities[:, None] - velocities[None, :]) @ spacing.T
-            width = np.clip(
-                adaptive_scale * np.linalg.norm(cell_changes, axis=-1) / np.sqrt(12),
-                adaptive_min,
-                adaptive_max,
-            )
-        integrand = np.einsum("bmn,acnm->abcnm", connection, generalized)
-        integrand = 0.5 * (integrand + integrand.swapaxes(1, 2)).imag
-        answer = np.empty((len(omega), 3, 3, 3))
-        for start in range(0, len(omega), frequency_batch):
-            stop = start + frequency_batch
-            difference = omega[start:stop, None, None] - gap
-            if smearing == "none":
-                lines = ((difference >= -bin_width / 2) & (difference < bin_width / 2)) / bin_width
-            elif smearing == "adaptive":
-                lines = _delta(difference, width, "gaussian")
-            else:
-                lines = _delta(difference, eta, smearing)
-            lines = lines * factor
-            answer[start:stop] = np.einsum("wnm,abcnm->wabc", lines, integrand)
-        return answer
+        return shift_current_spectrum(shift_current_point(model, k, settings), settings, frequency_batch)
 
     bytes_per_point = 16 * (model.nbnd**2 * (180 + 2 * frequency_batch) + 27 * len(omega))
     conversion = -np.pi * E_CHARGE**2 / HBAR * 1e6 * spin_degeneracy(model) / volume(model)

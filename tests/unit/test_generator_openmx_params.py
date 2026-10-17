@@ -235,3 +235,104 @@ def test_effective_parameters_apply_pyatb_defaults_and_drop_inapplicable_keys():
     for inputs, missing in (({"hall_convention": "pyatb"}, "auto"), ({}, "pyatb"), ({}, "auto")):
         resolved = effective_parameters(STEP_CHERN, {"nspin": 4, **inputs}, {}, missing_convention=missing)
         assert resolved["input"] == {"nspin": 4}
+
+
+def shift_params(**parameters):
+    block = {"occ_band": 2, "omega": "0.5 3.0", "domega": "0.01", "grid": "8 8 8", **parameters}
+    return {
+        "step_type": "QUEER_SHIFT_CURRENT",
+        "counterpart_step_type": "PYATB_SHIFT_CURRENT",
+        "input_parameters": {"nspin": 4},
+        "parameters": {key: value for key, value in block.items() if value is not None},
+    }
+
+
+def test_shift_current_parameters_follow_pyatbs_input():
+    from queer.compat.generator.openmx_params import SHIFT_DEFAULTS, STEP_SHIFT
+    from queer.compat.generator.pyatb_files import read_input_echo
+
+    parameters = translate_openmx(shift_params(eta="0.05", scissors=0.5))
+    assert parameters.step == STEP_SHIFT and parameters.counterpart == "PYATB_SHIFT_CURRENT"
+    assert parameters.function == "SHIFT_CURRENT" and is_openmx_step("pyatb_shift_current")
+    assert dict(parameters.parameters) == {
+        "occ_band": 2,
+        "omega": [0.5, 3.0],
+        "domega": 0.01,
+        "grid": [8, 8, 8],
+        "eta": 0.05,
+        "scissors": 0.5,
+    }
+    native = parameters.recipe(fermi_energy=0.0)["parameters"]
+    assert native["eta"] == pytest.approx(0.05 / 2**0.5) and native["smearing"] == "gaussian"
+    assert len(native["omega"]) == int((3.0 - 0.5) / 0.01) + 1 and native["scissors_occupied_bands"] == 2
+    # PyATB's own resolved echo holds exactly these defaults.
+    echo = read_input_echo(FIXTURES / "c_direct_openmx" / "Out" / "input.json")["SHIFT_CURRENT"]
+    assert {key: value for key, value in echo.items() if value is not None} == dict(SHIFT_DEFAULTS)
+
+
+@pytest.mark.parametrize(
+    ("change", "fragment"),
+    [
+        ({"occ_band": None}, "occ_band is required"),
+        ({"omega": None, "domega": None}, "omega is required"),
+        ({"occ_band": -1}, "occ_band must count the occupied bands"),
+        ({"omega": "3.0 0.5"}, "nonnegative increasing"),
+        ({"omega": "-0.5 3.0"}, "nonnegative increasing"),
+        ({"domega": 0}, "domega must be positive"),
+        ({"eta": -0.1}, "eta must be positive"),
+        ({"smearing_method": 4}, "smearing_method must be 0"),
+        ({"method": 2}, "method must be 0"),
+        ({"grid": "8 8"}, "grid must hold 3 numbers"),
+        ({"integrate_grid": "8 8 8"}, "unknown SHIFT_CURRENT parameters: integrate_grid"),
+    ],
+)
+def test_invalid_shift_current_files_are_bad_parameters(change, fragment):
+    with pytest.raises(RunnerError) as caught:
+        translate_openmx(shift_params(**change))
+    assert caught.value.code == "queer_bad_params" and fragment in str(caught.value)
+    assert not limit_refusal(caught.value.code, str(caught.value))
+
+
+def test_a_negative_scissors_and_a_pair_across_no_gap_are_queers_limits():
+    for change in ({"scissors": -0.2}, {"n_occ": 3, "m_unocc": 4}, {"n_occ": 1, "m_unocc": 2}):
+        with pytest.raises(RunnerError) as caught:
+            translate_openmx(shift_params(**change))
+        assert limit_refusal(caught.value.code, str(caught.value)), caught.value
+    with pytest.raises(RunnerError) as caught:
+        translate_openmx(shift_params(scissors=-0.2, eta=-1))
+    assert not limit_refusal(caught.value.code, str(caught.value))
+
+
+def test_pyatbs_band_pair_rule_and_the_effective_shift_settings():
+    from queer.compat.generator.openmx_params import STEP_SHIFT, pyatb_band_pair
+
+    assert pyatb_band_pair({"n_occ": 2, "m_unocc": 3}) == (2, 3)
+    for pair in ({"n_occ": 0, "m_unocc": 3}, {"n_occ": 3, "m_unocc": 2}, {"n_occ": 2}, {}):
+        assert pyatb_band_pair(pair) == (-1, -1)
+    # A pair PyATB does not read as one is every pair: no translation error.
+    native = translate_openmx(shift_params(n_occ=3, m_unocc=1)).recipe(fermi_energy=0.0)["parameters"]
+    assert "band_pairs" not in native
+    native = translate_openmx(shift_params(n_occ=2, m_unocc=3)).recipe(fermi_energy=0.0)["parameters"]
+    assert native["band_pairs"] == [[1, 2]]
+    resolved = effective_parameters(STEP_SHIFT, {"nspin": "4"}, {**shift_params()["parameters"], "n_occ": 0})
+    assert resolved == {
+        "function": {
+            "occ_band": 2,
+            "omega": [0.5, 3.0],
+            "domega": 0.01,
+            "grid": [8, 8, 8],
+            "smearing_method": 1,
+            "eta": 0.01,
+            "method": 1,
+            "n_occ": -1,
+            "m_unocc": -1,
+            "scissors": 0.0,
+        },
+        "input": {"nspin": 4},
+    }
+    without = effective_parameters(
+        STEP_SHIFT, {}, {**shift_params()["parameters"], "smearing_method": 0, "eta": 9}
+    )
+    assert "eta" not in without["function"] and without["input"] == {}
+    params = params_from_pyatb_input({"INPUT_PARAMETERS": {"nspin": 4}, "SHIFT_CURRENT": {"occ_band": 2}})
+    assert params["step_type"] == STEP_SHIFT and params["counterpart_step_type"] == "PYATB_SHIFT_CURRENT"

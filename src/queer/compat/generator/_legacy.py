@@ -519,13 +519,13 @@ def export_run(run_dir, *, output_dir=None, profile="generator"):
             filename = AHC_FILE
             write_text(target / filename, product)
         elif name == "shift_current":
+            from .pyatb_files import SHIFT_CURRENT_FILE, shift_current_text
+
             components = [(a, b, c) for a in range(3) for b in range(3) for c in range(b, 3)]
             tensor = arrays[name]
-            values = np.column_stack((arrays["omega"], *(tensor[:, a, b, c] for a, b, c in components)))
-            labels = ["".join("xyz"[axis] for axis in component) for component in components]
-            filename = "Out/Shift_Current/shift_current.dat"
-            header = "omega(eV) " + " ".join(labels) + " (uA/V^2)"
-            _text_table(target / filename, values, header)
+            values = np.column_stack([tensor[:, a, b, c] for a, b, c in components])
+            filename = SHIFT_CURRENT_FILE
+            write_text(target / filename, shift_current_text(arrays["omega"], values))
         else:
             mode = str(convention.get("integrate_mode") or "Grid")
             filename = CHERN_FILE

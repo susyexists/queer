@@ -27,6 +27,13 @@ an OpenMX scfout, and they hold for every material:
   curvature reaches switches the replacement off: PyATB's own convention for
   that is 1e30 (:data:`REFINEMENT_OFF_THRESHOLD`), and the sum is then the plain
   Gamma-origin grid sum.
+- **Shift current.** PyATB's prefactor carries its own SI constants
+  (:data:`PYATB_SHIFT_E_CHARGE`, :data:`PYATB_SHIFT_HBAR`,
+  :data:`PYATB_SHIFT_EV_SECONDS`) and the signed cell volume, so a left-handed
+  lattice flips every component it prints, and it multiplies by 2 when it reads
+  one spin channel (``nspin 1``: the scfout has no spin-orbit coupling) and by 1
+  for ``nspin 4`` (:func:`pyatb_shift_spin_factor`). Its photon energies, Gaussian
+  width and bins are numbers on its own Hartree scale.
 """
 
 from __future__ import annotations
@@ -35,7 +42,9 @@ import math
 from typing import Any
 
 from ...physics.constants import BOHR_ANGSTROM as _CODATA_BOHR_ANGSTROM
+from ...physics.constants import E_CHARGE as _CODATA_E_CHARGE
 from ...physics.constants import HARTREE_EV as _CODATA_HARTREE_EV
+from ...physics.constants import HBAR as _CODATA_HBAR
 
 # PyATB's OpenMX reader: Hartree -> eV and Bohr -> Angstrom.
 PYATB_HARTREE_EV = 27.211324570273
@@ -47,6 +56,13 @@ PYATB_E_CHARGE = 1.60217662e-19
 PYATB_HBAR = 1.054571628e-34
 PYATB_E2_H = 3.874046e-5
 PYATB_DEGENERATE_EV = 1e-4
+# PyATB's shift-current prefactor (eV*s, C, J*s) and the width (eV) with which its
+# shift-current method 0 regularizes every energy denominator of its eigenvector
+# derivatives, d / (d^2 + w^2).
+PYATB_SHIFT_EV_SECONDS = 6.582119e-16
+PYATB_SHIFT_E_CHARGE = 1.602176565e-19
+PYATB_SHIFT_HBAR = 1.054571726e-34
+PYATB_SHIFT_REGULARIZATION_EV = 0.04
 # PyATB's Rydberg -> eV for an explicit ``fermi_energy_unit Ry``.
 PYATB_RYDBERG_EV = 13.605698066
 # QUEER's Hartree -> eV (CODATA), the scale of every QUEER energy.
@@ -123,6 +139,30 @@ def hall_export_sign(convention: Any, engine: Any = "kubo", package: Any = "OPEN
     if str(engine or "kubo").strip().lower() == "fhs":
         return 1
     return -1 if resolve_hall_convention(convention, package) == "pyatb" else 1
+
+
+def pyatb_shift_spin_factor(nspin: Any) -> int:
+    """PyATB's shift-current spin factor: 2 for ``nspin 1`` (one channel of the scfout read), 1 for 4."""
+    value = int(nspin)
+    if value not in (1, 4):
+        raise ValueError("an OpenMX shift current has nspin 1 or 4")
+    return 2 if value == 1 else 1
+
+
+def pyatb_shift_constant_ratio() -> float:
+    """PyATB's shift-current prefactor over QUEER's for the same transitions and cell.
+
+    PyATB prints ``-(pi t e^3 / (2 hbar^2 V)) sum I`` with ``t`` its eV*s and an
+    integrand ``I`` twice QUEER's (it sums both orders of the optical indices),
+    QUEER ``-(pi e^2 / (hbar V)) sum I`` with CODATA's constants; the ratio is
+    ``(e_P^2 / hbar_P) (e_P t_P / hbar_P) / (e^2 / hbar)``, 1 to about 1e-7.
+    """
+    pyatb = (
+        PYATB_SHIFT_E_CHARGE**2
+        / PYATB_SHIFT_HBAR
+        * (PYATB_SHIFT_E_CHARGE * PYATB_SHIFT_EV_SECONDS / PYATB_SHIFT_HBAR)
+    )
+    return pyatb / (float(_CODATA_E_CHARGE) ** 2 / float(_CODATA_HBAR))
 
 
 def refinement_off(threshold: Any) -> bool:

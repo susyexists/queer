@@ -3,10 +3,10 @@
 The Generator writes, beside the staged scfout, one JSON object::
 
     {
-      "step_type": "QUEER_AHC" | "QUEER_CHERN_NUMBER",
-      "counterpart_step_type": "PYATB_AHC" | "PYATB_CHERN_NUMBER",
+      "step_type": "QUEER_AHC" | "QUEER_CHERN_NUMBER" | "QUEER_SHIFT_CURRENT",
+      "counterpart_step_type": "PYATB_AHC" | "PYATB_CHERN_NUMBER" | "PYATB_SHIFT_CURRENT",
       "input_parameters": {...},   # PyATB INPUT_PARAMETERS without package and scfout_route
-      "parameters": {...},         # the PyATB function block (AHC or CHERN_NUMBER)
+      "parameters": {...},         # the PyATB function block (AHC, CHERN_NUMBER or SHIFT_CURRENT)
       "workers": 8,                # optional; null or absent: every CPU of the allocation
       "scfout": "scf.scfout",      # optional; the staged scfout, relative to the workspace
       "self_convergence": false    # optional; see below
@@ -29,11 +29,21 @@ Execution-only settings never change a result: ``workers``,
 threshold below 1e30) to evaluate the same integration on the doubled grid as
 well, and to record ``|sigma(N) - sigma(2N)|``: the error estimate a parity
 comparison of such runs needs. It costs 4 (two active axes) to 8 times the run.
+A shift current (``SHIFT_CURRENT``: ``occ_band``, ``omega``, ``domega`` and
+``grid`` are required, as in PyATB) always samples its Gamma-origin grid;
+``self_convergence: true`` evaluates it on the doubled grid as well (the
+self-convergence gate of its parity rule). Its ``n_occ``/``m_unocc`` name a band
+pair only as PyATB reads them (both at least 1 and ``m_unocc > n_occ``); any other
+values mean every occupied-empty pair. QUEER refuses, at documented limits of
+its own, a negative ``scissors`` (its scissors is a rigid upward shift) and a
+band pair that does not lead from an occupied band (``n_occ <= occ_band``) to an
+empty one (``m_unocc > occ_band``), which PyATB evaluates with fixed occupations.
 """
 
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -45,11 +55,16 @@ from .results import ERR_BAD_PARAMS, RunnerError
 
 STEP_AHC = "QUEER_AHC"
 STEP_CHERN = "QUEER_CHERN_NUMBER"
-OPENMX_STEPS: tuple[str, ...] = (STEP_AHC, STEP_CHERN)
-COUNTERPARTS: Mapping[str, str] = MappingProxyType({STEP_AHC: "PYATB_AHC", STEP_CHERN: "PYATB_CHERN_NUMBER"})
+STEP_SHIFT = "QUEER_SHIFT_CURRENT"
+OPENMX_STEPS: tuple[str, ...] = (STEP_AHC, STEP_CHERN, STEP_SHIFT)
+COUNTERPARTS: Mapping[str, str] = MappingProxyType(
+    {STEP_AHC: "PYATB_AHC", STEP_CHERN: "PYATB_CHERN_NUMBER", STEP_SHIFT: "PYATB_SHIFT_CURRENT"}
+)
 ALIASES: Mapping[str, str] = MappingProxyType({value: key for key, value in COUNTERPARTS.items()})
-FUNCTION_BLOCKS: Mapping[str, str] = MappingProxyType({STEP_AHC: "AHC", STEP_CHERN: "CHERN_NUMBER"})
-FAMILIES: Mapping[str, str] = MappingProxyType({STEP_AHC: "AHC", STEP_CHERN: "CHERN_NUMBER"})
+FUNCTION_BLOCKS: Mapping[str, str] = MappingProxyType(
+    {STEP_AHC: "AHC", STEP_CHERN: "CHERN_NUMBER", STEP_SHIFT: "SHIFT_CURRENT"}
+)
+FAMILIES: Mapping[str, str] = FUNCTION_BLOCKS
 PARAMS_FILENAME = "queer_params.json"
 DEFAULT_SCFOUT = "scf.scfout"
 # Every refusal of an integration too large for the job's memory says this, so a
@@ -58,6 +73,9 @@ BUDGET_REFUSAL = "exceeds QUEER's integration budget"
 # The refusal of a zero Adaptive tolerance, another of QUEER's documented limits.
 ZERO_TOLERANCE_REFUSAL = "an adaptive integral never meets a zero tolerance"
 PARAMS_REFUSAL = "Invalid QUEER parameters: "
+# The refusals of a negative scissors and of a band pair that is not occupied-to-empty, limits of QUEER's.
+NEGATIVE_SCISSORS_REFUSAL = "QUEER's scissors is a rigid upward shift of the empty bands"
+BAND_PAIR_REFUSAL = "QUEER's band pair leads from an occupied band to an empty one"
 ADAPTIVE_TOLERANCES = ("relative_error", "absolute_error")
 
 TOP_LEVEL_KEYS: tuple[str, ...] = (
@@ -106,12 +124,18 @@ CHERN_DEFAULTS: Mapping[str, Any] = MappingProxyType(
         "integrate_mode": "Grid",
     }
 )
+# PyATB's SHIFT_CURRENT defaults; occ_band, omega, domega and grid have none.
+SHIFT_DEFAULTS: Mapping[str, Any] = MappingProxyType(
+    {"smearing_method": 1, "eta": 0.01, "method": 1, "n_occ": -1, "m_unocc": -1, "scissors": 0.0}
+)
+SHIFT_REQUIRED: tuple[str, ...] = ("occ_band", "omega", "domega", "grid")
 FUNCTION_KEYS: Mapping[str, frozenset[str]] = MappingProxyType(
     {
         STEP_AHC: frozenset(
             {*AHC_DEFAULTS, *GRID_DEFAULTS, *ADAPTIVE_DEFAULTS, *FHS_DEFAULTS},
         ),
         STEP_CHERN: frozenset({*CHERN_DEFAULTS, *GRID_DEFAULTS, *ADAPTIVE_DEFAULTS}),
+        STEP_SHIFT: frozenset({*SHIFT_DEFAULTS, *SHIFT_REQUIRED}),
     }
 )
 
@@ -134,7 +158,7 @@ class OpenMXStepParameters:
 
     @property
     def function(self) -> str:
-        """The PyATB function block: ``AHC`` or ``CHERN_NUMBER``."""
+        """The PyATB function block: ``AHC``, ``CHERN_NUMBER`` or ``SHIFT_CURRENT``."""
         return FUNCTION_BLOCKS[self.step]
 
     def get(self, key: str, default: Any = None) -> Any:
@@ -150,10 +174,13 @@ class OpenMXStepParameters:
         """
         from ._legacy import translate_pyatb
 
+        parameters = dict(self.parameters)
+        if self.step == STEP_SHIFT:
+            parameters.update(zip(("n_occ", "m_unocc"), pyatb_band_pair(parameters)))
         try:
             return translate_pyatb(
                 self.counterpart,
-                dict(self.parameters),
+                parameters,
                 input_parameters={**self.input_parameters, "package": "OPENMX"},
                 fermi_energy=fermi_energy,
                 spin_mode=spin_mode,
@@ -280,6 +307,27 @@ def _function_value(key: str, value: Any) -> Any:
         return _integer(value, key, -1)
     if key in {"k_start", "k_vect1", "k_vect2"}:
         return _vector(value, key, 3)
+    if key == "omega":
+        low, high = _vector(value, key, 2)
+        if low < 0 or high < low:
+            raise ValueError("omega must be a nonnegative increasing photon-energy range (eV)")
+        return [low, high]
+    if key in {"domega", "eta"}:
+        width = _number(value, key)
+        if width <= 0:
+            raise ValueError(f"{key} must be positive (eV)")
+        return width
+    if key == "smearing_method":
+        number = _integer(value, key)
+        if number not in (0, 1, 2):
+            raise ValueError("smearing_method must be 0 (none), 1 (Gaussian) or 2 (adaptive)")
+        return number
+    if key == "grid":
+        return _vector(value, key, 3, "int", 1)
+    if key in {"n_occ", "m_unocc"}:
+        return _integer(value, key)
+    if key == "scissors":
+        return _number(value, key)
     raise ValueError("unsupported key")
 
 
@@ -354,6 +402,8 @@ def translate_openmx(params: Mapping[str, Any], step: str | None = None) -> Open
     problems += found
     if function.get("integrate_mode") == "Adaptive":
         problems += [_zero_tolerance(key) for key in ADAPTIVE_TOLERANCES if function.get(key) == 0]
+    if resolved == STEP_SHIFT:
+        problems += _shift_problems(function)
     workers = params.get("workers")
     if workers is not None:
         try:
@@ -383,6 +433,52 @@ def translate_openmx(params: Mapping[str, Any], step: str | None = None) -> Open
     return parameters
 
 
+def pyatb_band_pair(parameters: Mapping[str, Any]) -> tuple[int, int]:
+    """``(n_occ, m_unocc)`` as PyATB reads them: the pair when both are at least 1 and
+    ``m_unocc > n_occ``, else ``(-1, -1)``, every occupied-empty pair."""
+    pair = []
+    for key in ("n_occ", "m_unocc"):
+        value = parameters.get(key)
+        try:
+            pair.append(int(float(value)) if value is not None else -1)
+        except (TypeError, ValueError):
+            pair.append(-1)
+    first, second = pair
+    return (first, second) if first >= 1 and second >= 1 and second > first else (-1, -1)
+
+
+_SHIFT_LIMITS = re.compile(
+    r"parameters\.scissors = [^:;]*: "
+    + re.escape(NEGATIVE_SCISSORS_REFUSAL)
+    + r"; give 0 or more|parameters\.n_occ = -?\d+, m_unocc = -?\d+ with occ_band -?\d+: "
+    + re.escape(BAND_PAIR_REFUSAL)
+    + r" \(n_occ <= occ_band < m_unocc\)"
+)
+
+
+def _shift_problems(function: Mapping[str, Any]) -> list[str]:
+    """What a SHIFT_CURRENT block lacks or asks beyond QUEER's limits (normalized values)."""
+    problems = [
+        f"parameters.{key} is required for SHIFT_CURRENT (PyATB has no default)"
+        for key in SHIFT_REQUIRED
+        if key not in function
+    ]
+    occupied = function.get("occ_band")
+    if occupied is not None and occupied < 0:
+        problems.append("parameters.occ_band must count the occupied bands (0 or more) for SHIFT_CURRENT")
+    if function.get("scissors", 0.0) < 0:
+        problems.append(
+            f"parameters.scissors = {function['scissors']!r}: {NEGATIVE_SCISSORS_REFUSAL}; give 0 or more"
+        )
+    first, second = pyatb_band_pair(function)
+    if first >= 1 and occupied is not None and not (first <= occupied < second):
+        problems.append(
+            f"parameters.n_occ = {first}, m_unocc = {second} with occ_band {occupied}: {BAND_PAIR_REFUSAL} "
+            "(n_occ <= occ_band < m_unocc)"
+        )
+    return problems
+
+
 def _zero_tolerance(key: str) -> str:
     return (
         f"parameters.{key} = 0: {ZERO_TOLERANCE_REFUSAL} (PyATB runs to its generation cap, QUEER's "
@@ -404,8 +500,10 @@ def limit_refusal(code: Any, message: Any) -> bool:
     """Whether a ``queer_bad_params`` failure is QUEER refusing at a documented limit of its own.
 
     An integration larger than the job's memory allows, or parameters whose only
-    problems are zero Adaptive tolerances, which PyATB accepts and runs to its
-    generation cap.
+    problems are zero Adaptive tolerances (PyATB accepts them and runs to its
+    generation cap), a negative shift-current ``scissors`` or a shift-current band
+    pair that does not lead from an occupied band to an empty one (PyATB evaluates
+    both with fixed occupations).
     """
     text = str(message or "")
     if code != ERR_BAD_PARAMS:
@@ -414,10 +512,12 @@ def limit_refusal(code: Any, message: Any) -> bool:
         return True
     if not text.startswith(PARAMS_REFUSAL):
         return False
-    rest = text[len(PARAMS_REFUSAL) :]
+    original = text[len(PARAMS_REFUSAL) :]
+    rest = original
     for key in ADAPTIVE_TOLERANCES:
         rest = rest.replace(_zero_tolerance(key), "")
-    return rest != text[len(PARAMS_REFUSAL) :] and not rest.replace(";", "").strip()
+    rest = _SHIFT_LIMITS.sub("", rest)
+    return rest != original and not rest.replace(";", "").strip()
 
 
 def _resolved(key: str, value: Any) -> Any:
@@ -456,11 +556,15 @@ def effective_parameters(
     the resolved ``hall_convention`` (the FHS engine ignores it and a Chern number
     carries no Hall sign); a missing convention is ``missing_convention``: ``auto``
     for an ``Input`` file, ``pyatb`` for PyATB's resolved echo, which names the key
-    once PyATB has one.
+    once PyATB has one. A shift current keeps every SHIFT_CURRENT key with PyATB's
+    defaults, ``n_occ``/``m_unocc`` as PyATB reads them (``-1, -1`` unless they
+    name a pair) and no ``eta`` without smearing (``smearing_method 0`` ignores it).
     Execution-only settings and the Fermi energy (compared by its own rule) are
     left out.
     """
     resolved = canonical_openmx_step(step)
+    if resolved == STEP_SHIFT:
+        return {"function": _shift_effective(parameters), "input": _effective_inputs(input_parameters)}
     defaults = dict(AHC_DEFAULTS if resolved == STEP_AHC else CHERN_DEFAULTS)
     block = {
         key: _comparable(key, value, _function_value)
@@ -496,17 +600,46 @@ def effective_parameters(
     for key in ("adaptive_grid_threshold", "relative_error", "absolute_error"):
         if key in kept:
             kept[key] = float(kept[key])
-    inputs: dict[str, Any] = {}
-    if input_parameters.get("nspin") is not None:
-        inputs["nspin"] = int(
-            _comparable("nspin", input_parameters["nspin"], lambda k, v: _input_value(k, v, None))
-        )
+    inputs = _effective_inputs(input_parameters)
     if resolved == STEP_AHC and engine != "fhs":
         convention = input_parameters.get("hall_convention")
         inputs["hall_convention"] = resolve_hall_convention(
             missing_convention if convention is None else convention
         )
     return {"function": kept, "input": inputs}
+
+
+def _effective_inputs(input_parameters: Mapping[str, Any]) -> dict[str, Any]:
+    inputs: dict[str, Any] = {}
+    if input_parameters.get("nspin") is not None:
+        inputs["nspin"] = int(
+            _comparable("nspin", input_parameters["nspin"], lambda k, v: _input_value(k, v, None))
+        )
+    return inputs
+
+
+def _shift_effective(parameters: Mapping[str, Any]) -> dict[str, Any]:
+    """A SHIFT_CURRENT block as PyATB resolves it: defaults, its band-pair rule, no ``eta`` without smearing."""
+    block = {
+        key: _comparable(key, value, _function_value)
+        for key, value in {**SHIFT_DEFAULTS, **parameters}.items()
+        if value is not None
+    }
+    kept: dict[str, Any] = {key: _resolved(key, block.get(key)) for key in (*SHIFT_REQUIRED, *SHIFT_DEFAULTS)}
+    kept["n_occ"], kept["m_unocc"] = pyatb_band_pair(kept)
+    for key in ("occ_band", "smearing_method", "method"):
+        if isinstance(kept.get(key), (int, float)):
+            kept[key] = int(kept[key])
+    for key in ("domega", "eta", "scissors"):
+        if isinstance(kept.get(key), (int, float)):
+            kept[key] = float(kept[key])
+    if isinstance(kept.get("omega"), list):
+        kept["omega"] = [float(value) for value in kept["omega"]]
+    if isinstance(kept.get("grid"), list):
+        kept["grid"] = [int(value) for value in kept["grid"]]
+    if kept.get("smearing_method") == 0:
+        kept.pop("eta")
+    return kept
 
 
 def params_from_pyatb_input(
@@ -530,7 +663,9 @@ def params_from_pyatb_input(
     if step is None:
         present = [name for name, block in FUNCTION_BLOCKS.items() if block in blocks]
         if len(present) != 1:
-            raise ValueError("the Input names no single AHC or CHERN_NUMBER block; pass the step")
+            raise ValueError(
+                "the Input names no single AHC, CHERN_NUMBER or SHIFT_CURRENT block; pass the step"
+            )
         step = present[0]
     resolved = canonical_openmx_step(step)
     inputs = {

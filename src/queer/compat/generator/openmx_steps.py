@@ -1,5 +1,7 @@
 """QUEER's OpenMX steps: the anomalous Hall conductivity and the Chern number of a PyATB counterpart.
 
+``QUEER_SHIFT_CURRENT`` shares the model, Fermi energy and failure stages here and
+runs in :mod:`~queer.compat.generator.openmx_shift`.
 ``QUEER_AHC`` and ``QUEER_CHERN_NUMBER`` read the staged scfout and the
 ``queer_params.json`` of :mod:`~queer.compat.generator.openmx_params`, run the
 calculation PyATB's ``AHC`` or ``CHERN_NUMBER`` block asks for with QUEER's own
@@ -105,7 +107,7 @@ from .memory import (
     plan_parallelism,
     pmap,
 )
-from .openmx_params import BUDGET_REFUSAL, STEP_AHC, STEP_CHERN, OpenMXStepParameters
+from .openmx_params import BUDGET_REFUSAL, STEP_AHC, STEP_CHERN, STEP_SHIFT, OpenMXStepParameters
 from .pyatb_conventions import (
     FERMI_TOLERANCE_HARTREE,
     HARTREE_EV,
@@ -148,7 +150,8 @@ from .results import (
 APPROXIMATION_NOTE = (
     "OpenMX localized-orbital model read from the scfout (nonorthogonal basis with its overlap and "
     "position matrices), the model PyATB reads: Berry curvature by the direct (basis-covariant) or Kubo "
-    "formula, FHS plaquettes with first-order midpoint position links. PyATB reads only the spin-up "
+    "formula, FHS plaquettes with first-order midpoint position links, the resonant shift current by the "
+    "Sipe-Shkrebtii generalized-dipole expression with analytic derivatives. PyATB reads only the spin-up "
     "Hamiltonian of a scfout without spin-orbit coupling; legacy_single_channel holds that value."
 )
 # An occupied-empty pair closer than this (eV) flags its k-point.
@@ -293,17 +296,24 @@ def raw_curvature_to_s_cm(model: Any) -> float:
     return E_CHARGE**2 / HBAR * 1e8 / volume(model)
 
 
-def single_channel_model(model: OpenMXModel) -> OpenMXModel:
-    """Channel 0 of a model without spin-orbit coupling, occupied once per level: what PyATB reads."""
+def single_channel_model(model: OpenMXModel, channel: int = 0) -> OpenMXModel:
+    """One spin channel of a model without spin-orbit coupling, occupied once per level.
+
+    Channel 0 is what PyATB reads; channel 1 is the spin-down channel of a
+    collinear model (a non-spin-polarized model has only channel 0).
+    """
     if model.spin_mode == "soc":
         raise ValueError("a spin-orbit model has no single spin channel")
+    if channel not in (0, 1) or (channel == 1 and model.spin_mode != "collinear"):
+        raise ValueError("a collinear model has channels 0 and 1, a non-spin-polarized one only 0")
     n = model.n_spatial
+    rows = slice(channel * n, (channel + 1) * n)
 
     def part(blocks: Mapping[tuple[int, int, int], Any]) -> dict[tuple[int, int, int], Any]:
-        return {key: block[:n, :n] for key, block in blocks.items()}
+        return {key: block[rows, rows] for key, block in blocks.items()}
 
     translations = np.array(sorted(set(model.hamiltonian_blocks) | set(model.overlap_blocks)), dtype=int)
-    channel = OpenMXModel(
+    single = OpenMXModel(
         translations,
         part(model.hamiltonian_blocks),
         part(model.overlap_blocks),
@@ -313,13 +323,13 @@ def single_channel_model(model: OpenMXModel) -> OpenMXModel:
         spin_mode="nonmagnetic",
         spin_degeneracy=1,
         atom_positions=model.atom_positions,
-        orbital_metadata=list(model.orbital_metadata[:n]),
+        orbital_metadata=list(model.orbital_metadata[rows]),
         execution=model.execution,
         hermiticity_tolerance=model.hermiticity_tolerance,
     )
-    channel.degeneracy_tolerance = model.degeneracy_tolerance
-    channel.metadata.update(model.metadata)
-    return channel
+    single.degeneracy_tolerance = model.degeneracy_tolerance
+    single.metadata.update(model.metadata)
+    return single
 
 
 def _doubled(grid: Sequence[int], active: Sequence[int] | None = None) -> list[int]:
@@ -1537,7 +1547,19 @@ def _legacy_chern(context: OpenMXStepContext, physical: Mapping[str, Any]) -> di
 # Entry
 # ---------------------------------------------------------------------------
 
-STEP_FUNCTIONS: Mapping[str, Callable[[OpenMXStepContext], None]] = {STEP_AHC: run_ahc, STEP_CHERN: run_chern}
+
+def run_shift(context: OpenMXStepContext) -> None:
+    """Evaluate the shift current of the step (:mod:`~queer.compat.generator.openmx_shift`)."""
+    from .openmx_shift import run_shift_current
+
+    run_shift_current(context)
+
+
+STEP_FUNCTIONS: Mapping[str, Callable[[OpenMXStepContext], None]] = {
+    STEP_AHC: run_ahc,
+    STEP_CHERN: run_chern,
+    STEP_SHIFT: run_shift,
+}
 
 
 def openmx_step_body(parameters: OpenMXStepParameters, record: RunRecord, log: Callable[[str], None]) -> None:

@@ -152,3 +152,24 @@ def test_chern_translation_keeps_the_plane_and_no_hall_sign():
     assert native["grid"] == [8, 8, 1] and native["integration"]["subdivision"] == [2, 2, 1]
     assert native["engine"] == "kubo" and native["occupied_bands"] is None and native["fermi_energy"] == 0.1
     assert native["k_start"] == [0, 0, 0.5] and recipe["export_metadata"]["hall_export_sign"] == 1
+
+
+def test_pyatbs_shift_current_spin_factor_and_constants():
+    from queer.compat.generator.pyatb_conventions import (
+        PYATB_SHIFT_E_CHARGE,
+        PYATB_SHIFT_EV_SECONDS,
+        PYATB_SHIFT_HBAR,
+        pyatb_shift_constant_ratio,
+        pyatb_shift_spin_factor,
+    )
+
+    # shift_current_solver.cpp: fac * 2 for nspin == 1 (one channel read), fac for nspin 4.
+    assert pyatb_shift_spin_factor(1) == 2 and pyatb_shift_spin_factor("4") == 1
+    with pytest.raises(ValueError):
+        pyatb_shift_spin_factor(2)
+    assert (PYATB_SHIFT_EV_SECONDS, PYATB_SHIFT_E_CHARGE, PYATB_SHIFT_HBAR) == (
+        6.582119e-16,
+        1.602176565e-19,
+        1.054571726e-34,
+    )
+    assert abs(pyatb_shift_constant_ratio() - 1) < 1e-7

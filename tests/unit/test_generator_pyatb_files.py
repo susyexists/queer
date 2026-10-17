@@ -131,3 +131,42 @@ def test_input_digests_in_sha256sum_text_and_binary_modes():
     digest = "93" + "0" * 62
     text = f"{digest}  scf.scfout\n{'AB' * 32} *Input\nnot a digest line\n"
     assert parse_inputs_sha256(text) == {"scf.scfout": digest, "Input": "ab" * 32}
+
+
+def test_the_shift_current_table_is_pyatbs_layout_byte_for_byte():
+    from queer.compat.generator.pyatb_files import (
+        SHIFT_COMPONENTS,
+        SHIFT_CURRENT_FILE,
+        parse_shift_current,
+        shift_current_text,
+    )
+
+    assert SHIFT_CURRENT_FILE == "Out/Shift_Current/shift_current.dat"
+    assert SHIFT_COMPONENTS == (
+        *("xxx", "xxy", "xxz", "xyy", "xyz", "xzz"),
+        *("yxx", "yxy", "yxz", "yyy", "yyz", "yzz"),
+        *("zxx", "zxy", "zxz", "zyy", "zyz", "zzz"),
+    )
+    rows = [[(-1) ** i * 1.234567891e-3 * (i + 1) * (j + 1) for i in range(18)] for j in range(3)]
+    omega = [0.5, 0.51, 0.52]
+    text = shift_current_text(omega, rows)
+    # PyATB's print_data: '%1s%10s%14s' + 17 x '%15s' + '%16s' header, '%10.5f' + 18 x '%15.6e' rows.
+    header = ("%1s%10s%14s" + "%15s" * 17 + "%16s\n") % ("#", "omega(eV)", *SHIFT_COMPONENTS, "(uA/V^2)")
+    lines = [header] + [
+        "%10.5f" % w + "".join("%15.6e" % v for v in row) + "\n" for w, row in zip(omega, rows)
+    ]
+    assert text == "".join(lines)
+    parsed = parse_shift_current(text)
+    assert parsed["omega_eV"] == omega and parsed["unit"] == "(uA/V^2)"
+    assert parsed["components"] == list(SHIFT_COMPONENTS)
+    assert all(
+        abs(a - b) <= 5e-7 * abs(b) for row, ref in zip(parsed["sigma"], rows) for a, b in zip(row, ref)
+    )
+    mapping = {name: [row[i] for row in rows] for i, name in enumerate(SHIFT_COMPONENTS)}
+    assert shift_current_text(omega, mapping) == text
+    with pytest.raises(ValueError, match="header"):
+        parse_shift_current(text.replace("xyz", "xzy", 1))
+    with pytest.raises(ValueError, match="19 numbers"):
+        parse_shift_current(text + "   0.53000  1.0\n")
+    with pytest.raises(ValueError, match="one row of 18"):
+        shift_current_text(omega[:2], rows)

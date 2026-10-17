@@ -44,8 +44,20 @@ STEPS = {
 }
 # OpenMX steps: their PyATB function block, read from the staged scfout.
 OPENMX_STEPS = {
-    "QUEER_AHC": {"engine": "kubo", "method": 1, "integrate_mode": "Grid", "integrate_grid": [4, 4, 1]},
-    "QUEER_CHERN_NUMBER": {"method": 0, "integrate_mode": "Grid", "integrate_grid": [4, 4, 1]},
+    "QUEER_AHC": {
+        "engine": "kubo",
+        "method": 1,
+        "integrate_mode": "Grid",
+        "integrate_grid": [4, 4, 1],
+        "adaptive_grid_threshold": 1e30,
+    },
+    "QUEER_CHERN_NUMBER": {
+        "method": 0,
+        "integrate_mode": "Grid",
+        "integrate_grid": [4, 4, 1],
+        "adaptive_grid_threshold": 1e30,
+    },
+    "QUEER_SHIFT_CURRENT": {"occ_band": 1, "omega": [0.5, 3.0], "domega": 0.1, "eta": 0.1, "grid": [4, 4, 1]},
 }
 STEP_BLOCKS = {
     "QUEER_BANDS": "bands",
@@ -179,7 +191,7 @@ def test_each_openmx_step_runs_from_the_staged_copy(staged, step):
     params = {
         "step_type": step,
         "input_parameters": {"nspin": 4, "fermi_energy": "Auto"},
-        "parameters": {**OPENMX_STEPS[step], "adaptive_grid_threshold": 1e30},
+        "parameters": OPENMX_STEPS[step],
         "workers": 1,
     }
     (workspace / "queer_params.json").write_text(json.dumps(params))

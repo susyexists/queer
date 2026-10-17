@@ -14,6 +14,11 @@ the Generator before PyATB starts: ``sha256sum scf.scfout Input``) and ``Out/``:
 - ``Out/Chern_Num/chern_number.dat``: one line,
   ``Chern number is <value> by using the <Grid|Adaptive> integral`` with the
   value at full precision (its shortest round-trip form);
+- ``Out/Shift_Current/shift_current.dat``: the header ``#`` ``omega(eV)``, the 18
+  components and ``(uA/V^2)`` (``%1s%10s%14s``, 17 x ``%15s``, ``%16s``), then one
+  row per photon energy ``start + i * domega``: ``%10.5f`` and 18 x ``%15.6e``,
+  the components ``a(bc)`` with ``b <= c`` in the order ``xxx, xxy, xxz, xyy,
+  xyz, xzz, yxx, ..., zzz``;
 - ``integraton.log``: per generation a header, the region count and the line
   ``<error> <value>`` (NumPy prints of the raw integrand, before the
   conductivity prefactor), then ``integration complete!`` and the final pair.
@@ -36,9 +41,15 @@ INPUT_ECHO = "Out/input.json"
 RUNNING_LOG = "Out/running.log"
 AHC_FILE = "Out/AHC/ahc.dat"
 CHERN_FILE = "Out/Chern_Num/chern_number.dat"
+SHIFT_CURRENT_FILE = "Out/Shift_Current/shift_current.dat"
 INTEGRATION_LOG = "Out/AHC/integraton.log"
 CHERN_INTEGRATION_LOG = "Out/Chern_Num/integraton.log"
 AHC_COMPONENTS: tuple[str, ...] = ("yz", "zx", "xy")
+# The independent shift-current components a(bc), b <= c, in PyATB's column order.
+SHIFT_COMPONENTS: tuple[str, ...] = tuple(
+    a + b + c for a in "xyz" for b, c in ("xx", "xy", "xz", "yy", "yz", "zz")
+)
+SHIFT_UNIT = "(uA/V^2)"
 FHS_HEADER = (
     "# FHS Berry-plaquette AHC (S/cm)",
     "# E(eV)        sigma_yz       sigma_zx       sigma_xy",
@@ -194,6 +205,35 @@ def parse_chern(text: str) -> dict[str, Any]:
     return {"value": float(match.group(1)), "integrate_mode": match.group(2)}
 
 
+def parse_shift_current(text: str) -> dict[str, Any]:
+    """``Out/Shift_Current/shift_current.dat``: ``{"omega_eV", "components", "sigma", "unit"}``.
+
+    ``sigma`` holds one row of the 18 components per photon energy, in the
+    header's order, which must be :data:`SHIFT_COMPONENTS`. Raises ``ValueError``
+    for another header, a short row or no row.
+    """
+    lines = text.splitlines()
+    header = next((line for line in lines if line.strip().startswith("#")), None)
+    if header is None:
+        raise ValueError("no shift-current header line")
+    names = header.replace("#", " ").split()
+    if len(names) != 20 or names[0] != "omega(eV)" or tuple(names[1:19]) != SHIFT_COMPONENTS:
+        raise ValueError(f"the shift-current header is not PyATB's: {header.strip()!r}")
+    omega, rows = [], []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        values = _floats(stripped)
+        if len(values) != 19:
+            raise ValueError(f"a shift-current row needs 19 numbers: {stripped!r}")
+        omega.append(values[0])
+        rows.append(values[1:])
+    if not rows:
+        raise ValueError("no shift-current row in the file")
+    return {"omega_eV": omega, "components": list(SHIFT_COMPONENTS), "sigma": rows, "unit": names[19]}
+
+
 def parse_integration_log(text: str) -> dict[str, Any]:
     """``integraton.log``: the last generation's error and value (raw integrand units).
 
@@ -298,6 +338,33 @@ def chern_text(value: Any, integrate_mode: str = "Grid") -> str:
         raise ValueError("integrate_mode must be Grid or Adaptive")
     number = float(value)
     return f"Chern number is {number!r} by using the {integrate_mode} integral\n"
+
+
+def shift_current_text(omega: Any, sigma: Any) -> str:
+    """The ``shift_current.dat`` table: one row of the 18 components (uA/V^2) per photon energy (eV).
+
+    ``sigma`` is a sequence of rows or a mapping of the 18 component names to
+    their columns.
+    """
+    if isinstance(sigma, Mapping):
+        columns = [[float(value) for value in sigma[name]] for name in SHIFT_COMPONENTS]
+        rows = [list(row) for row in zip(*columns)]
+    else:
+        rows = [[float(value) for value in row] for row in sigma]
+    energies = [float(value) for value in omega]
+    if len(rows) != len(energies) or any(len(row) != len(SHIFT_COMPONENTS) for row in rows):
+        raise ValueError("one row of 18 shift-current components per photon energy")
+    widths = (14,) + (15,) * (len(SHIFT_COMPONENTS) - 1)
+    header = (
+        "#"
+        + f"{'omega(eV)':>10}"
+        + "".join(f"{name:>{width}}" for name, width in zip(SHIFT_COMPONENTS, widths))
+    )
+    lines = [header + f"{SHIFT_UNIT:>16}"]
+    lines += [
+        f"{energy:10.5f}" + "".join(f"{value:15.6e}" for value in row) for energy, row in zip(energies, rows)
+    ]
+    return "\n".join(lines) + "\n"
 
 
 def write_text(path: str | Path, text: str) -> Path:
