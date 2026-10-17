@@ -16,11 +16,14 @@ Wannier comparator recomputes an old producer's DOS rule:
   occupied in one code and empty in the other.
 - :func:`fhs_plaquette_phases` is PyATB's FHS plaquette scan: its link from k to
   k + dk is ``W(k)^+ M W(k + dk)`` with ``M = sum_R exp(2 pi i k.R) (S_R + i dk.r_R)``,
-  the first-order expansion of ``exp(i dk.r)`` at the link's start, and a plaquette
-  phase is the argument of the product of the leading minors of its four links at
-  each vertex's occupied count, averaged over the vertices when the counts
-  differ. Beside it, QUEER's own midpoint links on the same eigenvectors, so both
-  link schemes are measured at once.
+  the first-order expansion of ``exp(+i dk.r)`` at the link's start, whose
+  first-order term has the opposite sign of the cell-periodic overlap
+  ``<u_k|u_(k+dk)> = <psi_k|exp(-i dk.r)|psi_(k+dk)>``; a plaquette phase is the
+  argument of the product of the leading minors of its four links at each vertex's
+  occupied count, averaged over the vertices when the counts differ. Beside it,
+  QUEER's own midpoint links ``S(m) - i dk.A(m)`` on the same eigenvectors, so both
+  link schemes are measured at once. Inside a band the sign gives PyATB's sum an
+  offset from the Fermi-sea flux that does not shrink with the grid.
 
 Their values are recorded only in the ``pyatb_emulation`` blocks and the flagged
 sets of ``queer_results.json``, never as a result (``sigma_S_cm``,

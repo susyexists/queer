@@ -9,7 +9,8 @@ from its ``Input`` as the Generator builds it (the INPUT_PARAMETERS without
 ``package`` and ``scfout_route``, and the function block); the refining Grid cases
 also ask for the self-convergence estimate a comparison of them needs, and their
 emulation of PyATB's refined sum must refine exactly PyATB's nodes. The FHS scan's
-emulation of PyATB's links must reproduce PyATB's table at every energy. A metal
+emulation of PyATB's links must reproduce PyATB's table at every energy, and QUEER's
+FHS must meet its own Fermi-sea sum at every band energy. A metal
 relabelled to a refining Grid that refines nothing checks that PyATB's own grid
 error bounds a gap QUEER's alone cannot.
 ``QUEER_REAL_REPLAY_WORKERS`` sets the workers (default 4) and
@@ -120,6 +121,13 @@ def test_queer_reproduces_the_pyatb_calibration_case(case, tmp_path):
         printed = np.asarray(table["sigma"])[:, 2]
         emulated = np.asarray(document["ahc"]["pyatb_emulation"]["fhs_links"]["printed_S_cm"]["xy"])
         assert np.all(np.abs(printed - emulated) <= 2e-7 * np.abs(emulated) + 5e-7)
+        # QUEER's FHS meets its own Fermi-sea sum at every band energy; PyATB's lies above it.
+        guard = report["tolerance_basis"]["fermi_sea_guard"]["xy"]
+        assert guard["energies"] == 42 and guard["failed"] == 0, guard
+        sea = np.asarray(document["ahc"]["fermi_sea_check"]["fermi_sea_S_cm"]["xy"], dtype=float)
+        band = np.isfinite(sea)
+        queer = np.asarray(document["ahc"]["sigma_S_cm"]["xy"])[band] - sea[band]
+        assert abs(np.mean(queer)) < 0.03 and np.mean(printed[band] - sea[band]) > 0.08
 
 
 def _relabel(text, replacements):

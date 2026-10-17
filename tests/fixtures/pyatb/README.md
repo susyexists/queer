@@ -12,7 +12,8 @@ third-party data and is not committed. No PyATB source is included.
 | `c_direct_openmx` | the same with `hall_convention openmx` | the physical Hall sign |
 | `h_chern_fermi` | `CHERN_NUMBER`, direct, Fermi occupation, Grid 100 x 100 x 1 | the one-line Chern layout at full precision |
 | `adaptive_log` | `AHC`, adaptive integral (an earlier Generator job) | `integraton.log` and its last-generation error |
-| `a_fhs_scan_queer.json` | QUEER 1.5.0's `QUEER_AHC` run of the `a_fhs_scan` Input on the same scfout | QUEER's sigma_xy per energy (PyATB's Cartesian construction and physical), the energies with a varying occupied rank, and its emulations of PyATB's FHS links and of its own midpoint links |
+| `a_fhs_scan_queer.json` | QUEER 1.5.0's `QUEER_AHC` run of the `a_fhs_scan` Input on the same scfout | QUEER's sigma_xy per energy (PyATB's Cartesian construction and physical), the energies with a varying occupied rank, its emulations of PyATB's FHS links and of its own midpoint links, and its Fermi-sea check at the band energies (its direct Fermi-sea sum on the same nodes and its FHS on the halved grid) |
+| `a_fhs_scan_link_defects.json` | the same run with a defect in QUEER's FHS link term, the `-i dk.A` term of its midpoint links scaled by -1 and by 1.5 in its FHS and in its own-link emulation alike (the connection data, and so its Fermi-sea sum, intact) | the defective sigma_xy, own-link values and halved-grid FHS, which the comparator's Fermi-sea guard must refuse |
 
 The first four are the calibration runs of PyATB build 60fc6b2a (16 October
 2026, 8 MPI processes) on a kagome Chern-insulator scfout with spin-orbit

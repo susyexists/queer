@@ -57,8 +57,11 @@ sample the same point (both values are recorded).
   normalize(b_(d+1) x b_(d+2))``, which differs on a non-orthogonal cell and is what
   ``Out/AHC/ahc.dat`` holds. Where an energy shows a varying occupied rank at
   plaquette vertices (inside a band), ``pyatb_emulation.fhs_links`` records PyATB's
-  scan with its own link variables (``exp(i dk.r)`` to first order at the link's
-  start) beside QUEER's midpoint links, both on the same eigenvectors.
+  scan with its own link variables (``S + i dk.r`` at the link's start, the opposite
+  sign of the first-order term of the cell-periodic overlap ``exp(-i dk.r)`` that
+  QUEER's midpoint links expand) beside QUEER's midpoint links, both on the same
+  eigenvectors, and ``fermi_sea_check`` QUEER's own Fermi-sea sum on the FHS grid's
+  nodes and its FHS on the halved grid at those energies (:func:`_fermi_sea_check`).
 
 **Spin.** PyATB reads only ``Hks[0]`` of a scfout without spin-orbit coupling: the
 spin-up Hamiltonian of a collinear SCF, without a spin factor for a
@@ -260,6 +263,24 @@ def hall_rows(
         rows[index, 10] = _gap_across(energies, occupied, np.asarray(data["band_channels"]))
         rows[index, 11] = float(occupied.sum())
     return rows
+
+
+def fermi_sea_sum(model: Any, mus: Any, engine: str, points: np.ndarray) -> np.ndarray:
+    """The occupied curvature vectors ``(Omega_yz, Omega_zx, Omega_xy)`` (Å²) summed over ``points``,
+    per energy of ``mus``.
+
+    A level is occupied below each energy (``E < mu``, the count an FHS plaquette
+    vertex takes); the curvature is :func:`hall_rows`'s for ``engine``.
+    """
+    potentials = np.asarray(mus, float)
+    total = np.zeros((len(potentials), 3))
+    for point in np.asarray(points, float):
+        data = band_geometry(model, point)
+        projected = basis_curvature(model, point, data) if engine == "direct" else None
+        curvature = band_curvatures(data, engine, projected)
+        weights = occupations(np.asarray(data["energies"], float)[:, None], potentials[None], 0.0)
+        total += _vector(np.einsum("nm,nab->mab", weights, curvature))
+    return total
 
 
 def hall_factor(model: Any) -> float:
@@ -942,9 +963,10 @@ def _pyatb_refined_grid(context: OpenMXStepContext, family: str, sign: int = 1) 
 
 FHS_LINKS_SCHEME = (
     "PyATB's FHS engine: per plane family d the plaquettes (k, k+du, k+du+dv, k+dv), the link from k to k+dk "
-    "W(k)^+ [sum_R exp(2 pi i k.R) (S_R + i dk.r_R)] W(k+dk) (exp(i dk.r) to first order at the link's start, "
-    "the raw position operator), the leading minors without pivoting, the phase of their product at each "
-    "vertex's occupied count averaged over the vertices where the counts differ; C_d = sum phase/(2 pi N_d); "
+    "W(k)^+ [sum_R exp(2 pi i k.R) (S_R + i dk.r_R)] W(k+dk) (+i dk.r at the link's start, the opposite sign "
+    "of the cell-periodic overlap's first-order term; the raw position operator), the leading minors without "
+    "pivoting, the phase of their product at each vertex's occupied count averaged over the vertices where "
+    "the counts differ; C_d = sum phase/(2 pi N_d); "
     "printed as sum_d (C_d e^2/h 1e8/|a_d|) normalize(b_(d+1) x b_(d+2)) with PyATB's e^2/h and Bohr radius"
 )
 # Complex N x N matrices one plaquette of the link emulation keeps alive.
@@ -1013,6 +1035,87 @@ def _pyatb_fhs(
     }
 
 
+FERMI_SEA_ENGINE = "direct"
+FERMI_SEA_ROLE = (
+    "QUEER's own physical check of its FHS inside bands, a diagnostic: its Fermi-sea sum on the same nodes "
+    "and its FHS on the halved grid"
+)
+FERMI_SEA_RULE = (
+    "at every energy with a varying occupied rank, per component, |FHS(N) - FS(N)| <= 3 |FHS(N) - FHS(N/2)| "
+    "+ Tier A: a converging FHS meets it, a grid-independent offset from the Fermi-sea flux does not"
+)
+
+
+def _fermi_sea_check(
+    context: OpenMXStepContext, native: Mapping[str, Any], meta: Mapping[str, Any], varying: Sequence[bool]
+) -> dict[str, Any] | None:
+    """QUEER's FHS inside bands against its own Fermi-sea sum: the data of the comparator's physical guard.
+
+    At the energies whose plaquette vertices change their occupied rank, on the
+    model PyATB reads (the compared values' model): ``fermi_sea_S_cm``, QUEER's
+    direct-engine Fermi-sea sum ``FS(N)`` on the FHS grid's Gamma-origin nodes as
+    the evaluated plane families see it (``sum_d (sigma . a_d / 2 pi) b_d``), and
+    ``fhs_half_grid_S_cm``, QUEER's FHS on the halved grid; null at the other
+    energies. QUEER's midpoint links converge to the direct engine's curvature,
+    which carries the basis curvature the Kubo sum leaves out. None without a
+    varying rank; ``error`` when the Fermi-sea sum cannot be evaluated (a
+    connection that violates dipole covariance with the overlap).
+    """
+    flags = [bool(value) for value in varying or []]
+    if not any(flags):
+        return None
+    model = context.pyatb_model
+    picks = [index for index, flag in enumerate(flags) if flag]
+    mus = np.asarray(native["chemical_potentials"], float)[picks]
+    grid = [int(value) for value in native["grid"]]
+    half = [max(1, value // 2) for value in grid]
+    directions = [2] if int(meta.get("fhs_dimension", 0)) == 0 else [0, 1, 2]
+    block: dict[str, Any] = {
+        "role": FERMI_SEA_ROLE,
+        "rule": FERMI_SEA_RULE,
+        "model": "spin-up channel, occupied once" if context.legacy else "the scfout's spin-orbit model",
+        "engine": FERMI_SEA_ENGINE,
+        "grid": grid,
+        "half_grid": half,
+        "directions": directions,
+        "energies": picks,
+        "fermi_sea_S_cm": None,
+        "fhs_half_grid_S_cm": None,
+        "error": None,
+    }
+    nodes = kmesh(grid)
+    options = context.options("AHC FHS Fermi-sea check", model, len(nodes))
+    function = functools.partial(fermi_sea_sum, model, mus, FERMI_SEA_ENGINE)
+    try:
+        parts = pmap(function, chunks(nodes, options.batch_size), options)
+    except ValueError as error:
+        block["error"] = f"{type(error).__name__}: {error}"
+        context.log(f"Fermi-sea check of the FHS not evaluated: {block['error']}")
+        return block
+    sea = hall_factor(model) * np.sum(parts, axis=0) / len(nodes)
+    lattice = np.asarray(model.lattice, float)
+    rows = reciprocal(model)
+    seen = np.zeros_like(sea)
+    for d in directions:
+        seen += np.outer(sea @ lattice[d] / (2 * np.pi), rows[d])
+    halved = {**native, "grid": half, "chemical_potentials": mus.tolist()}
+    coarse = _ahc_fhs(context, model, halved, meta, "half grid, Fermi-sea check")["sigma"]
+    block["fermi_sea_S_cm"] = _sparse_components(seen, picks, len(flags))
+    block["fhs_half_grid_S_cm"] = _sparse_components(coarse, picks, len(flags))
+    return block
+
+
+def _sparse_components(
+    vectors: np.ndarray, picks: Sequence[int], count: int
+) -> dict[str, list[float | None]]:
+    """Per component, ``count`` values: the rows of ``vectors`` at ``picks``, null elsewhere."""
+    values: list[list[float | None]] = [[None] * count for _ in AHC_COMPONENTS]
+    for row, index in zip(np.asarray(vectors, float), picks, strict=True):
+        for axis in range(len(AHC_COMPONENTS)):
+            values[axis][index] = float(row[axis])
+    return dict(zip(AHC_COMPONENTS, values, strict=True))
+
+
 def _emulations(**blocks: dict[str, Any] | None) -> dict[str, Any] | None:
     """The ``pyatb_emulation`` block: the emulations that ran, or None."""
     present = {name: block for name, block in blocks.items() if block is not None}
@@ -1061,11 +1164,12 @@ def run_ahc(context: OpenMXStepContext) -> None:
         at_fermi = dict(zip(AHC_COMPONENTS, vectors[list(offsets).index(0.0)].tolist()))
     computed = list(AHC_COMPONENTS) if not (fhs and int(meta.get("fhs_dimension", 0)) == 0) else ["xy"]
     construction = np.asarray(physical["pyatb_construction"], float) if fhs else None
-    fhs_links = None
+    fhs_links = fermi_sea = None
     if fhs:
         compared = legacy if legacy is not None else physical["integration"]
         varying = (compared.get("fhs") or {}).get("metallic_vertex_rank_variation") or []
         fhs_links = _pyatb_fhs(context, native, meta, varying)
+        fermi_sea = _fermi_sea_check(context, native, meta, varying)
     record.results["ahc"] = {
         "engine": native["engine"],
         "method": None if fhs else (0 if native["engine"] == "direct" else 1),
@@ -1098,6 +1202,7 @@ def run_ahc(context: OpenMXStepContext) -> None:
         "pyatb_emulation": _emulations(
             refined_grid=_pyatb_refined_grid(context, "AHC", sign), fhs_links=fhs_links
         ),
+        "fermi_sea_check": fermi_sea,
     }
     record.results["integration"] = {
         **_integration_block(meta, native, physical),

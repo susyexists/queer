@@ -64,13 +64,21 @@ single-channel").
   (``pyatb_construction_S_cm``; ``agree_after_convention`` where it differs from the
   physical vector, on a non-orthogonal cell). At every energy where no plaquette
   vertex of QUEER's scan changes its occupied rank (a gap) each point must meet
-  Tier A. Inside a band the two codes' plaquette links differ (PyATB expands
-  ``exp(i dk.r)`` to first order at the link's start, QUEER at its midpoint): a gap
+  Tier A. Inside a band PyATB's FHS carries an offset from the Fermi-sea flux:
+  its link ``W^+ [S + i dk.r] W`` has the opposite sign of the first-order term
+  of the cell-periodic overlap, ``S - i dk.r``, which QUEER's midpoint links
+  ``W^+ [S(m) - i dk.A(m)] W`` expand (inside the kagome calibration's bands PyATB
+  60fc6b2a's FHS lies up to 0.15 S/cm above the Fermi-sea sum on the same nodes,
+  0.119 S/cm above its own direct engine at -2.12 eV, by an amount that does not
+  shrink with the grid). A gap
   there is ``differs_documented`` with its measured size only when QUEER's
   emulation of PyATB's links reproduces PyATB's value and QUEER's own midpoint
-  links on the same eigenvectors reproduce QUEER's, each within Tier A, and
-  ``differs_unexplained`` otherwise. A value that is not finite meets no
-  tolerance.
+  links on the same eigenvectors reproduce QUEER's, each within Tier A, and QUEER's
+  FHS meets its own Fermi-sea sum on the same grid at every such energy:
+  ``|FHS(N) - FS(N)| <= 3 |FHS(N) - FHS(N/2)| + Tier A`` (the candidate's
+  ``fermi_sea_check``), which a converging FHS meets and a grid-independent offset,
+  such as a defect in QUEER's connection, does not. Otherwise it is
+  ``differs_unexplained``. A value that is not finite meets no tolerance.
 - *Chern numbers*: on a gapped plane where both values lie within 0.05 of an
   integer the integers must be equal; otherwise the floats meet Tier A with a
   1e-9 floor (and Tier B when the integral refines).
@@ -165,6 +173,8 @@ TIER_A_RELATIVE = 2e-7
 AHC_FLOOR_S_CM = 5e-7
 CHERN_FLOOR = 1e-9
 TIER_B_FACTOR = 3.0
+# QUEER's FHS inside a band must lie within this many times its own N vs N/2 change of its Fermi-sea sum.
+FERMI_SEA_FACTOR = 3.0
 ADAPTIVE_MIN_CELLS = 512
 # PyATB prints FHS energies with six decimals.
 ENERGY_PRINT_TOL = 5.01e-7
@@ -433,6 +443,7 @@ class _PyatbComparison:
         self.e_q: list[float] | None = None
         self.e_p: list[float] | None = None
         self.emulation: dict[str, Any] | None = None
+        self.fermi_sea: dict[str, Any] = {}
         self.notes: dict[str, Any] = {}
 
     # ----------------------------------------------------------- records
@@ -960,6 +971,7 @@ class _PyatbComparison:
         Inside a band the link schemes differ: there the gap is documented with its
         measured size when QUEER's emulation of PyATB's links reproduces PyATB's
         value and QUEER's own links reproduce QUEER's, each within Tier A, and
+        QUEER's FHS meets its own Fermi-sea sum (:meth:`fermi_sea_guard`), and
         unexplained otherwise. A value that is not finite is beyond any tolerance.
         """
         if product.get("format") != "scan":
@@ -1017,7 +1029,63 @@ class _PyatbComparison:
                     name, AFTER_CONVENTION if converted else AGREE, largest, tolerance_worst, detail
                 )
                 continue
-            self.quantity(name, *self.explain_links(emulation, component, printed, values, varying, detail))
+            self.quantity(
+                name, *self.explain_links(emulation, component, printed, values, physical, varying, detail)
+            )
+
+    def fermi_sea_guard(self, component: str, physical: np.ndarray, varying: np.ndarray) -> str | None:
+        """Why QUEER's FHS fails its own Fermi-sea sum at the band energies, or None when it meets it.
+
+        At every energy with a varying occupied rank ``|FHS(N) - FS(N)| <= 3
+        |FHS(N) - FHS(N/2)| + Tier A`` must hold for the compared physical values,
+        with ``FS(N)`` and ``FHS(N/2)`` from the candidate's ``fermi_sea_check``. A
+        converging FHS meets it; a grid-independent offset of the FHS from the
+        Fermi-sea flux, as a defect in QUEER's connection gives, does not. The
+        numbers go to the report's ``tolerance_basis.fermi_sea_guard``.
+        """
+        check = self.candidate.block("ahc").get("fermi_sea_check")
+        if not isinstance(check, Mapping):
+            return "no Fermi-sea check of QUEER's FHS was recorded"
+        if check.get("error"):
+            return f"QUEER's Fermi-sea check of its FHS could not be evaluated ({check['error']})"
+        count = len(physical)
+
+        def series(name: str) -> np.ndarray:
+            values = (check.get(name) or {}).get(component)
+            if values is None or len(values) != count:
+                return np.full(count, np.nan)
+            return np.array([np.nan if value is None else value for value in values], float)
+
+        sea, half = series("fermi_sea_S_cm"), series("fhs_half_grid_S_cm")
+        missing = varying & ~(np.isfinite(sea) & np.isfinite(half))
+        if missing.any():
+            lacking = f"{int(missing.sum())} of {int(varying.sum())} band energies"
+            return f"QUEER's Fermi-sea check of its FHS lacks {lacking}"
+        gap = np.abs(physical - sea)
+        bound = (
+            FERMI_SEA_FACTOR * np.abs(physical - half) + TIER_A_RELATIVE * np.abs(physical) + AHC_FLOOR_S_CM
+        )
+        ratio = np.where(np.isfinite(gap / bound), gap / bound, np.inf)
+        failed = varying & ~(gap <= bound)
+        self.fermi_sea[component] = {
+            "rule": "|FHS(N) - FS(N)| <= 3 |FHS(N) - FHS(N/2)| + Tier A at every energy with a varying rank",
+            "energies": int(varying.sum()),
+            "failed": int(failed.sum()),
+            "max_gap_S_cm": float(np.max(np.where(np.isfinite(gap), gap, np.inf)[varying], initial=0.0)),
+            "min_bound_S_cm": float(np.min(bound[varying], initial=np.inf)),
+            "max_ratio": float(np.max(ratio[varying], initial=0.0)),
+            "fermi_sea_engine": check.get("engine"),
+            "grid": check.get("grid"),
+            "half_grid": check.get("half_grid"),
+        }
+        if not failed.any():
+            return None
+        index = int(np.flatnonzero(failed)[np.argmax(ratio[failed])])
+        return (
+            f"QUEER's FHS departs from its own Fermi-sea sum beyond 3 |FHS(N) - FHS(N/2)| + Tier A at "
+            f"{int(failed.sum())} of {int(varying.sum())} band energies (worst {gap[index]:.3g} S/cm against "
+            f"{bound[index]:.3g}): an offset that does not shrink with the grid"
+        )
 
     def explain_links(
         self,
@@ -1025,10 +1093,12 @@ class _PyatbComparison:
         component: str,
         printed: np.ndarray,
         values: np.ndarray,
+        physical: np.ndarray,
         varying: np.ndarray,
         detail: str,
     ) -> tuple[str, float, float | None, str]:
-        """The class of a band gap: documented when both link schemes are reproduced at every varying energy."""
+        """The class of a band gap: documented when both link schemes are reproduced at every varying energy
+        and QUEER's FHS meets its own Fermi-sea sum there."""
         difference = np.abs(printed - values)
         largest = float(np.max(np.where(np.isfinite(difference), difference, np.inf)[varying], initial=0.0))
         if emulation is None:
@@ -1040,7 +1110,8 @@ class _PyatbComparison:
         missed = varying & ~(fidelity <= TIER_A_RELATIVE * np.abs(emulated) + AHC_FLOOR_S_CM)
         strayed = varying & ~(consistency <= TIER_A_RELATIVE * np.abs(own) + AHC_FLOOR_S_CM)
         scheme = np.abs(emulated - own)[varying]
-        if missed.any() or strayed.any():
+        offset = self.fermi_sea_guard(component, physical, varying)
+        if missed.any() or strayed.any() or offset is not None:
             why = []
             if missed.any():
                 residual = float(np.max(np.where(np.isfinite(fidelity), fidelity, np.inf)[missed]))
@@ -1054,12 +1125,14 @@ class _PyatbComparison:
                     f"QUEER's value is not its own midpoint links' at {int(strayed.sum())} energies "
                     f"(by up to {residual:.3g} S/cm)"
                 )
+            if offset is not None:
+                why.append(offset)
             return UNEXPLAINED, largest, None, detail + "; " + "; ".join(why)
         explained = (
-            f"; inside bands ({int(varying.sum())} energies with a varying occupied rank) PyATB's links, exp(i dk.r) "
-            f"to first order at the link's start, and QUEER's midpoint links differ by up to "
-            f"{float(np.max(scheme, initial=0.0)):.6g} S/cm on the same eigenvectors; QUEER's emulation "
-            f"reproduces PyATB's values within Tier A (up to {float(np.max(fidelity[varying], initial=0.0)):.3g} S/cm)"
+            "; in bands PyATB's links (+i dk.r, the cell-periodic overlap -i dk.r) offset the Fermi-sea "
+            f"flux: schemes differ by up to {float(np.max(scheme, initial=0.0)):.4g} S/cm on the same "
+            "eigenvectors, emulation within Tier A; QUEER's FHS meets its Fermi-sea sum "
+            f"(ratio {self.fermi_sea[component]['max_ratio']:.2f})"
         )
         return DOCUMENTED, largest, None, detail + explained
 
@@ -1246,6 +1319,7 @@ class _PyatbComparison:
                         if self.emulation is not None
                         else (INTEGRATION_LOG if self.e_p is not None else None)
                     ),
+                    "fermi_sea_guard": self.fermi_sea or None,
                 },
                 "preconditions": self.preconditions,
                 "quantities": self.quantities,

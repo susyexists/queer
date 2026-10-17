@@ -520,7 +520,7 @@ older PyATB that printed its native sign.
 | explicit `fermi_energy` (eV; Ry at 13.605698066 eV) | sampled at `E / 27.211324570273` Hartree | sampled at `E * HARTREE_EV / 27.211324570273` eV; both values recorded |
 | Hall sign of the direct/Kubo engine | native: minus the physical value; `openmx`, `fhs`, `auto` (OpenMX input) flip it; the prefactor carries the signed reciprocal volume, so a left-handed lattice flips it again | physical `-(e²/ħ) ∫ f Ω`; `Out/AHC/ahc.dat` holds `export_sign` times it: the sign table's factor times the lattice's handedness (`model.lattice_handedness`) |
 | Hall sign of the FHS engine | physical, whatever `hall_convention` says | physical |
-| FHS links | `W(k)^+ [sum_R exp(2πi k.R) (S_R + i dk.r_R)] W(k+dk)`: exp(i dk.r) to first order at the link's start, the raw position operator; leading minors without pivoting | exp(i dk.r) to first order at the link's midpoint (`basis_overlap`); the same integer in a gap, a different Fermi-sea sum inside a band |
+| FHS links | `W(k)^+ [sum_R exp(2πi k.R) (S_R + i dk.r_R)] W(k+dk)`: the raw position operator with `+i dk.r`, the opposite sign of the first-order term of the cell-periodic overlap `<u_k|u_(k+dk)> = <psi_k|exp(-i dk.r)|psi_(k+dk)>`, at the link's start; leading minors without pivoting. Inside a band this offsets the plaquette sum from the Fermi-sea flux by an amount that does not shrink with the grid (60fc6b2a on the kagome scan: up to 0.15 S/cm above the Fermi-sea sum on the same nodes, and at -2.12 eV 0.119 S/cm above its own direct engine) | `W(k)^+ [S(m) - i dk.A(m)] W(k+dk)` at the link's midpoint m (`basis_overlap`), A the hermitian part of the position operator: exp(-i dk.r) to first order; the same integer in a gap, and inside a band the Fermi-sea flux, which its FHS meets |
 | FHS Cartesian output | `sum_d (C_d e²/h 1e8/abs(a_d)) normalize(b_(d+1) x b_(d+2))`, the Hall vector only for orthogonal lattice vectors | `sigma_S_cm` the physical `-g (e²/h) sign(det A) sum_i C_i b_i/2π`; `pyatb_construction_S_cm` PyATB's construction, which `Out/AHC/ahc.dat` holds |
 | Chern number | plane flux over 2π, no Hall sign | the same orientation |
 | Grid nodes | `k_start + Σ v_i n_i / N_i`, upper end excluded | the same nodes (`kmesh`) |
@@ -574,18 +574,26 @@ keeps every cell it makes and gets all of the cells the memory holds; past them 
 stops with `queer_validation_failed`. A coarse grid, or with `self_convergence` its
 double, that needs more cells than the memory holds is refused before the model is
 read (`queer_bad_params`, "exceeds QUEER's integration budget"); PyATB has no such
-limit, so a comparison of either refusal is `not_comparable`. The FHS engine scans PyATB's energies (the window
-offsets, upper end excluded) with QUEER's FHS plaquettes; `fhs_dimension 0`
-evaluates the k1-k2 plane only. Its physical vector carries `sign(det A)`: the
-plaquettes of family i are oriented by `b_(i+1) x b_(i+2)`, parallel to
-`sign(det A) a_i`, so a crystal described by a left-handed lattice keeps its Hall
-vector. Where an energy shows a varying occupied rank at plaquette vertices
-(`integration.fhs.metallic_vertex_rank_variation`), `pyatb_emulation.fhs_links`
-records PyATB's scan with its own links (`printed_S_cm`, PyATB's e²/h and Bohr
-radius) and QUEER's midpoint links on the same eigenvectors (`queer_links_S_cm`).
-A Chern number on a plane that is metallic at E_F
-is the Fermi-sea flux over 2π (PyATB's definition) with the warning
-`chern_plane_metallic`; a refining Chern integral requires a gapped plane.
+limit, so a comparison of either refusal is `not_comparable`. The FHS engine scans
+PyATB's energies (the window offsets, upper end excluded) with QUEER's FHS
+plaquettes; `fhs_dimension 0` evaluates the k1-k2 plane only. Its physical vector
+carries `sign(det A)`: the plaquettes of family i are oriented by
+`b_(i+1) x b_(i+2)`, parallel to `sign(det A) a_i`, so a crystal described by a
+left-handed lattice keeps its Hall vector. Where an energy shows a varying occupied
+rank at plaquette vertices (`integration.fhs.metallic_vertex_rank_variation`),
+`pyatb_emulation.fhs_links` records PyATB's scan with its own links
+(`printed_S_cm`, PyATB's e²/h and Bohr radius) and QUEER's midpoint links on the
+same eigenvectors (`queer_links_S_cm`), and `ahc.fermi_sea_check` records QUEER's
+own physical check of its FHS at those energies: `fermi_sea_S_cm`, its direct-engine
+Fermi-sea sum FS(N) on the FHS grid's nodes (a level below the energy is occupied,
+the count a plaquette vertex takes) as the evaluated plane families see it
+(`sum_d (sigma . a_d / 2 pi) b_d`), and `fhs_half_grid_S_cm`, its FHS on the halved
+grid FHS(N/2); null at the other energies, and `error` when the Fermi-sea sum
+cannot be evaluated (a connection that violates dipole covariance with the
+overlap). QUEER's midpoint links converge to the direct engine's curvature, which
+holds the basis curvature the Kubo sum leaves out. A Chern number on a plane that
+is metallic at E_F is the Fermi-sea flux over 2π (PyATB's definition) with the
+warning `chern_plane_metallic`; a refining Chern integral requires a gapped plane.
 
 **Results.** `queer_results.json` holds `engine`, `step_type`,
 `counterpart_step_type`, `provenance` (QUEER version, `queer_record_sha256`, the
@@ -647,7 +655,7 @@ coupling, with `legacy_single_channel` (`agree_after_convention`):
 |---|---|---|
 | A | Grid with the refinement off in both runs | `abs(d sigma) <= base + sum_F flip_allowance`, `base = 2e-7 abs(sigma) + 5e-7 S/cm`; PyATB equal to QUEER's value with PyATB's pair cut at the flagged points (`sigma - pair_shift`) within the same bound is `differs_documented`, naming the points; agreement that relies on an allowance above `base` is `differs_documented`, never `agree` |
 | B | a Grid threshold below 1e30, or Adaptive | outside Tier A, `differs_documented` only if `abs(d sigma) <= 3 max(e_Q, e_P)`; `e_P` from `integraton.log` (Adaptive) or from QUEER's emulation of PyATB's refined Grid sum, used only when it reproduces PyATB's printed value within Tier A (`pyatb_refined_grid`, else `differs_unexplained`); without `e_Q` or `e_P`, `not_comparable` |
-| FHS | the FHS engine | the energies equal to the printed six decimals; QUEER's values in PyATB's Cartesian construction (`agree_after_convention` where it differs from the physical vector); every energy without a varying occupied rank (a gap) meets Tier A; inside a band a gap is `differs_documented` with its size only when QUEER's emulation of PyATB's links reproduces PyATB and QUEER's own midpoint links reproduce QUEER, each within Tier A; otherwise, and for a value that is not finite, `differs_unexplained` |
+| FHS | the FHS engine | the energies equal to the printed six decimals; QUEER's values in PyATB's Cartesian construction (`agree_after_convention` where it differs from the physical vector); every energy without a varying occupied rank (a gap) meets Tier A; inside a band, where PyATB's FHS carries an offset from the Fermi-sea flux, a gap is `differs_documented` with its size only when QUEER's emulation of PyATB's links reproduces PyATB and QUEER's own midpoint links reproduce QUEER, each within Tier A, and QUEER's FHS meets its own Fermi-sea sum at every such energy, `abs(FHS(N) - FS(N)) <= 3 abs(FHS(N) - FHS(N/2)) + base` (`ahc.fermi_sea_check`, with the numbers in the report's `tolerance_basis.fermi_sea_guard`; a converging FHS meets it, a grid-independent offset such as a defect in QUEER's connection does not); otherwise, and for a value that is not finite, `differs_unexplained` |
 | Chern | gapped plane, both values within 0.05 of an integer | the integers equal; otherwise the floats meet Tier A with a 1e-9 floor (Tier B when refining) |
 
 2e-7 covers the two codes' physical constants (PyATB's e and ħ differ from CODATA's
@@ -689,17 +697,30 @@ plain 100 x 100 Grid relabelled to threshold 100 Å² (no node reaches it; the l
 norm is 21.5 Å²) prints 33.739459 S/cm, 0.0174 S/cm from QUEER's midpoint
 quadrature (33.722013): 100 times QUEER's e_Q (1.7e-4 S/cm), so the rule without
 PyATB's error failed this correct run; PyATB's own e_P (0.0123 S/cm; the emulation
-reproduces its print to 1.9e-7) documents it. The FHS scan (201 energies) agrees to Tier A
-at the 159 energies in a gap; at the 42 energies inside a band QUEER's FHS stays
-within 0.002-0.04 S/cm of the direct Fermi-sea sum on the same grid while PyATB's
-lies 0.07-0.13 S/cm above it (correlation 0.999998). The emulation of PyATB's links
-(exp(i dk.r) to first order at the link's start) reproduces PyATB's table at all
-201 energies within Tier A (at most 5.0e-7 S/cm, its six printed decimals), and
-QUEER's midpoint links on the same eigenvectors reproduce QUEER's values to
-2e-13 S/cm, so the gap, up to 0.1325 S/cm, is the measured difference of the two
-link schemes: `differs_documented`. Sign-flipped, doubled, zeroed or NaN
-candidates fail at the gapped energies. `tests/integration/test_generator_pyatb_calibration.py` replays the
-twelve cases and the relabelled metal with `QUEER_PYATB_CALIBRATION=1`.
+reproduces its print to 1.9e-7) documents it.
+The FHS scan (201 energies) agrees to Tier A at the 159 energies in a gap. At the 42
+energies inside a band QUEER's FHS stays within 0.0002-0.042 S/cm of its direct
+Fermi-sea sum on the same 100 x 100 nodes while PyATB's table lies 0.016-0.146 S/cm
+above it (correlation 0.999998), and PyATB's own outputs show the same offset: at
+-2.12 eV its FHS scan interpolates to 33.858 S/cm against its own direct 33.739459
+and Kubo 33.734532 S/cm on the same grid. The offset is the sign of PyATB's
+first-order link term: on the same eigenvectors, at the three energies with the
+largest gaps, PyATB's links minus QUEER's give 0.131-0.134 S/cm on both the 100 x
+100 and the 200 x 200 grid, and QUEER's midpoint links with the sign of their `dk.A`
+term flipped reproduce PyATB's table to 1e-4 S/cm. The emulation of PyATB's links
+reproduces PyATB's table at all 201 energies within Tier A (at most 5.0e-7 S/cm, its
+six printed decimals), QUEER's midpoint links on the same eigenvectors reproduce
+QUEER's values to 2.1e-13 S/cm, and QUEER's FHS meets its own Fermi-sea sum at all
+42 band energies (largest 0.79 of `3 abs(FHS(N) - FHS(N/2)) + base`), so the gap, up
+to 0.1325 S/cm, is `differs_documented`. A defect in QUEER's connection fails:
+scaling QUEER's connection (the position operator it reads from the scfout) by -1 or
+1.5 breaks its dipole covariance with the overlap, so the Fermi-sea sum cannot be
+evaluated, and scaling only the `-i dk.A` term of the midpoint links, in the FHS and
+its own-link emulation alike, leaves the Fermi-sea sum intact but fails the guard at
+16 and 8 of the 42 band energies (largest ratios 22.6 and 23.9). Both passed as
+documented without the guard. Sign-flipped, doubled, zeroed or NaN candidates fail
+at the gapped energies. `tests/integration/test_generator_pyatb_calibration.py`
+replays the twelve cases and the relabelled metal with `QUEER_PYATB_CALIBRATION=1`.
 
 ### Replaying saved response calculations
 

@@ -731,8 +731,9 @@ def test_a_value_on_a_rounding_boundary_still_matches_its_six_decimals(runs, tmp
 def template(runs, directory, fixture, *, sigma=None, chern=None, offsets=None, fhs=None):
     """A candidate run of the kagome calibration: a runner document carrying QUEER's calibration values.
 
-    ``fhs`` (an FHS scan) holds QUEER's per-energy facts: ``rank_variation`` and the
-    ``emulated_xy`` and ``queer_links_xy`` values of its link emulation.
+    ``fhs`` (an FHS scan) holds QUEER's per-energy facts: ``rank_variation``, the
+    ``emulated_xy`` and ``queer_links_xy`` values of its link emulation and the
+    ``fermi_sea_xy`` and ``half_grid_xy`` values of its Fermi-sea check.
     """
     family = "chern" if chern is not None else "ahc"
     source = runs["chern"] if family == "chern" else runs["fhs" if offsets is not None else "openmx"]
@@ -774,6 +775,17 @@ def template(runs, directory, fixture, *, sigma=None, chern=None, offsets=None, 
                 if "emulated_xy" in facts
                 else None
             )
+            document["ahc"]["fermi_sea_check"] = None
+            if "fermi_sea_xy" in facts:
+                band = [None if value is None else 0.0 for value in facts["fermi_sea_xy"]]
+                document["ahc"]["fermi_sea_check"] = {
+                    "engine": "direct",
+                    "grid": [100, 100, 1],
+                    "half_grid": [50, 50, 1],
+                    "error": facts.get("fermi_sea_error"),
+                    "fermi_sea_S_cm": {"yz": band, "zx": band, "xy": facts["fermi_sea_xy"]},
+                    "fhs_half_grid_S_cm": {"yz": band, "zx": band, "xy": facts["half_grid_xy"]},
+                }
             text = ahc_scan_text(offsets, rows * sign)
         else:
             text = ahc_vector_text(rows[0] * sign)
@@ -828,7 +840,8 @@ def test_an_fhs_scan_agrees_in_gaps_and_is_explained_by_the_link_schemes_in_band
     report = compare("AHC", reference, same)
     assert report["verdict"] == PASS and classes(report)["sigma_xy(E)"] == AGREE
     # QUEER's real values: Tier A at the 159 gapped energies, and at the 42 in bands the gap
-    # (up to 0.13 S/cm) is PyATB's link scheme, which QUEER's emulation reproduces.
+    # (up to 0.13 S/cm) is the offset of PyATB's links (+i dk.r) from the Fermi-sea flux, which
+    # QUEER's emulation reproduces while QUEER's FHS meets its own Fermi-sea sum.
     real = template(runs, tmp_path / "real", "a_fhs_scan", sigma=rows, offsets=offsets, fhs=queer)
     report = compare("AHC", reference, real)
     assert report["verdict"] == PASS_DOCUMENTED and classes(report)["sigma_xy(E)"] == DOCUMENTED, (
@@ -836,9 +849,11 @@ def test_an_fhs_scan_agrees_in_gaps_and_is_explained_by_the_link_schemes_in_band
     )
     item = [item for item in report["quantities"] if item["name"] == "sigma_xy(E)"][0]
     assert 0.13 < item["metric"] < 0.14 and "0 in a gap, 42 with a varying occupied rank" in item["detail"]
-    assert (
-        "start" in item["detail"] and "midpoint" in item["detail"] and "plaquette links" not in item["detail"]
-    )
+    assert "+i dk.r" in item["detail"] and "-i dk.r" in item["detail"] and "Fermi-sea" in item["detail"]
+    assert "link's start" not in item["detail"]
+    guard = report["tolerance_basis"]["fermi_sea_guard"]["xy"]
+    assert guard["energies"] == 42 and guard["failed"] == 0 and 0.5 < guard["max_ratio"] < 1.0
+    assert 0.03 < guard["max_gap_S_cm"] < 0.05
     shifted = template(
         runs, tmp_path / "shifted", "a_fhs_scan", sigma=rows, offsets=[e + 1e-3 for e in offsets]
     )
@@ -905,6 +920,51 @@ def test_an_fhs_gap_needs_both_link_schemes_reproduced(runs, tmp_path):
         template(runs, tmp_path / "bare", "a_fhs_scan", sigma=rows, offsets=offsets, fhs=bare),
     )
     assert classes(report)["sigma_xy(E)"] == UNEXPLAINED
+    # Nor without QUEER's own Fermi-sea check, or with one that could not be evaluated.
+    unchecked = {key: value for key, value in queer.items() if key not in ("fermi_sea_xy", "half_grid_xy")}
+    failed = {
+        **queer,
+        "fermi_sea_error": "ValueError: position/overlap derivatives violate dipole covariance",
+    }
+    for name, facts, reason in (
+        ("unchecked", unchecked, "no Fermi-sea check"),
+        ("failed", failed, "dipole covariance"),
+    ):
+        report = compare(
+            "AHC",
+            reference,
+            template(runs, tmp_path / name, "a_fhs_scan", sigma=rows, offsets=offsets, fhs=facts),
+        )
+        detail = [i for i in report["quantities"] if i["name"] == "sigma_xy(E)"][0]["detail"]
+        assert classes(report)["sigma_xy(E)"] == UNEXPLAINED and reason in detail, detail
+
+
+@pytest.mark.parametrize("factor", ["-1", "1.5"])
+def test_a_link_defect_shared_by_queers_fhs_and_its_emulation_fails_the_fermi_sea_guard(
+    runs, tmp_path, factor
+):
+    # Measured runs with the -i dk.A term of QUEER's midpoint links scaled by -1 (PyATB's sign)
+    # or 1.5 in its FHS and its own-link emulation alike: the emulation still explains every
+    # band gap, but the FHS no longer meets QUEER's own Fermi-sea sum, which the connection
+    # data still give.
+    table, queer, _ = kagome_fhs()
+    defect = read(FIXTURES / "a_fhs_scan_link_defects.json")[factor]
+    rows = np.zeros((len(defect["construction_xy"]), 3))
+    rows[:, 2] = defect["construction_xy"]
+    facts = {**queer, "queer_links_xy": defect["queer_links_xy"], "half_grid_xy": defect["half_grid_xy"]}
+    reference = calibration_reference("a_fhs_scan", tmp_path / "reference")
+    candidate_dir = template(
+        runs, tmp_path / "defect", "a_fhs_scan", sigma=rows, offsets=table["energy_eV"], fhs=facts
+    )
+    report = compare("AHC", reference, candidate_dir)
+    detail = [item for item in report["quantities"] if item["name"] == "sigma_xy(E)"][0]["detail"]
+    assert report["verdict"] == FAIL and classes(report)["sigma_xy(E)"] == UNEXPLAINED, render_markdown(
+        report
+    )
+    assert "departs from its own Fermi-sea sum" in detail and "0 in a gap" in detail
+    assert "misses" not in detail and "midpoint links'" not in detail
+    guard = report["tolerance_basis"]["fermi_sea_guard"]["xy"]
+    assert guard["energies"] == 42 and guard["failed"] >= 8 and guard["max_ratio"] > 10, guard
 
 
 def test_step_names_and_reference_detection():

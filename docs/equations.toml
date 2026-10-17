@@ -530,12 +530,24 @@ source_references = ["docs/generator_services.md#openmx-steps-of-the-pyatb-count
 independent_tests = ["tests/numerical/test_generator_openmx_steps.py::test_a_tilted_cell_writes_pyatbs_fhs_construction_beside_the_physical_vector", "tests/numerical/test_generator_parity_pyatb.py::test_pyatbs_fhs_construction_is_compared_after_convention_on_a_tilted_cell"]
 
 [[equations]]
+id = "response.fhs_fermi_sea_check"
+expression = "FS(N) = -g*(e^2/hbar)*1e8/V * (1/N) sum_{k in G_N} sum_n [E_n(k) < mu] Omega_n(k), seen by the evaluated plane families as sum_d (FS . a_d/(2 pi)) b_d; the band class requires |FHS(N) - FS(N)| <= 3 |FHS(N) - FHS(N/2)| + 2e-7 |FHS(N)| + 5e-7 S/cm at every energy with a varying occupied rank"
+input_units = "Omega: direct-engine occupied curvature, angstrom^2; V: angstrom^3; a_d: angstrom; b_d: inverse angstrom with 2 pi"
+output_units = "S/cm (axial vector yz, zx, xy)"
+assumptions = ["G_N the FHS grid's Gamma-origin nodes; a level below mu is occupied, the count an FHS plaquette vertex takes", "FHS(N/2) is QUEER's FHS on the halved grid; a converging FHS meets the rule, a grid-independent offset from the Fermi-sea flux does not", "QUEER's midpoint links converge to the direct engine's curvature, which holds the basis curvature the Kubo sum leaves out"]
+conventions = ["QUEER's own physical check of its FHS inside bands, recorded in ahc.fermi_sea_check on the model PyATB reads, never a result", "A Fermi-sea sum that cannot be evaluated (a connection that violates dipole covariance) leaves the band gap unexplained"]
+canonical = "queer.compat.generator.openmx_steps:fermi_sea_sum"
+specialized_backends = ["queer.compat.generator.openmx_steps:_fermi_sea_check", "queer.compat.generator.parity_pyatb:_PyatbComparison.fermi_sea_guard"]
+source_references = ["docs/generator_services.md#openmx-steps-of-the-pyatb-counterpart"]
+independent_tests = ["tests/numerical/test_generator_openmx_steps.py::test_a_band_scan_checks_its_fhs_against_its_own_fermi_sea_sum", "tests/numerical/test_generator_parity_pyatb.py::test_an_fhs_scan_agrees_in_gaps_and_is_explained_by_the_link_schemes_in_bands", "tests/numerical/test_generator_parity_pyatb.py::test_an_fhs_gap_needs_both_link_schemes_reproduced"]
+
+[[equations]]
 id = "response.pyatb_fhs_links"
 expression = "U_link(k -> k+dk) = W(k)^+ [sum_R exp(2 pi i k.R) (S_R + i dk.r_R)] W(k+dk) (PyATB) or W(k)^+ [S(m) - i dk.A(m)] W(k+dk), m = k + dk/2, A = (r(m) + r(m)^+)/2 (QUEER); phase_n = arg prod_links det(U[:n, :n]); a plaquette takes phase_n at the vertices' common occupied count n, else the mean over its four vertices"
 input_units = "dk: inverse angstrom; r_R: angstrom (the raw scfout position operator for PyATB's links)"
 output_units = "dimensionless phases; C_d and S/cm as response.pyatb_fhs_construction"
 assumptions = ["PyATB's determinants are leading minors by elimination without pivoting; QUEER's are pivoted", "Both schemes use the same eigenvectors of the model PyATB reads"]
-conventions = ["A comparison diagnostic in pyatb_emulation.fhs_links, evaluated where an energy shows a varying occupied rank at plaquette vertices", "The schemes agree on an integer in a gap and differ inside bands"]
+conventions = ["A comparison diagnostic in pyatb_emulation.fhs_links, evaluated where an energy shows a varying occupied rank at plaquette vertices", "The schemes agree on an integer in a gap; inside a band PyATB's +i dk.r, the opposite sign of the cell-periodic overlap's first-order term exp(-i dk.r), offsets its sum from the Fermi-sea flux by an amount that does not shrink with the grid, while QUEER's midpoint links converge to it"]
 canonical = "queer.compat.generator.pyatb_emulation:fhs_plaquette_phases"
 specialized_backends = ["queer.compat.generator.pyatb_emulation:leading_minors", "queer.compat.generator.pyatb_emulation:BlochTable", "queer.compat.generator.openmx_steps:_pyatb_fhs"]
 source_references = ["docs/generator_services.md#openmx-steps-of-the-pyatb-counterpart", "https://doi.org/10.1103/PhysRevB.107.024404"]

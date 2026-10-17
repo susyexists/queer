@@ -425,6 +425,50 @@ def test_a_band_scan_records_both_link_schemes_on_the_same_eigenvectors(tmp_path
     assert code == EXIT_OK and gapped["ahc"]["pyatb_emulation"] is None
 
 
+def test_a_band_scan_checks_its_fhs_against_its_own_fermi_sea_sum(tmp_path):
+    scan = {**FHS_SCAN, "fhs_energy_window": [-2.5, 0.5], "fhs_energy_points": 6}
+    code, document = execute(tmp_path / "scan", params(**scan))
+    assert code == EXIT_OK, document.get("error")
+    varying = document["integration"]["fhs"]["metallic_vertex_rank_variation"]
+    picks = [index for index, flag in enumerate(varying) if flag]
+    check = document["ahc"]["fermi_sea_check"]
+    assert check["energies"] == picks and check["engine"] == "direct" and check["error"] is None
+    assert check["grid"] == [12, 12, 1] and check["half_grid"] == [6, 6, 1] and check["directions"] == [2]
+    sea = np.asarray(check["fermi_sea_S_cm"]["xy"], dtype=float)
+    half = np.asarray(check["fhs_half_grid_S_cm"]["xy"], dtype=float)
+    assert np.isnan(sea[~np.asarray(varying)]).all() and np.isfinite(sea[picks]).all()
+    # FS(N): QUEER's direct Fermi-sea sum on the same Gamma-origin nodes, at the band energies.
+    model = OpenMXModel.from_scfout(tmp_path / "scan" / "scf.scfout")
+    mus = np.asarray(document["ahc"]["mu_eV"])[picks]
+    direct = ahc(model, grid=(12, 12, 1), chemical_potentials=mus, engine="direct", dimension=3)
+    np.testing.assert_allclose(sea[picks], np.asarray(direct["ahc"])[:, 0, 1], rtol=1e-10, atol=1e-10)
+    # FHS(N/2): QUEER's own scan on the halved grid.
+    code, coarse = execute(tmp_path / "half", params(**{**scan, "fhs_grid": [6, 6, 1]}))
+    assert code == EXIT_OK
+    np.testing.assert_allclose(half[picks], np.asarray(coarse["ahc"]["sigma_S_cm"]["xy"])[picks], rtol=1e-12)
+    # QUEER's FHS meets the rule at every band energy.
+    fhs = np.asarray(document["ahc"]["sigma_S_cm"]["xy"])[picks]
+    bound = 3 * np.abs(fhs - half[picks]) + 2e-7 * np.abs(fhs) + 5e-7
+    assert np.all(np.abs(fhs - sea[picks]) <= bound)
+    code, gapped = execute(tmp_path / "gapped", params(**FHS_SCAN))
+    assert code == EXIT_OK and gapped["ahc"]["fermi_sea_check"] is None
+
+
+def test_a_collinear_band_scan_checks_the_channel_pyatb_reads(tmp_path):
+    scan = {"engine": "fhs", "fhs_grid": [8, 8, 1], "fhs_energy_window": [-1.5, 1.5], "fhs_energy_points": 7}
+    payload = params(inputs={"nspin": 1, "fermi_energy": 0.0}, **scan)
+    code, document = execute(tmp_path, payload, scfout=collinear_scfout)
+    assert code == EXIT_OK, document.get("error")
+    # The check follows the compared values: the spin-up channel's band energies.
+    legacy = document["ahc"]["legacy_single_channel"]["fhs"]["metallic_vertex_rank_variation"]
+    check = document["ahc"]["fermi_sea_check"]
+    assert check["model"] == "spin-up channel, occupied once" and check["half_grid"] == [4, 4, 1]
+    assert check["energies"] == [index for index, flag in enumerate(legacy) if flag] and check["energies"]
+    # A real Hamiltonian carries no curvature: both vanish at the band energies.
+    for key in ("fermi_sea_S_cm", "fhs_half_grid_S_cm"):
+        assert all(abs(check[key]["xy"][index]) < 1e-12 for index in check["energies"])
+
+
 @pytest.mark.parametrize("dimension", [0, 1])
 def test_the_bulk_fhs_hall_vector_does_not_depend_on_the_lattices_handedness(tmp_path, dimension):
     scan = {**FHS_SCAN, "fhs_dimension": dimension}
