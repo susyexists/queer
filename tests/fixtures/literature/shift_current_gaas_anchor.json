@@ -1,0 +1,16 @@
+{
+  "status": "PLACEHOLDER: fill every null from the paper (the figure or table of GaAs sigma^xyz, with the scissors and broadening it used) before the anchor is used",
+  "source": "J. Ibanez-Azpiroz, S. S. Tsirkin and I. Souza, Phys. Rev. B 97, 245143 (2018)",
+  "doi": "https://doi.org/10.1103/PhysRevB.97.245143",
+  "material": "GaAs with spin-orbit coupling",
+  "component": "xyz",
+  "peak_eV": null,
+  "height_uA_V2": null,
+  "scissors_eV": null,
+  "eta_eV": null,
+  "smearing": "gaussian",
+  "eta_definition": "PyATB's eta: the Gaussian exp(-(x/eta)^2)/(eta sqrt(pi)); convert the paper's broadening to it",
+  "window_eV": null,
+  "convention_factor": 1,
+  "notes": "peak_eV and height_uA_V2 are the published extremum of sigma^xyz (signed, microA/V^2); convention_factor is -1 if the paper's sign convention is opposite to QUEER's (carrier charge -e, sigma^abc(0; w, -w)); window_eV optionally limits the photon energies searched"
+}
