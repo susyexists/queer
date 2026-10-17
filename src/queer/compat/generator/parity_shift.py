@@ -18,22 +18,33 @@ directory (``Input``, optional ``inputs.sha256``, ``Out/input.json``,
    PyATB's spin factor (2 for ``nspin 1``, 1 for ``nspin 4``) and the lattice's
    handedness as the candidate's file sign.
 2. **Consistency** (``emulation_consistency``; a failure is ``differs_unexplained``
-   and fails the comparison whatever PyATB printed): the emulation and QUEER's
-   value come from the same transitions, so ``|emulation - r (sigma_Q - shift)|``
-   must stay within :func:`consistency_bound`, derived here from PyATB's constants
-   and the candidate's absolute transition weights: PyATB's Hartree scale moves a
-   transition by ``|s - 1| E``, its Gaussian drops the bins beyond ``int(5 eta /
-   domega)``, its window drops the transitions outside it, and its integer bins
-   place the transitions ``bin_moves`` counts elsewhere. ``r`` is PyATB's constant
-   ratio, ``sigma_Q`` QUEER's value in PyATB's conventions (export sign, spin
-   factor, legacy channel, bins) and ``shift`` the measured cut. The weights must
-   bound the candidate's own table (``|sigma| <= sum |w| max G``).
+   and fails the comparison whatever PyATB printed): the emulation and QUEER's value
+   come from the same transitions, so ``|emulation - r (sigma_Q - shift)|`` must stay
+   within :func:`consistency_bound`, derived here from PyATB's constants and the
+   candidate's absolute transition weights: PyATB's Hartree scale moves a transition
+   by ``|s - 1| E`` (:func:`energy_scale_bound`, row by row from ``|omega_i| + 6 eta``,
+   so no energy the candidate reports enters), its Gaussian drops the bins beyond
+   ``int(5 eta / domega)``, its window drops the transitions outside it, and its
+   integer bins place the transitions ``bin_moves`` counts elsewhere. ``r`` is PyATB's
+   constant ratio, ``sigma_Q`` QUEER's value in PyATB's conventions (export sign, spin
+   factor, legacy channel, bins) and ``shift`` the measured cut. The weights must bound
+   the candidate's own table (``|sigma| <= sum |w| max G``), and every bound the
+   candidate supplies must lie within the cap derived for it (``transition_bounds``):
+   ``abs_slope`` within ``abs_weight`` times the largest ``|G'|`` over the transitions'
+   range (:func:`slope_cap`), the window's weights within the whole and where the
+   transitions lie, ``bin_moves`` within twice the weight per row. Its
+   ``regularisation`` record must agree with the grid, the pair spacings (a k-point is
+   flagged exactly when a spacing lies within 1e-4 eV), its value (no flagged k-point:
+   no shift and the value without the flagged k-points equals the value) and the cut's
+   transition weights there (``regularisation_record``). A candidate that contradicts
+   itself in any of these, or in its own ``shift_current.dat``, fails: no cause
+   explains its differences.
 3. **Symmetry gate** (a failure is ``differs_unexplained``): the components whose
    largest magnitude exceeds 1e-4 of the table's are the same in both runs, and
    each one's integral over omega has the same sign where both integrals exceed
    1e-4 of the component's integrated magnitude (:func:`symmetry_gate`), against
-   QUEER's value, QUEER's value with PyATB's cut, or the emulation when it is
-   consistent (step 2).
+   QUEER's value, QUEER's value with PyATB's cut while the cut is bounded, or the
+   emulation when it is consistent (step 2).
 4. **Clean control**: scissors 0, Gaussian smearing, ``method 1``, PyATB's
    truncated Gaussian tail ``exp(-(int(5 eta/domega) domega / eta)^2) <= 1e-6``, the
    photon energies reaching 5 eta beyond the extreme transitions with no transition
@@ -44,28 +55,49 @@ directory (``Input``, optional ``inputs.sha256``, ``Out/input.json``,
    is a clean control: every component must agree directly (step 5), else it is
    ``differs_unexplained``. Every ``differs_documented`` needs a passed clean-control
    report of this build (``clean_control``: the same ``queer_version``,
-   ``queer_record_sha256``, ``build_sha`` and ``shift_current.build.shift_source_sha256``
-   of the candidate, and this comparator's ``comparator_sha256``); without one, a
-   comparison that does not agree directly is ``not_comparable`` ("no passed clean
-   control for this build"), unless the candidate contradicts itself (step 2 or its
-   own file), which fails. A failed report of this build makes every component
-   ``differs_unexplained``; a report of another build is ``not_applicable``.
+   ``queer_record_sha256``, ``build_sha`` and ``shift_current.build.queer_source_sha256``
+   of the candidate, the SHA-256 of every ``.py`` file of the queer package that ran
+   it, and this comparator's ``comparator_sha256``, the same digest of the package it
+   runs from); without one, a comparison that does not agree directly is
+   ``not_comparable`` ("no passed clean control for this build"), unless the candidate
+   contradicts itself (step 2 or its own file), which fails. A failed report of this
+   build makes every component ``differs_unexplained``; a report of another build is
+   ``not_applicable``.
 5. **Classes**, per component, with ``tol = 1e-4 max|sigma_P| + PyATB's print
    rounding + the edge allowance``: ``agree`` when PyATB's table meets QUEER's value
    (``agree_after_convention`` for the legacy single channel, a left-handed lattice
-   or the histogram's ``x domega`` and half-bin transform). Otherwise
-   ``differs_documented``, reporting the measured physical gap, when PyATB meets
-   QUEER's value minus the measured shift of PyATB's cut at the flagged k-points
-   (every one emulated), or meets the emulation while step 2 holds (PyATB's scheme,
-   bounded; when that bound stays below 1 % of the component's largest value only on
-   rows holding less than a tenth of its integrated size, the emulation cannot check
-   QUEER's value and the comparison is ``not_comparable``), or an unbounded cause is
-   active (a nonzero ``scissors``, ``method 0``'s 0.04 eV regularization of every
-   denominator, ``smearing_method 2``, a flagged k-point the cut could not be
-   measured at) with step 3 and **self-convergence**:
-   ``|sigma_Q(N) - sigma_Q(2N)|_inf <= 0.1 max|sigma_Q(2N)|`` and ``max|sigma_Q|``
-   within a factor 10 of ``max|sigma_P|`` either way (else ``not_comparable``).
-   Otherwise ``differs_unexplained``.
+   or the histogram's ``x domega`` and half-bin transform), and
+   ``agree_after_convention`` too when it meets it only within ``tol`` plus the
+   derived effect of PyATB's Hartree scale and constant ratio on each row (``r``
+   :func:`energy_scale_bound` ``+ |1 - r| |sigma_Q|`` with its Gaussian; it moves a correct
+   table by up to 3.8e-4 of its peak at eta 0.01). Otherwise ``differs_documented``, reporting the measured
+   physical gap, through a bounded cause:
+
+   - PyATB's ``method 1`` cut at the flagged k-points (every one emulated), while the
+     measured shift stays within those k-points' share of the transition weights at
+     the kernel's peak, ``(n_f / N_k) abs_weight K`` (``K = 1 / (eta sqrt(pi))``, 1
+     for bins; :meth:`_ShiftComparison.cut_share`): PyATB meets ``sigma_Q - shift``
+     within ``tol`` and the Hartree term, the physical gap stays within that and the
+     share, and QUEER's value without the flagged k-points meets PyATB's within that
+     and the cut's own transition weight there. An error confined to the flagged
+     k-points moves the value and the shift together but not the share; a shift
+     beyond it makes the cut an unbounded cause;
+   - or PyATB's scheme: PyATB meets the emulation while step 2 holds (and any cut is
+     bounded). When that bound stays below 1 % of the component's largest value only
+     on rows holding less than a tenth of its integrated size, the emulation cannot
+     check QUEER's value and the comparison is ``not_comparable``.
+
+   Or through an unbounded cause (a nonzero ``scissors``, ``method 0``'s 0.04 eV
+   regularization of every denominator, ``smearing_method 2``, a flagged k-point the
+   cut could not be measured at, a cut beyond its share) with step 3 and
+   **self-convergence**: ``|sigma_Q(N) - sigma_Q(2N)|_inf <= 0.1 max|sigma_Q(2N)|``
+   and ``max|sigma_Q|`` within a factor 10 of ``max|sigma_P|`` either way (else
+   ``not_comparable``). Otherwise ``differs_unexplained``. The plan's step 6 allows
+   ``differs_documented`` only with an unbounded cause and would class the two bounded
+   routes' components ``differs_unexplained``; documenting them without one (and
+   without self-convergence) is a deviation awaiting the user's approval: each
+   explains the difference on the same grid by a bound derived here, so a
+   self-convergence estimate would add nothing to it.
 6. **Literature anchor** (:func:`literature_anchor`, run on its own): a GaAs
    sigma^xyz peak within 2 eta and 20 % of the published height at the paper's
    scissors and broadening.
@@ -102,7 +134,7 @@ from .pyatb_conventions import (
     pyatb_shift_spin_factor,
 )
 from .pyatb_files import SHIFT_COMPONENTS, SHIFT_CURRENT_FILE, parse_shift_current
-from .results import source_sha256, to_jsonable
+from .results import package_source_sha256, to_jsonable
 
 SYMMETRY_THRESHOLD = 1e-4
 SIGN_SIGNIFICANCE = 1e-4
@@ -113,6 +145,11 @@ OMEGA_PRINT_EV = 5.01e-6
 CLEAN_PAIR_GAP_EV = 1e-3
 CLEAN_MARGIN_ETA = 5.0
 CLEAN_TRUNCATION_TAIL = 1e-6
+# PyATB's Hartree scale is bounded transition by transition within this many eta of |omega_i|; a farther
+# transition adds at most the Gaussian there on either scale (e^-36 of its peak).
+ENERGY_SCALE_REACH_ETA = 6.0
+# Relative rounding allowed between a supplied bound and the cap the comparator derives for it.
+CAP_RELATIVE = 1e-9
 # Rounding of two summation orders over the same transitions, relative to the tables' size.
 CONSISTENCY_FLOOR = 1e-9
 # The bound checks QUEER's value only where it is at most this share of the component's largest
@@ -125,22 +162,18 @@ MAGNITUDE_FACTOR = 10.0
 ANCHOR_PEAK_ETA = 2.0
 ANCHOR_HEIGHT_RELATIVE = 0.2
 UNBOUNDED_CAUSES = ("scissors", "regularisation", "adaptive_smearing")
+# The candidate's checks of itself: a failure is a contradiction no cause explains.
+SELF_CHECKS = ("emulation_consistency", "transition_bounds", "regularisation_record", "candidate_file")
 DIRECT = (AGREE, AFTER_CONVENTION)
 NO_CLEAN_CONTROL = "no passed clean control for this build"
 SQRT_PI = math.sqrt(math.pi)
-# The comparator's own source files (relative to the queer package): a clean-control report
-# vouches for the rules that judged it.
-COMPARATOR_SOURCES = (
-    "compat/generator/parity.py",
-    "compat/generator/parity_pyatb.py",
-    "compat/generator/parity_shift.py",
-)
-BUILD_KEYS = ("queer_version", "queer_record_sha256", "build_sha", "shift_source_sha256", "comparator_sha256")
+BUILD_KEYS = ("queer_version", "queer_record_sha256", "build_sha", "queer_source_sha256", "comparator_sha256")
 
 
 def comparator_sha256() -> str | None:
-    """SHA-256 of this comparator's source files (:data:`COMPARATOR_SOURCES`)."""
-    return source_sha256(COMPARATOR_SOURCES)
+    """SHA-256 of every ``.py`` file of the queer package this comparator runs from: a clean-control report
+    vouches for the rules that judged it and everything they import."""
+    return package_source_sha256()
 
 
 def table(columns: Mapping[str, Any] | None) -> np.ndarray | None:
@@ -166,6 +199,51 @@ def _nonnegative(name: str, values: Any) -> np.ndarray:
     return array
 
 
+def energy_scale_bound(slope: Any, weight: Any, *, eta: float, omega: Any) -> np.ndarray:
+    """The largest change PyATB's Hartree scale makes to a Gaussian spectrum, ``(len(omega), 18)`` (before ``r``).
+
+    PyATB places a transition ``E`` at ``s E`` (``s = 27.211324570273 / HARTREE_EV``). A
+    transition with ``|E| <= reach_i = |omega_i| + 6 eta`` moves by at most ``d_i = |s - 1|
+    reach_i``, and ``|G(omega_i - sE) - G(omega_i - E)| <= d_i |G'(omega_i - E)| + d_i^2
+    max|G''|``, so these add at most ``d_i abs_slope_i + d_i^2 (2 / (eta^3 sqrt(pi)))
+    abs_weight``; a farther one lies more than ``6 eta - d_i`` from ``omega_i`` on both
+    scales, so it adds at most ``G(6 eta - d_i) abs_weight``. Only the photon energies,
+    ``eta`` and PyATB's constant enter beside the weights: no energy the candidate reports.
+    """
+    omega = np.asarray(omega, float)
+    move = abs(PYATB_HARTREE_EV / HARTREE_EV - 1) * (np.abs(omega) + ENERGY_SCALE_REACH_ETA * eta)
+    curvature = 2 / (eta**3 * SQRT_PI)
+    far = gaussian(np.maximum(ENERGY_SCALE_REACH_ETA * eta - move, 0.0), eta)
+    return move[:, None] * np.asarray(slope, float) + np.outer(
+        move**2 * curvature + far, np.asarray(weight, float)
+    )
+
+
+def slope_cap(
+    weight: Any, *, eta: float, omega: Any, low: float | None = None, high: float | None = None
+) -> np.ndarray:
+    """The largest ``sum |w| |G'(omega_i - E)|`` transitions of absolute weight ``W`` allow, ``(len(omega), 18)``.
+
+    ``|G'(x)| = 2 |x| / eta^2 G(x)`` peaks at ``|x| = eta / sqrt(2)`` with ``sqrt(2) e^(-1/2)
+    / (eta^2 sqrt(pi))``. With every transition in ``[low, high]`` (QUEER's eV) the offsets
+    at ``omega_i`` lie in ``[omega_i - high, omega_i - low]``: the peak where that interval
+    reaches ``+-eta / sqrt(2)``, else the larger end.
+    """
+    omega = np.asarray(omega, float)
+    turn = eta / math.sqrt(2)
+    peak = 2 * turn / eta**2 * float(gaussian(turn, eta))
+    cap = np.full(len(omega), peak)
+    if low is not None and high is not None and low <= high:
+        near, far = omega - high, omega - low
+
+        def slope(offset: np.ndarray) -> np.ndarray:
+            return 2 * np.abs(offset) / eta**2 * gaussian(offset, eta)
+
+        reaches = ((near <= turn) & (turn <= far)) | ((near <= -turn) & (-turn <= far))
+        cap = np.where(reaches, peak, np.maximum(slope(near), slope(far)))
+    return np.outer(cap, np.asarray(weight, float))
+
+
 def consistency_bound(
     bounds: Mapping[str, Any],
     *,
@@ -181,9 +259,7 @@ def consistency_bound(
     only by the transitions the two bin rules place apart: ``r bin_moves``. With
     PyATB's Gaussian ``G`` they differ, at photon energy ``omega_i``, by
 
-    - PyATB's Hartree scale ``s``: ``|G(omega - sE) - G(omega - E)| <= |s - 1| |E|
-      (|G'(omega - E)| + |s - 1| |E| max|G''|)``, so ``|s - 1| E_max abs_slope + (|s -
-      1| E_max)^2 (2 / (eta^3 sqrt(pi))) abs_weight``;
+    - PyATB's Hartree scale ``s``: :func:`energy_scale_bound`;
     - its truncation: a row it drops lies more than ``int(5 eta / domega) domega``
       from the transition, so ``G(int(5 eta / domega) domega) abs_weight``;
     - its window (unless a band pair is named): a transition below it lies more than
@@ -203,10 +279,8 @@ def consistency_bound(
         raise ValueError("only PyATB's Gaussian and its bins are emulated")
     weight = _nonnegative("abs_weight_uA_V2_eV", _vector(bounds["abs_weight_uA_V2_eV"]))
     slope = _nonnegative("abs_slope_uA_V2_per_eV", table(bounds["abs_slope_uA_V2_per_eV"]))
-    energy = float(_nonnegative("max_abs_energy_eV", bounds["max_abs_energy_eV"]))
-    move = abs(PYATB_HARTREE_EV / HARTREE_EV - 1) * energy
-    curvature = 2 / (eta**3 * SQRT_PI)
-    total = move * slope + (move**2 * curvature + gaussian(int(5 * eta / domega) * domega, eta)) * weight
+    total = energy_scale_bound(slope, weight, eta=eta, omega=omega)
+    total = total + gaussian(int(5 * eta / domega) * domega, eta) * weight
     if not pair_mode:
         below = _nonnegative(
             "abs_weight_below_window_uA_V2_eV", _vector(bounds["abs_weight_below_window_uA_V2_eV"])
@@ -301,6 +375,8 @@ class _ShiftComparison(_PyatbComparison):
         self.release = "not_supplied"
         self.direct_everywhere = True
         self.informative = np.ones(len(SHIFT_COMPONENTS), bool)
+        self.bounds_ok = True
+        self.record_ok = True
 
     # ----------------------------------------------------- preconditions
     @property
@@ -407,7 +483,9 @@ class _ShiftComparison(_PyatbComparison):
         shift = table(regularisation.get("binned_shift_uA_V2" if binned else "shift_uA_V2"))
         return self.sign * values, table(scheme.get("sigma_uA_V2")), shift, name
 
-    def causes(self, diagnostics: Mapping[str, Any], emulated: bool) -> dict[str, dict[str, Any]]:
+    def causes(
+        self, diagnostics: Mapping[str, Any], emulated: bool, cut: Mapping[str, Any]
+    ) -> dict[str, dict[str, Any]]:
         effective = self.effective
         method = int(effective["method"])
         smearing = int(effective["smearing_method"])
@@ -429,15 +507,27 @@ class _ShiftComparison(_PyatbComparison):
         else:
             flagged = int(regularisation.get("flagged_kpoints") or 0)
             missing = int(regularisation.get("not_emulated_kpoints") or 0)
+            unbounded = []
+            if missing:
+                unbounded.append(f"{missing} flagged k-points could not be measured")
+            if flagged and not self.record_ok:
+                unbounded.append("the regularisation record contradicts itself")
+            if flagged and not cut.get("within"):
+                unbounded.append(str(cut.get("reason")))
             reg = {
                 "active": flagged > 0,
-                "bounded": missing == 0,
+                "bounded": not unbounded,
                 "flagged_kpoints": flagged,
                 "not_emulated_kpoints": missing,
+                "share": cut.get("share"),
+                "share_bound_uA_V2": cut.get("bound"),
+                "max_shift_uA_V2": cut.get("moved"),
                 "detail": f"method 1: at {flagged} of {regularisation.get('kpoints')} k-points a band of a selected "
                 f"pair lies within {PYATB_DEGENERATE_EV} eV of a level it is not exactly degenerate with; PyATB's "
                 "get_D_degenerate regularizes those denominators, measured as QUEER's spectrum minus QUEER's "
-                f"spectrum with that cut (diagnostics.regularisation; {missing} k-points could not be measured)",
+                "spectrum with that cut (diagnostics.regularisation) and bounded by those k-points' share of the "
+                "transition weights at the kernel's peak"
+                + (f": unbounded, {'; '.join(unbounded)}" if unbounded else ""),
             }
         truncation = diagnostics.get("gaussian_truncation") or {}
         return {
@@ -522,6 +612,281 @@ class _ShiftComparison(_PyatbComparison):
             cap = cap / (eta * SQRT_PI)
         return np.clip(edge, 0.0, cap)
 
+    def kernel_peak(self) -> float | None:
+        """PyATB's largest kernel value per unit transition weight: its Gaussian's peak, 1 for its bins, None for
+        the adaptive widths (no useful peak)."""
+        smearing = int(self.effective["smearing_method"])
+        eta = float(self.effective.get("eta") or 0.0)
+        if smearing == 1 and eta > 0:
+            return 1.0 / (eta * SQRT_PI)
+        return 1.0 if smearing == 0 else None
+
+    def check_transition_bounds(self, diagnostics: Mapping[str, Any]) -> None:
+        """The candidate's ``transition_bounds`` within the caps derived from them and PyATB's settings.
+
+        The weights below and above PyATB's window are parts of the whole weight and lie
+        where the candidate's transitions do (none below the window when its lowest
+        transition is inside, none above when its highest is); with a Gaussian each row's
+        ``abs_slope`` is at most :func:`slope_cap` of the whole weight over the transitions'
+        range; without smearing each row's ``bin_moves`` is at most twice the weight (a
+        transition reaches a row from both codes) and all rows four times. A bound above its
+        cap fails (``transition_bounds``) and none of the bounds is used.
+        """
+        bounds = diagnostics.get("transition_bounds")
+        if not isinstance(bounds, Mapping):
+            self.bounds_ok = False
+            return
+        effective = self.effective
+        smearing = int(effective["smearing_method"])
+        eta = float(effective.get("eta") or 0.0)
+        omega = np.asarray(self.reference_omega())
+        start = float(omega[0])
+        end = start + len(omega) * float(effective["domega"])
+        weight = _nonnegative("abs_weight_uA_V2_eV", _vector(bounds["abs_weight_uA_V2_eV"]))
+        floor = CONSISTENCY_FLOOR * float(weight.max(initial=0.0))
+        cap = weight * (1 + CAP_RELATIVE) + floor
+        below = _nonnegative(
+            "abs_weight_below_window_uA_V2_eV", _vector(bounds["abs_weight_below_window_uA_V2_eV"])
+        )
+        above = _nonnegative(
+            "abs_weight_above_window_uA_V2_eV", _vector(bounds["abs_weight_above_window_uA_V2_eV"])
+        )
+        problems = []
+        if np.any(below > cap) or np.any(above > cap) or np.any(below + above > cap):
+            problems.append("its weights below and above PyATB's window exceed its whole weight")
+        transitions = diagnostics.get("transitions") or {}
+        low_p, high_p = transitions.get("min_pyatb_eV"), transitions.get("max_pyatb_eV")
+        if low_p is not None and float(low_p) >= start and np.any(below > 0):
+            problems.append(
+                f"it puts weight below PyATB's window [{start:.6g}, {end:.6g}) eV although its lowest transition "
+                f"lies at {float(low_p):.6g} eV"
+            )
+        if high_p is not None and float(high_p) < end and np.any(above > 0):
+            problems.append(
+                f"it puts weight above PyATB's window [{start:.6g}, {end:.6g}) eV although its highest transition "
+                f"lies at {float(high_p):.6g} eV"
+            )
+        window = transitions.get("window_pyatb_eV")
+        if (
+            window is not None
+            and max(abs(float(window[0]) - start), abs(float(window[1]) - end)) > OMEGA_PRINT_EV
+        ):
+            problems.append(f"its window {window} is not PyATB's [{start:.6g}, {end:.6g}) eV")
+        if smearing == 1 and eta > 0:
+            slope = table(bounds.get("abs_slope_uA_V2_per_eV"))
+            if slope is None or slope.shape != (len(omega), len(SHIFT_COMPONENTS)):
+                problems.append("it has no abs_slope on PyATB's photon energies for PyATB's Gaussian")
+            else:
+                slope = _nonnegative("abs_slope_uA_V2_per_eV", slope)
+                low, high = transitions.get("min_eV"), transitions.get("max_eV")
+                limit = slope_cap(
+                    weight,
+                    eta=eta,
+                    omega=omega,
+                    low=None if low is None else float(low),
+                    high=None if high is None else float(high),
+                )
+                excess = (
+                    slope - limit * (1 + CAP_RELATIVE) - CONSISTENCY_FLOOR * float(limit.max(initial=0.0))
+                )
+                if np.any(excess > 0):
+                    row, column = np.unravel_index(int(np.argmax(excess)), excess.shape)
+                    problems.append(
+                        f"abs_slope {slope[row, column]:.4g} exceeds abs_weight times the largest |G'| its "
+                        f"transitions allow ({limit[row, column]:.4g}) at sigma_{SHIFT_COMPONENTS[column]}, omega "
+                        f"index {row}"
+                    )
+        if smearing == 0:
+            moves = table(bounds.get("bin_moves_uA_V2"))
+            if moves is None or moves.shape != (len(omega), len(SHIFT_COMPONENTS)):
+                problems.append("it has no bin_moves on PyATB's photon energies for PyATB's bins")
+            else:
+                moves = _nonnegative("bin_moves_uA_V2", moves)
+                if np.any(moves > 2 * cap) or np.any(moves.sum(axis=0) > 4 * cap):
+                    problems.append(
+                        "its bin_moves exceed twice its weight on a row or four times over all rows"
+                    )
+        self.bounds_ok = not problems
+        self.quantity(
+            "transition_bounds",
+            AGREE if not problems else UNEXPLAINED,
+            detail="the candidate's transition_bounds lie within the caps derived from its weights, its "
+            "transitions' range and PyATB's settings"
+            + ("" if not problems else ": they do not, " + "; ".join(problems)),
+        )
+
+    def check_regularisation_record(self, diagnostics: Mapping[str, Any], values: np.ndarray) -> None:
+        """``diagnostics.regularisation`` consistent with itself, the grid and the candidate's value.
+
+        The flagged k-points are among the grid's and, with ``method 1``, flagged exactly
+        when the smallest pair spacing lies within PyATB's 1e-4 eV; without a flagged
+        k-point there is no shift and the value without the flagged k-points is the value;
+        with them, their transition weight is part of the whole and QUEER's value with the
+        cut, less its value without them (the cut's own spectrum there), stays within that
+        weight times the kernel's peak.
+        """
+        regularisation = diagnostics.get("regularisation")
+        if not isinstance(regularisation, Mapping):
+            self.record_ok = True
+            return
+        effective = self.effective
+        binned = int(effective["smearing_method"]) == 0
+        kpoints = int(np.prod([int(value) for value in effective["grid"]]))
+        flagged = int(regularisation.get("flagged_kpoints") or 0)
+        emulated = int(regularisation.get("emulated_kpoints") or 0)
+        missing = int(regularisation.get("not_emulated_kpoints") or 0)
+        problems = []
+        if int(regularisation.get("kpoints") or 0) != kpoints:
+            problems.append(f"it counts {regularisation.get('kpoints')} k-points on PyATB's {kpoints}")
+        if not 0 <= flagged <= kpoints or min(emulated, missing) < 0 or emulated + missing != flagged:
+            problems.append(
+                f"{flagged} flagged k-points are not {emulated} emulated plus {missing} unmeasured"
+            )
+        scale = PYATB_HARTREE_EV / HARTREE_EV
+        listed = regularisation.get("listed") or []
+        if int(effective["method"]) == 1:
+            gap = diagnostics.get("min_pair_gap_eV")
+            near = gap is not None and float(gap) * scale <= PYATB_DEGENERATE_EV
+            if near != (flagged > 0):
+                problems.append(
+                    f"it flags {flagged} k-points while its smallest pair spacing is {gap} eV (PyATB's threshold "
+                    f"{PYATB_DEGENERATE_EV} eV on its scale)"
+                )
+            if len(listed) > emulated or any(
+                float(item.get("pair_gap_eV", math.inf)) * scale > PYATB_DEGENERATE_EV for item in listed
+            ):
+                problems.append("it lists k-points that are not flagged")
+        elif flagged:
+            problems.append("method 0 flags no k-point: its regularization covers every denominator")
+        shift = table(regularisation.get("binned_shift_uA_V2" if binned else "shift_uA_V2"))
+        unflagged = table(regularisation.get("binned_unflagged_uA_V2" if binned else "sigma_unflagged_uA_V2"))
+        for other in (shift, unflagged):
+            if other is not None and other.shape != values.shape:
+                problems.append("its tables have another shape than the value")
+                shift = unflagged = None
+        floor = CONSISTENCY_FLOOR * _largest(values)
+        if flagged == 0:
+            if shift is not None and _largest(shift) > floor:
+                problems.append("it records a shift without a flagged k-point")
+            if unflagged is not None and _largest(values - unflagged) > floor:
+                problems.append(
+                    f"its value without the flagged k-points differs from its value by {_largest(values - unflagged):.4g} "
+                    "microA/V^2 although no k-point is flagged"
+                )
+        else:
+            weight = (diagnostics.get("transition_bounds") or {}).get("abs_weight_uA_V2_eV")
+            part = regularisation.get("abs_weight_flagged_uA_V2_eV")
+            kernel = self.kernel_peak()
+            if isinstance(weight, Mapping) and isinstance(part, Mapping):
+                whole = _nonnegative("abs_weight_uA_V2_eV", _vector(weight))
+                share = _nonnegative("abs_weight_flagged_uA_V2_eV", _vector(part))
+                if np.any(
+                    share > whole * (1 + CAP_RELATIVE) + CONSISTENCY_FLOOR * float(whole.max(initial=0.0))
+                ):
+                    problems.append("the flagged k-points' transition weight exceeds the whole weight")
+                if kernel is not None and shift is not None and unflagged is not None:
+                    cut = np.abs(values - shift - unflagged)
+                    capacity = share * kernel * (1 + CAP_RELATIVE) + floor
+                    if np.any(cut > capacity):
+                        column = int(np.argmax(np.max(cut - capacity, axis=0)))
+                        problems.append(
+                            f"QUEER's value with the cut less its value without the flagged k-points reaches "
+                            f"{float(np.max(cut[:, column])):.4g} microA/V^2 at sigma_{SHIFT_COMPONENTS[column]}, beyond "
+                            f"the cut's transition weight there times the kernel's peak ({float(capacity[column]):.4g})"
+                        )
+        self.record_ok = not problems
+        self.quantity(
+            "regularisation_record",
+            AGREE if not problems else UNEXPLAINED,
+            detail="diagnostics.regularisation is consistent with the grid, the pair spacings, the transition "
+            "weights and the candidate's value"
+            + ("" if not problems else ": it is not, " + "; ".join(problems)),
+        )
+
+    def cut_share(self, diagnostics: Mapping[str, Any], shift: np.ndarray | None) -> dict[str, Any]:
+        """The bound of PyATB's method-1 cut that the shift's own record cannot move.
+
+        The flagged k-points carry ``n_f / N_k`` of the k-mean, so the cut is bounded by
+        their share of the whole transition weight at the kernel's peak, ``B = (n_f / N_k)
+        abs_weight K`` per component (``K = 1 / (eta sqrt(pi))``, 1 for PyATB's bins; none
+        for the adaptive widths). ``abs_weight`` sums PyATB's transitions (the cut's at the
+        flagged k-points) and bounds QUEER's table (step 2); ``n_f`` follows from the pair
+        spacings (:meth:`check_regularisation_record`) and ``N_k`` is PyATB's grid. The
+        measured shift and the documented gap must stay within ``B``; QUEER's
+        near-degenerate terms that the shift measures do not enter it, so an error
+        confined to the flagged k-points, which moves the value and the shift together,
+        cannot widen it.
+        """
+        regularisation = diagnostics.get("regularisation") or {}
+        weight = (diagnostics.get("transition_bounds") or {}).get("abs_weight_uA_V2_eV")
+        flagged = int(regularisation.get("flagged_kpoints") or 0)
+        kpoints = int(np.prod([int(value) for value in self.effective["grid"]]))
+        kernel = self.kernel_peak()
+        binned = int(self.effective["smearing_method"]) == 0
+        unflagged = regularisation.get("binned_unflagged_uA_V2" if binned else "sigma_unflagged_uA_V2")
+        facts: dict[str, Any] = {"share": flagged / kpoints if kpoints else None, "kernel_peak": kernel}
+        reason = None
+        if kernel is None:
+            reason = "PyATB's adaptive widths have no kernel peak to bound the cut's share by"
+        elif not isinstance(weight, Mapping) or not self.bounds_ok:
+            reason = "the candidate's transition weights are missing or exceed their caps"
+        elif (
+            shift is None
+            or not isinstance(unflagged, Mapping)
+            or not isinstance(regularisation.get("abs_weight_flagged_uA_V2_eV"), Mapping)
+        ):
+            reason = (
+                "the candidate records no shift, no value without the flagged k-points or not their weight"
+            )
+        if reason is not None:
+            return {**facts, "within": False, "reason": reason}
+        assert shift is not None and isinstance(weight, Mapping) and kernel is not None
+        bound = flagged / kpoints * _vector(weight) * kernel
+        moved = np.max(np.abs(shift), axis=0, initial=0.0)
+        excess = moved - bound * (1 + CAP_RELATIVE) - CONSISTENCY_FLOOR * _largest(shift)
+        within = bool(np.all(excess <= 0))
+        worst = int(np.argmax(excess))
+        if not within:
+            reason = (
+                f"the measured shift reaches {moved[worst]:.4g} microA/V^2 at sigma_{SHIFT_COMPONENTS[worst]}, beyond "
+                f"the flagged k-points' share {flagged}/{kpoints} of the transition weight at the kernel's peak "
+                f"({bound[worst]:.4g})"
+            )
+        return {
+            **facts,
+            "within": within,
+            "reason": reason,
+            "bound": dict(zip(SHIFT_COMPONENTS, bound.tolist())),
+            "moved": dict(zip(SHIFT_COMPONENTS, moved.tolist())),
+            "bound_vector": bound,
+            "unflagged": table(unflagged),
+            "capacity": _vector(regularisation["abs_weight_flagged_uA_V2_eV"]) * kernel,
+        }
+
+    def convention_allowance(self, diagnostics: Mapping[str, Any], values: np.ndarray) -> np.ndarray:
+        """PyATB's energy and constant conventions as a derived allowance on a direct agreement, ``(rows, 18)``.
+
+        ``|1 - r| |sigma|`` for PyATB's constants and, with its Gaussian and checked
+        ``transition_bounds``, ``r`` times :func:`energy_scale_bound` for its Hartree scale:
+        a correct candidate differs from PyATB by up to that much at a narrow eta.
+        """
+        ratio = pyatb_shift_constant_ratio()
+        allowance = abs(1 - ratio) * np.abs(values)
+        bounds = diagnostics.get("transition_bounds")
+        eta = float(self.effective.get("eta") or 0.0)
+        if (
+            int(self.effective["smearing_method"]) == 1
+            and eta > 0
+            and self.bounds_ok
+            and isinstance(bounds, Mapping)
+        ):
+            weight = _nonnegative("abs_weight_uA_V2_eV", _vector(bounds["abs_weight_uA_V2_eV"]))
+            slope = _nonnegative("abs_slope_uA_V2_per_eV", table(bounds["abs_slope_uA_V2_per_eV"]))
+            allowance = allowance + ratio * energy_scale_bound(
+                slope, weight, eta=eta, omega=self.reference_omega()
+            )
+        return allowance
+
     def build_identity(self) -> dict[str, Any]:
         """The build this candidate and this comparator are: what a clean-control report must match."""
         provenance = self.candidate.document.get("provenance") or {}
@@ -530,7 +895,7 @@ class _ShiftComparison(_PyatbComparison):
             "queer_version": provenance.get("queer_version"),
             "queer_record_sha256": provenance.get("queer_record_sha256"),
             "build_sha": provenance.get("build_sha"),
-            "shift_source_sha256": build.get("shift_source_sha256"),
+            "queer_source_sha256": build.get("queer_source_sha256"),
             "comparator_sha256": comparator_sha256(),
         }
 
@@ -546,7 +911,7 @@ class _ShiftComparison(_PyatbComparison):
         theirs = rules.get("build") or {}
         mine = self.build_identity()
         if (
-            mine["shift_source_sha256"] is None
+            mine["queer_source_sha256"] is None
             or mine["comparator_sha256"] is None
             or any(theirs.get(key) != mine[key] for key in BUILD_KEYS)
         ):
@@ -588,11 +953,13 @@ class _ShiftComparison(_PyatbComparison):
         smearing = int(effective["smearing_method"])
         eta = float(effective.get("eta") or 0.0)
         bounds = diagnostics.get("transition_bounds")
-        if not isinstance(bounds, Mapping):
+        if not isinstance(bounds, Mapping) or not self.bounds_ok:
             self.quantity(
                 "emulation_consistency",
                 UNEXPLAINED,
-                detail="the candidate holds an emulation of PyATB's scheme but no transition_bounds to check it by",
+                detail="the candidate holds an emulation of PyATB's scheme but no transition_bounds to check it by"
+                if not isinstance(bounds, Mapping)
+                else "the candidate's transition_bounds exceed their derived caps, so they cannot check its emulation",
             )
             return np.zeros(len(SHIFT_COMPONENTS), bool)
         bound = consistency_bound(
@@ -664,28 +1031,47 @@ class _ShiftComparison(_PyatbComparison):
         domega = float(self.effective["domega"])
         scale = _largest(reference)
         scheme = diagnostics.get("pyatb_scheme") or {}
+        self.check_transition_bounds(diagnostics)
+        self.check_regularisation_record(diagnostics, values)
         conditions = self.clean_conditions(diagnostics)
         self.clean = clean = all(conditions.values())
         edge = self.edge_allowance(diagnostics, clean)
         base = AGREEMENT_RELATIVE * scale
         tolerance = base + PRINT_RELATIVE * np.max(np.abs(reference), axis=0, initial=0.0) + edge
-        causes = self.causes(diagnostics, emulated is not None)
-        flagged = bool(causes["regularisation"].get("flagged_kpoints"))
-        regularised = values - shift if flagged and shift is not None else values
+        convention = self.convention_allowance(diagnostics, values)
+        flagged = int((diagnostics.get("regularisation") or {}).get("flagged_kpoints") or 0) > 0
+        cut: dict[str, Any] = self.cut_share(diagnostics, shift) if flagged else {"within": True}
+        causes = self.causes(diagnostics, emulated is not None, cut)
+        # What the emulation sums: QUEER's transitions with the measured cut at the flagged k-points.
+        measured = values - shift if flagged and shift is not None else values
+        bounded_cut = flagged and causes["regularisation"]["bounded"]
         consistent = None
         if emulated is not None:
-            consistent = self.check_consistency(diagnostics, regularised, emulated)
-        symmetric, facts = symmetry_gate(reference, values, domega, tolerance)
+            consistent = self.check_consistency(diagnostics, measured, emulated)
+        contradiction = sorted(
+            {
+                item["name"]
+                for item in self.quantities
+                if item["name"] in SELF_CHECKS and item["class"] == UNEXPLAINED
+            }
+        )
+        allowed = tolerance + np.max(convention, axis=0, initial=0.0)
+        symmetric, facts = symmetry_gate(reference, values, domega, allowed)
         facts["against"] = compared
         views = []
-        if regularised is not values:
-            views.append((regularised, f"{compared} - diagnostics.regularisation shift"))
-        if consistent is not None and consistent.all() and emulated is not None:
+        if bounded_cut:
+            views.append((measured, f"{compared} - diagnostics.regularisation shift"))
+        if (
+            consistent is not None
+            and consistent.all()
+            and emulated is not None
+            and (not flagged or bounded_cut)
+        ):
             views.append((emulated, "diagnostics.pyatb_scheme.sigma_uA_V2"))
         for view, label in views:
             if symmetric:
                 break
-            passes, other_facts = symmetry_gate(reference, view, domega, tolerance)
+            passes, other_facts = symmetry_gate(reference, view, domega, allowed)
             if passes:
                 symmetric, facts = True, {**other_facts, "against": label}
         self.quantity(
@@ -701,13 +1087,20 @@ class _ShiftComparison(_PyatbComparison):
         unbounded = [
             name for name in UNBOUNDED_CAUSES if causes[name]["active"] and not causes[name]["bounded"]
         ]
-        convention = self.legacy or self.sign < 0 or int(self.effective["smearing_method"]) == 0
+        converted = self.legacy or self.sign < 0 or int(self.effective["smearing_method"]) == 0
         converged, convergence = None, ""
         bound_max = self.basis.get("consistency", {}).get("max_bound_uA_V2") or {}
         self.direct_everywhere = True
         coarse: list[str] = []
+        share = cut.get("bound_vector")
+        unflagged = cut.get("unflagged")
+        capacity = cut.get("capacity")
+        through_cut = None
+        if bounded_cut:
+            through_cut = self.convention_allowance(diagnostics, measured)
         for index, name in enumerate(SHIFT_COMPONENTS):
-            direct = _largest(reference[:, index] - values[:, index])
+            gap = np.abs(reference[:, index] - values[:, index])
+            direct = float(np.max(gap, initial=0.0))
             limit = float(tolerance[index])
             label = f"sigma_{name}"
             if release == "failed":
@@ -719,11 +1112,24 @@ class _ShiftComparison(_PyatbComparison):
             if direct <= limit:
                 self.quantity(
                     label,
-                    AFTER_CONVENTION if convention else AGREE,
+                    AFTER_CONVENTION if converted else AGREE,
                     direct,
                     limit,
                     f"PyATB's table meets QUEER's {compared}"
-                    + (" in PyATB's conventions" if convention else ""),
+                    + (" in PyATB's conventions" if converted else ""),
+                )
+                continue
+            hartree = convention[:, index]
+            if np.all(gap <= limit + hartree):
+                self.quantity(
+                    label,
+                    AFTER_CONVENTION,
+                    direct,
+                    limit + float(np.max(hartree, initial=0.0)),
+                    f"PyATB's table meets QUEER's {compared}"
+                    + (" in PyATB's conventions" if converted else "")
+                    + " within the derived effect of PyATB's Hartree scale and constants (energy_scale_bound: "
+                    f"up to {float(np.max(hartree, initial=0.0)):.4g} microA/V^2 on a row)",
                 )
                 continue
             self.direct_everywhere = False
@@ -733,24 +1139,50 @@ class _ShiftComparison(_PyatbComparison):
                     UNEXPLAINED,
                     direct,
                     limit,
-                    "a clean control must agree with QUEER's physical value directly to 1e-4 max|sigma_P|",
+                    "a clean control must agree with QUEER's physical value directly: to 1e-4 max|sigma_P| beside "
+                    "the derived effect of PyATB's Hartree scale",
                 )
                 continue
-            if regularised is not values and causes["regularisation"]["bounded"] and symmetric:
-                cut = _largest(reference[:, index] - regularised[:, index])
-                if cut <= limit:
-                    moved = _largest(shift[:, index]) if shift is not None else 0.0
+            if contradiction:
+                self.quantity(
+                    label,
+                    UNEXPLAINED,
+                    direct,
+                    limit,
+                    f"the candidate contradicts itself ({', '.join(contradiction)}): no cause can explain a difference",
+                )
+                continue
+            if bounded_cut and symmetric and through_cut is not None and share is not None:
+                assert shift is not None and unflagged is not None and capacity is not None
+                rest = np.abs(reference[:, index] - measured[:, index])
+                without = np.abs(reference[:, index] - unflagged[:, index])
+                widened = self.convention_allowance(diagnostics, unflagged)[:, index]
+                if (
+                    np.all(rest <= limit + through_cut[:, index])
+                    and np.all(gap <= limit + hartree + share[index])
+                    and np.all(without <= limit + widened + capacity[index])
+                ):
+                    moved = _largest(shift[:, index])
                     self.quantity(
                         label,
                         DOCUMENTED,
                         direct,
-                        limit + moved,
+                        limit + float(np.max(hartree, initial=0.0)) + float(share[index]),
                         f"QUEER's value differs by {direct:.4g} microA/V^2; PyATB meets it with PyATB's method-1 cut "
                         f"at the {causes['regularisation']['flagged_kpoints']} flagged k-points (measured shift up to "
-                        f"{moved:.4g}) to {cut:.4g}",
+                        f"{moved:.4g}, within those k-points' share {float(share[index]):.4g}) to "
+                        f"{float(np.max(rest, initial=0.0)):.4g}; QUEER's value without them meets PyATB's to "
+                        f"{float(np.max(without, initial=0.0)):.4g} (their cut transitions carry at most "
+                        f"{float(capacity[index]):.4g})",
                     )
                     continue
-            if emulated is not None and consistent is not None and consistent[index] and symmetric:
+            if (
+                emulated is not None
+                and consistent is not None
+                and consistent[index]
+                and symmetric
+                and (not flagged or bounded_cut)
+            ):
                 through = _largest(reference[:, index] - emulated[:, index])
                 if through <= limit and not self.informative[index]:
                     coarse.append(name)
@@ -769,10 +1201,10 @@ class _ShiftComparison(_PyatbComparison):
                         label,
                         DOCUMENTED,
                         direct,
-                        limit + allowance + _largest(regularised[:, index] - values[:, index]),
+                        limit + allowance + _largest(measured[:, index] - values[:, index]),
                         f"QUEER's value differs by {direct:.4g} microA/V^2; PyATB meets QUEER's emulation of its "
                         f"scheme (Hartree scale, truncation, window, integer bins, constants"
-                        + (", method-1 cut" if regularised is not values else "")
+                        + (", method-1 cut" if flagged else "")
                         + f") to {through:.4g}, which lies within the derived bound {allowance:.4g} of QUEER's value",
                     )
                     continue
@@ -815,7 +1247,7 @@ class _ShiftComparison(_PyatbComparison):
                 "clean_control",
                 AGREE if self.direct_everywhere and symmetric else UNEXPLAINED,
                 detail="a clean-control configuration: every component must agree with QUEER's physical value "
-                "directly to 1e-4 max|sigma_P|",
+                "directly, to 1e-4 max|sigma_P| beside the derived effect of PyATB's Hartree scale",
             )
         if release != "not_supplied":
             kind = {"passed": AGREE, "failed": UNEXPLAINED}.get(release, NOT_APPLICABLE)
@@ -841,6 +1273,12 @@ class _ShiftComparison(_PyatbComparison):
                 "base_uA_V2": base,
                 "print_relative": PRINT_RELATIVE,
                 "edge_allowance_uA_V2": dict(zip(SHIFT_COMPONENTS, edge.tolist())),
+                "convention_allowance_uA_V2": dict(
+                    zip(SHIFT_COMPONENTS, np.max(convention, axis=0, initial=0.0).tolist())
+                ),
+                "convention_rule": "|1 - r| |sigma_Q| + r energy_scale_bound (Gaussian): |s - 1| (|omega_i| + 6 eta) "
+                "abs_slope_i + (|s - 1| (|omega_i| + 6 eta))^2 2/(eta^3 sqrt(pi)) abs_weight + G(6 eta - "
+                "|s - 1| (|omega_i| + 6 eta)) abs_weight, row by row",
                 "edge_transitions": scheme.get("edge_transitions"),
                 "emulated": emulated is not None,
             }
@@ -879,7 +1317,7 @@ class _ShiftComparison(_PyatbComparison):
         defects = {
             item["name"]
             for item in self.quantities
-            if item["name"] in ("emulation_consistency", "candidate_file") and item["class"] == UNEXPLAINED
+            if item["name"] in SELF_CHECKS and item["class"] == UNEXPLAINED
         }
         if defects:
             # The candidate contradicts itself: that fails whatever PyATB printed.

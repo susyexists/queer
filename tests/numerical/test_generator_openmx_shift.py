@@ -18,7 +18,6 @@ from openmx_files import shift_collinear_scfout, shift_spinor_scfout
 from queer import ExecutionOptions, OpenMXModel
 from queer.compat.generator.openmx_params import limit_refusal
 from queer.compat.generator.openmx_shift import (
-    SHIFT_SOURCES,
     PyatbShiftScheme,
     bin_moves,
     component_table,
@@ -32,7 +31,7 @@ from queer.compat.generator.pyatb_conventions import (
     pyatb_shift_constant_ratio,
 )
 from queer.compat.generator.pyatb_files import SHIFT_COMPONENTS, parse_shift_current
-from queer.compat.generator.results import EXIT_FAILED, EXIT_OK, source_sha256
+from queer.compat.generator.results import EXIT_FAILED, EXIT_OK, package_source_sha256
 from queer.compat.generator.runner import capabilities, run
 from queer.observables.nonlinear import shift_current
 
@@ -134,11 +133,14 @@ def test_the_shift_current_is_queers_own_estimator_in_pyatbs_layout(tmp_path):
     # PyATB's Hartree scale moves each transition by 2.3e-6 of its energy: far below 1e-4 of the peak.
     assert 0 < np.max(np.abs(scheme - physical)) < 1e-4 * np.max(np.abs(physical))
     assert document["model"]["spin_mode"] == "soc" and document["integration"]["mode"] == "Grid"
-    # The build a clean control vouches for: the source of this computation.
-    assert block["build"]["shift_source_sha256"] == source_sha256(SHIFT_SOURCES) is not None
+    # The build a clean control vouches for: every source file of the installed package.
+    assert block["build"]["queer_source_sha256"] == package_source_sha256() is not None
     regularisation = diagnostics["regularisation"]
     assert regularisation["flagged_kpoints"] == 0 and regularisation["kpoints"] == 18
     assert not np.any(columns(regularisation["shift_uA_V2"]))
+    # Without a flagged k-point the value without them is the value, and they carry no weight.
+    assert np.allclose(columns(regularisation["sigma_unflagged_uA_V2"]), physical, rtol=1e-13, atol=0)
+    assert set(regularisation["abs_weight_flagged_uA_V2_eV"].values()) == {0.0}
     bounds = diagnostics["transition_bounds"]
     assert bounds["max_abs_energy_eV"] == pytest.approx(transitions["max_eV"], rel=1e-15)
     assert all(value == 0 for value in bounds["abs_weight_below_window_uA_V2_eV"].values())

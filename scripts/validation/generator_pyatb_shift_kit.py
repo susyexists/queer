@@ -248,7 +248,7 @@ def queer_side(output: Path, case: str, model: str, self_convergence: bool, work
         "regularised_kpoints": block["diagnostics"]["regularisation"]["flagged_kpoints"],
         "transitions": block["diagnostics"]["transitions"]["count"],
         "clean_control_eligible": block["diagnostics"]["clean_control"]["eligible"],
-        "shift_source_sha256": block["build"]["shift_source_sha256"],
+        "queer_source_sha256": block["build"]["queer_source_sha256"],
         "self_convergence_ratio": compared.get("ratio"),
         "scfout_sha256": document["model"]["scfout_sha256"],
         "queer_version": document["provenance"]["queer_version"],
@@ -280,10 +280,14 @@ def readme(output: Path, summary: dict) -> str:
     ):
         lines.append(f"| `{path.relative_to(output)}` | `{sha256(path)}` | {path.stat().st_size} |")
     builds = sorted(
-        {facts.get("shift_source_sha256") for facts in summary.values() if facts.get("shift_source_sha256")}
+        {facts.get("queer_source_sha256") for facts in summary.values() if facts.get("queer_source_sha256")}
     )
     if builds:
-        lines += ["", f"QUEER's side was run by the build with `shift_source_sha256` {', '.join(builds)}."]
+        lines += [
+            "",
+            f"QUEER's side was run by the build with `queer_source_sha256` {', '.join(builds)} (every `.py` file "
+            "of the queer package).",
+        ]
     lines += [
         "",
         "## Cases and the expected comparison",
@@ -302,7 +306,7 @@ def readme(output: Path, summary: dict) -> str:
         "QUEER's physical value, the estimator judged, and `shift_current.diagnostics.pyatb_scheme.sigma_uA_V2`",
         "the table PyATB should print (its Hartree scale, window rule, int() bins, Gaussian truncation,",
         "constants, spin factor and signed volume applied to QUEER's transitions), a diagnostic only.",
-        "`queer-side/summary.json` lists the headline numbers and the build (`shift_source_sha256`) the runs",
+        "`queer-side/summary.json` lists the headline numbers and the build (`queer_source_sha256`) the runs",
         "come from.",
         "",
         "## Running PyATB (Explorer)",
@@ -321,9 +325,11 @@ def readme(output: Path, summary: dict) -> str:
         "`QUEER_PYATB_SHIFT_CALIBRATION_DIR` overrides the default data directory",
         "`~/.cache/queer-parity-data/pyatb-shift-kit` and `QUEER_PARITY_REPORT_DIR` receives every report. The",
         "clean control (`a_clean_control`) is judged first: every component must meet QUEER's physical value",
-        "directly, and the emulation must reproduce PyATB's table to its print precision (1e-6 of each value).",
-        "Its report, for the same build (queer_version, RECORD, build_sha, shift-path and comparator sources),",
-        "is applied to every other case: a difference is documented only after it passed.",
+        "directly (to 1e-4 of the peak beside the derived effect of PyATB's Hartree scale), and the emulation",
+        "must reproduce PyATB's table to its print precision (1e-6 of each value). Its report, for the same",
+        "build (queer_version, RECORD, build_sha, and the digest of every .py file of the queer package that ran",
+        "the case and that compares it), is applied to every other case: a difference is documented only after",
+        "it passed.",
         "",
     ]
     return "\n".join(lines)

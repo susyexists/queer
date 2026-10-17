@@ -210,22 +210,43 @@ def sha256_file(path: str | Path) -> str | None:
         return None
 
 
-def source_sha256(relative_paths: Sequence[str]) -> str | None:
-    """SHA-256 of QUEER source files (paths relative to the ``queer`` package), or None when one is unreadable.
+def source_sha256(relative_paths: Sequence[str], root: str | Path | None = None) -> str | None:
+    """SHA-256 of QUEER source files (paths relative to the ``queer`` package, or to ``root``), or None when one
+    is unreadable.
 
     Each file contributes its path and its bytes, in sorted path order, so the
     digest names the code of a computation in a source checkout as well as in an
     installed wheel.
     """
-    root = Path(__file__).resolve().parents[2]
+    base = _package_root() if root is None else Path(root).resolve()
     digest = hashlib.sha256()
     for relative in sorted(relative_paths):
         try:
-            content = (root / relative).read_bytes()
+            content = (base / relative).read_bytes()
         except OSError:
             return None
         digest.update(relative.encode() + b"\0" + content + b"\0")
     return digest.hexdigest()
+
+
+def _package_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def package_sources(root: str | Path | None = None) -> list[str]:
+    """Every ``.py`` file of the ``queer`` package (or of the package copy at ``root``), relative and sorted."""
+    base = _package_root() if root is None else Path(root).resolve()
+    return sorted(path.relative_to(base).as_posix() for path in base.rglob("*.py"))
+
+
+def package_source_sha256(root: str | Path | None = None) -> str | None:
+    """SHA-256 of every ``.py`` file of the installed ``queer`` package (:func:`source_sha256` of them all).
+
+    It names the code a run executed, whatever module the run reaches, in a source
+    checkout or an editable install (whose ``RECORD`` lists no source) as well as in
+    an installed wheel. ``root`` hashes a copy of the package instead.
+    """
+    return source_sha256(package_sources(root), root)
 
 
 def package_version(name: str) -> str | None:
