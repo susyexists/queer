@@ -59,6 +59,10 @@ CASES = {
     "i_threshold_20": ({PASS_DOCUMENTED}, {AFTER_CONVENTION, DOCUMENTED}),
     "j_direct_metal": ({PASS}, {AGREE}),
     "k_kubo_metal": ({PASS}, {AGREE}),
+    # A Fermi level where 8 grid points sit inside pairs closer than 1e-4 eV: PyATB's direct engine zeroes
+    # them (its documented cut, reproduced at those points), its Kubo engine does not.
+    "l_direct_paircut": ({PASS_DOCUMENTED}, {DOCUMENTED}),
+    "m_kubo_paircut": ({PASS}, {AGREE}),
 }
 REFINING = {"i_threshold_10", "i_threshold_20"}
 # PyATB's own refinement counts (running.log), which QUEER's emulation of its refined sum must reproduce.
