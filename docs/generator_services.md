@@ -1055,7 +1055,10 @@ one side lies outside the table: the placement decides whether a transition is i
 table at all and moves the sum of every row beyond. There is no allowance there (until
 2026-10-18 the edge row could hold anything within the transition's weight, twice it,
 minus it or half of it). Each k-point's transitions on such an edge are one group with
-exactly two placements, inside the table (with their own rounding in the row they take)
+exactly two placements, inside the table (with their own rounding in the row they take:
+like the table's envelope, the basis difference of the group's summed weight, which a
+rotation inside a degenerate group leaves unchanged, not transition by transition, which
+priced a Kramers group on the binned first edge at about 100 times its weight)
 or outside it, and checks A and B test the table against every combination of the groups:
 the recomputation's own first, up to 10 groups (1024 combinations). Beyond 10, or where
 the recomputation's own placement splits a k-point's group across the edge, those

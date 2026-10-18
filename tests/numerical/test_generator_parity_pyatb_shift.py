@@ -712,6 +712,59 @@ def test_a_transition_on_an_outer_edge_lies_inside_the_table_or_outside_it(tmp_p
             assert "outer edges tested inside and outside the table" in judged[0]["detail"]
 
 
+def test_a_degenerate_group_on_an_outer_edge_is_priced_as_one_k_point(tmp_path):
+    """Kramers-degenerate transitions at Gamma (exchange 0) exactly on the binned table's first edge, where the
+    recomputation places them outside. Moved inside, the group's rounding is the basis difference of its summed
+    weight, which a rotation inside the degenerate group leaves unchanged: the two honest placements pass and an
+    edge row holding twice, minus, half or 1.001 times the group's weight fails. Summed transition by transition,
+    that rounding was about 100 times the group's weight and let all of them pass."""
+    from queer.compat.generator.pyatb_shift_integrand import point_integrand
+    from queer.compat.generator.shift_scfout import exactness_bound, physical_channels
+
+    model = {"exchange": 0.0}
+    probe = tmp_path / "probe"
+    probe.mkdir()
+    shift_spinor_scfout(probe / "scf.scfout", **model)
+    records = read_records(probe / "scf.scfout")
+    gamma = point_integrand(
+        physical_channels(records)[0],
+        [0.0, 0.0, 0.0],
+        SPINOR["occ_band"],
+        treatment="covariant",
+        threshold=exactness_bound(records),
+    )
+    edge = float(np.min(gamma["energies"]))
+    block = {**SPINOR, "grid": [2, 2, 2], "smearing_method": 0, "domega": 0.02}
+    block["omega"] = [edge, edge + 149 * 0.02 + 0.01]
+    run_dir = candidate(tmp_path / "kramers-edge", shift_spinor_scfout, model, 4, block)
+    table = recompute(
+        read_records(run_dir / "scf.scfout"), ShiftRun.from_block({**SHIFT_DEFAULTS, **block}), workers=1
+    ).physical["binned"]
+    assert table.groups == 1 and table.placements_exact and not table.placements[0].inside
+    reference = reference_from(tmp_path / "reference", run_dir, port_table(run_dir))
+    weight = table.placements[0].change[0]
+
+    def at_edge(factor):
+        def edit(block):
+            values = columns(block["binned_uA_V2"])
+            values[0] = table.value[0] + factor * weight
+            block["binned_uA_V2"] = as_columns(values)
+
+        return edit
+
+    for factor, honest in (
+        (0.0, True),
+        (1.0, True),
+        (2.0, False),
+        (-1.0, False),
+        (0.5, False),
+        (1.001, False),
+    ):
+        copy = edited(tmp_path / f"edge-{factor}", run_dir, at_edge(factor))
+        verdict = judge(copy, reference)["verdict"]
+        assert (verdict != FAIL) if honest else (verdict == FAIL), (factor, verdict)
+
+
 def test_outer_edge_placements_not_tested_exactly_are_not_determined(tmp_path, monkeypatch):
     """Beyond the groups whose placements are tested exactly (here a limit of one against the two k-points on the
     binned table's first edge) those transitions keep their allowance and their entries are not determined: honest or

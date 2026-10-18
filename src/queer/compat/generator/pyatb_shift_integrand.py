@@ -1261,10 +1261,15 @@ class _Sums:
             if counted[group].any():
                 split += 1
                 continue
-            # Moved in: the ordinary rounding of these transitions in the row they would take.
+            # Moved in: the ordinary rounding of these transitions in the row they would take. Like the
+            # table's own envelope, the basis difference is taken of the k-point's summed weight, which a
+            # rotation inside a degenerate group leaves unchanged, not transition by transition.
             moved = inside[:, group]
             envelope = np.max(
-                [moved @ np.abs(other.reshape(-1, width)[members] - signed[members]) for other in weights[1:]]
+                [
+                    np.abs(moved @ (other.reshape(-1, width)[members] - signed[members]))
+                    for other in weights[1:]
+                ]
                 or [np.zeros((count, width))],
                 axis=0,
             )

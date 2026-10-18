@@ -662,10 +662,12 @@ class _ShiftComparison(_PyatbComparison):
                     f"across the edge by the recomputation's own placement; at most {limit} are tested in "
                     "each placement)"
                 )
+        vanishing = [f"{name} {vanishing_note(item)}" for name, item in facts.items() if item["vanishing"]]
         return self.precondition(
             "determined",
             False,
-            "the scfout does not determine the values to the agreement tolerance: " + "; ".join(causes),
+            "the scfout does not determine the values to the agreement tolerance: "
+            + "; ".join(causes + vanishing),
         )
 
     def check_pyatb(self, printed: np.ndarray) -> bool:
