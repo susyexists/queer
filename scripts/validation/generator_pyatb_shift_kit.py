@@ -6,7 +6,10 @@ possible. It writes, under ``--output``:
 - ``soc.scfout``, ``soc_left.scfout`` (the same model on a left-handed lattice) and
   ``collinear.scfout``: the gapped models without inversion of
   ``tests/numerical/openmx_files.py`` (every level at least 0.28 eV, 0.81 eV for
-  the collinear spin-up channel, from every other);
+  the collinear spin-up channel, from every other), and ``test.scfout``: the real
+  OpenMX calibration scfout of ``pyatb-calib-60fc6b2a`` (``--calibration-scfout``;
+  honeycomb with inversion, spin-orbit coupling, a nonorthogonal basis with position
+  moments), whose shift current vanishes;
 - one directory per case holding PyATB's ``Input`` (``scfout_route ../<model>.scfout``);
 - ``shift-kit-job.sh``: the Slurm job that runs PyATB on every case (8 MPI ranks),
   after writing each case's ``inputs.sha256`` (``sha256sum ../<model>.scfout Input``);
@@ -22,7 +25,9 @@ Run it with the repository's environment::
     python scripts/validation/generator_pyatb_shift_kit.py \\
       --output ~/.cache/queer-parity-data/pyatb-shift-kit --workers 8
 
-``--no-queer`` writes the PyATB side only. The opt-in test
+``--no-queer`` writes the PyATB side only. Every case is compared with its scfout:
+the rounding floor of the vanishing case, the window's and the bins' per-transition
+records and the collinear spin-down channel are recomputed from it. The opt-in test
 ``tests/integration/test_generator_pyatb_shift_calibration.py`` judges PyATB's
 outputs, copied back into the case directories, against fresh QUEER runs.
 """
@@ -54,6 +59,9 @@ MODELS = {
     "soc_left.scfout": (shift_spinor_scfout, {"lattice": np.diag([3.0, 3.2, -3.5])}),
     "collinear.scfout": (shift_collinear_scfout, {}),
 }
+# The real calibration scfout, copied into the kit.
+CALIBRATION = "test.scfout"
+CALIBRATION_SOURCE = Path.home() / ".cache" / "queer-parity-data" / "pyatb-calib-60fc6b2a" / "test.scfout"
 SPINOR = {
     "occ_band": 2,
     "omega": [0.3, 6.5],
@@ -133,6 +141,28 @@ CASES = {
         "pass",
         ["agree_after_convention"],
         "a left-handed lattice: PyATB's signed cell volume flips every component",
+    ),
+    "h_real_zero": (
+        CALIBRATION,
+        4,
+        {**SPINOR, "occ_band": 3, "omega": [0.0, 12.0], "grid": [12, 12, 1]},
+        False,
+        "pass",
+        ["agree", "agree_after_convention"],
+        "the real calibration scfout, whose shift current vanishes by inversion (1e-9 microA/V^2 against k-point "
+        "weights of 1-10): both codes print rounding, which agrees within the rounding floor recomputed from the "
+        "scfout; the symmetry gate is not applicable and the case is no clean control",
+    ),
+    "i_pyatb_default": (
+        "soc.scfout",
+        4,
+        {**SPINOR, "eta": 0.01, "domega": 0.01},
+        False,
+        "not_comparable",
+        ["agree", "agree_after_convention", "differs_unexplained"],
+        "PyATB's default eta 0.01 on its default step domega 0.01: its Hartree constant moves the table beyond 1e-4 "
+        "of its peak and on a step above 0.4 eta it cannot be moved back from its own curve (no clean control; "
+        "not comparable where the difference lies within the Hartree scale's reach, a failure beyond it)",
     ),
 }
 JOB = """#!/bin/bash -l
@@ -267,7 +297,9 @@ def readme(output: Path, summary: dict) -> str:
         "position moments). PyATB 60fc6b2a's own reader (`pyatb/io/openmx_read_scfout.py`, loaded from its source",
         "with its multiXR container stubbed) parses them: nspin 4 (SpinP_switch 3) for `soc*.scfout`, nspin 1",
         "(SpinP_switch 1) for `collinear.scfout`, a negative det(tv) for `soc_left.scfout`, and its eigenvalues",
-        "equal QUEER's times 27.211324570273 / HARTREE_EV (its Hartree constant) to 1e-12 eV.",
+        "equal QUEER's times 27.211324570273 / HARTREE_EV (its Hartree constant) to 1e-12 eV. `test.scfout` is the",
+        "real OpenMX calibration scfout of `pyatb-calib-60fc6b2a` (honeycomb with inversion, spin-orbit coupling, a",
+        "nonorthogonal basis with position moments, 30 spinor bands), whose shift current vanishes.",
         "",
         "## Files (SHA-256)",
         "",
@@ -310,8 +342,11 @@ def readme(output: Path, summary: dict) -> str:
         "the table PyATB should print (its Hartree scale, window rule, int() bins, Gaussian truncation,",
         "constants, spin factor and signed volume applied to QUEER's transitions), a diagnostic only. Without",
         "smearing `pyatb_scheme.moved_transitions` lists the transitions PyATB's bins place in another row than",
-        "QUEER's histogram (`moved_transitions` in the summary counts them); no case has a k-point PyATB's",
-        "method 1 regularizes, so none needs the scfout recomputed.",
+        "QUEER's histogram (`moved_transitions` in the summary counts them) and with a Gaussian",
+        "`pyatb_scheme.window_transitions` those its window drops within reach of a photon energy; the",
+        "comparison recomputes both from the scfout, as it recomputes the largest k-point rounding scales (the",
+        "rounding floor that the vanishing `h_real_zero` agrees within) and the collinear scfout's spin-down",
+        "channel, which PyATB never reads. No case has a k-point PyATB's method 1 regularizes.",
         "`queer-side/summary.json` lists the headline numbers and the build (`queer_source_sha256`) the runs",
         "come from.",
         "",
@@ -332,8 +367,9 @@ def readme(output: Path, summary: dict) -> str:
         "`~/.cache/queer-parity-data/pyatb-shift-kit` and `QUEER_PARITY_REPORT_DIR` receives every report. The",
         "clean control (`a_clean_control`) is judged first: every component must meet QUEER's physical value",
         "directly (to 1e-4 of the peak, PyATB's table moved to QUEER's Hartree constant from its own curve; no",
-        "number of QUEER's run widens that), and the emulation must reproduce PyATB's table to its print",
-        "precision (1e-6 of each value). Every case is compared with its scfout (`scfout=`). Its report, for the same",
+        "number of QUEER's run widens that, and a clean control needs a step of at most 0.4 eta and a table above",
+        "its rounding floor), and the emulation must reproduce PyATB's table to its print precision (1e-6 of each",
+        "value). Every case is compared with its scfout (`scfout=`). Its report, for the same",
         "build (queer_version, RECORD, build_sha, and the digest of every .py file of the queer package that ran",
         "the case and that compares it), is applied to every other case: a difference is documented only after",
         "it passed.",
@@ -347,11 +383,16 @@ def main(argv=None) -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--no-queer", action="store_true")
+    parser.add_argument("--calibration-scfout", type=Path, default=CALIBRATION_SOURCE)
     options = parser.parse_args(argv)
     output = options.output.expanduser()
     output.mkdir(parents=True, exist_ok=True)
     for name, (writer, arguments) in MODELS.items():
         writer(output / name, **arguments)
+    source = options.calibration_scfout.expanduser()
+    if not source.is_file():
+        parser.error(f"no calibration scfout at {source} (--calibration-scfout)")
+    shutil.copy(source, output / CALIBRATION)
     for case, (model, nspin, block, *_) in CASES.items():
         (output / case).mkdir(exist_ok=True)
         (output / case / "Input").write_text(input_text(model, nspin, block, output / model))

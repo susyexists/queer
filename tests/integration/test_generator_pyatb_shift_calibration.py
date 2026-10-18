@@ -40,7 +40,14 @@ KIT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(KIT)
 CLEAN = "a_clean_control"
 # Cases where PyATB should print QUEER's emulation of its scheme to its own print precision.
-EMULATED = {"a_clean_control", "c_no_smearing", "e_collinear", "f_band_pair", "g_left_handed"}
+EMULATED = {
+    "a_clean_control",
+    "c_no_smearing",
+    "e_collinear",
+    "f_band_pair",
+    "g_left_handed",
+    "i_pyatb_default",
+}
 # PyATB prints %15.6e: seven significant digits, a rounding of at most 5e-7 of each value.
 PRINT_PRECISION = 1e-6
 
