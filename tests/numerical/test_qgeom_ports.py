@@ -521,3 +521,122 @@ def test_kernel_constants_of_the_integrator_equal_the_port(generator_qgeom):
         core.AdaptiveMesh.MAX_BASE,
     )
     assert math.isclose(phys.CHI_MA_NM_PER_V2_PER_A_PER_EV, 2.434135e-2, rel_tol=1e-6)
+
+
+def test_the_drivers_summary_helpers_equal_the_ports(generator_core, generator_qgeom, tmp_path):
+    """The driver's own QGEOM helpers in ``pythtb_core`` and the kernel's output helpers."""
+    from queer.compat.generator import qgeom_step as step
+
+    core, kernel = generator_core, generator_qgeom
+    rng = np.random.default_rng(110)
+    mu = np.linspace(-0.1, 0.1, 21)
+    for count in (np.linspace(1.5, 2.5, 21), np.r_[np.full(10, 2.0), np.linspace(2.0, 3.0, 11)], np.ones(21)):
+        for n_occ in (1, 2, 3):
+            assert step.mu_cnp(count, mu, n_occ) == core._qgeom_mu_cnp(count, mu, n_occ)
+    for M in (rng.normal(size=(2, 2, 2)), kernel.trigonal_tensor(0.3, 0.1), np.zeros((2, 2, 2))):
+        assert step.chi_amplitudes(M) == core._chi_amplitudes(M, kernel)
+    for gap in (None, 1e-3, 5e-5, -5e-5, -1e-2):
+        occ = {"global_gap": gap}
+        assert step.state_at_cnp(occ, 1e-4) == core._state_at_cnp(occ, 1e-4)
+    original, port, _ = tables(kernel, rng, bands=3, fermi=0.4)
+    settings = integration_settings()
+    a = obs.adaptive_response(port, **settings)["integrator"]
+    b = kernel.adaptive_response(original, **settings)["integrator"]
+    bcd = rng.normal(size=2)
+    for m in (0.0, float(a.mu_subset[3]), 0.0123):
+        assert step.bcd_residual(a, bcd, m) == core._bcd_residual(b, bcd, m)
+    payload = {"x": np.linspace(0, 1, 7), "y": [1.23456789, float("nan"), 3], "z": {"t": np.float32(2.5)}}
+    assert step.compact(payload) == kernel.compact(payload)
+    assert step.compact(payload, 3) == kernel.compact(payload, 3)
+    size_a = step.write_json_compact(tmp_path / "a.json", payload)
+    size_b = kernel.write_json_compact(str(tmp_path / "b.json"), payload)
+    assert size_a == size_b and (tmp_path / "a.json").read_bytes() == (tmp_path / "b.json").read_bytes()
+    curves = {"mu": np.arange(9.0), "list": list(range(9)), "short": [1, 2], "nested": {"c": np.ones((9, 2))}}
+    for stride in (1, 2, 4):
+        same_tree(step.decimate(curves, stride, 9), kernel.decimate(curves, stride, 9))
+    assert step.units() == kernel.units()
+    assert step.QGEOM_OUT_BUDGET_BYTES == core.QGEOM_OUT_BUDGET_BYTES
+    assert (
+        step.QGEOM_SMEARED_WARN == core.QGEOM_SMEARED_WARN
+        and step.ANTI_HERMITIAN_WARN == core.ANTI_HERMITIAN_WARN
+    )
+    assert step.FULL_POSITION_NOTE == core.FULL_POSITION_NOTE
+
+
+def test_the_display_path_equals_the_drivers(generator_core, generator_qgeom):
+    """``path_points``: the band path plus log-spaced points around each tick, as ``_qgeom_path_points``."""
+    from types import SimpleNamespace
+
+    from queer.compat.generator import qgeom_step as step
+    from queer.compat.generator.pythtb_params import translate_pythtb
+
+    core, kernel = generator_core, generator_qgeom
+    lattice = HEXAGONAL
+    frame = kernel.layer_frame(lattice)
+    kpoints = np.r_[
+        np.c_[np.linspace(0, 0.5, 11), np.zeros(11)],
+        np.c_[np.linspace(0.5, 1 / 3, 8), np.linspace(0, 1 / 3, 8)],
+    ]
+    path = {
+        "kpoints": np.c_[kpoints, np.zeros(len(kpoints))],
+        "tick_indices": [0, 10, 18],
+        "tick_labels": ["G", "M", "K"],
+        "break_indices": [11],
+    }
+    for settings in (
+        {"path_log_points": 5},
+        {"path_log_points": 0},
+        {"path_kpoints_frac": [[0, 0, 0], [0.5, 0, 0]]},
+    ):
+        params = translate_pythtb({"step_type": "PYTHTB_QGEOM", **settings})
+        ours = SimpleNamespace(params=params, lattice=lattice, band_path=lambda: dict(path), record=None)
+        theirs = SimpleNamespace(
+            params=dict(params.values), lattice=lattice, band_path=lambda: dict(path), warnings=[]
+        )
+        same_tree(step.path_points(ours, frame), core._qgeom_path_points(theirs, kernel, frame))
+
+
+def test_the_full_position_table_and_its_checks_equal_the_drivers(
+    generator_core, generator_qgeom, tmp_path, monkeypatch
+):
+    """``full_table`` against ``_qgeom_full_table`` on a staged WANNIER job (no Wigner-Seitz correction)."""
+    import json
+    from types import SimpleNamespace
+
+    from generator_golden_cases import write_case
+
+    from queer.compat.generator import qgeom_step as step
+    from queer.compat.generator.pythtb_params import translate_pythtb
+    from queer.compat.generator.wannier_steps import WannierStepContext
+
+    core, kernel = generator_core, generator_qgeom
+    params = write_case("qgeom_full_insulator", tmp_path)
+    context = WannierStepContext(
+        translate_pythtb(json.loads(params.read_text())), tmp_path, log=lambda line: None
+    )
+    context.build_model()
+    assert context.ws_report["mode"] == "off"
+    frame = kernel.layer_frame(context.lattice)
+    H = np.asarray(context.table_H, complex).copy()
+    H[np.flatnonzero(~context.table_R.any(axis=1))[0]] -= context.fermi * np.eye(context.n_orb)
+    table, report = step.full_table(context, frame, H)
+    driver = SimpleNamespace(
+        n_orb=context.n_orb,
+        lattice=context.lattice,
+        centres=context.centres,
+        hr_degeneracy=context.hr_degeneracy,
+        table_R=context.table_R,
+        table_H=context.table_H,
+        params=dict(context.params.values),
+        warnings=[],
+        log=lambda line: None,
+        _record_input=lambda name: None,
+        ws_apply=lambda R, stack: core.fold_axes(R, stack, context.folded_axes),
+    )
+    monkeypatch.chdir(tmp_path)
+    expected_table, expected_report = core._qgeom_full_table(driver, kernel, frame, H)
+    close(table.stack, expected_table.stack)
+    assert table.level == expected_table.level == "full"
+    for value in (report, expected_report):
+        value["tb"].pop("read_seconds")
+    same_tree(report, expected_report)
