@@ -34,8 +34,10 @@ curvature, QUEER checks it against its own band geometry
 consistency check, labelled as such in ``qgeom.parity``. QUEER reads the ``.win``'s
 ``kpoints`` block, so its ``.eig`` check runs where the driver's is always skipped.
 ``integration`` adds ``replay`` (the stop controls), ``stop_vertices`` (the vertex
-count when the integration stopped) and ``vertex_set`` (count and SHA-256 of the
-vertex keys); ``Out/qgeom_vertices.json`` holds the keys for a replay comparison.
+count when the integration stopped), ``vertex_set`` (count and SHA-256 of the
+vertex keys) and ``decision_ties`` (the decisions within rounding of their thresholds,
+:meth:`~queer.observables.qgeom.Integrator.decision_record`); ``Out/qgeom_vertices.json``
+holds the keys in creation order for a replay comparison.
 """
 
 from __future__ import annotations
@@ -503,21 +505,26 @@ def state_at_cnp(occ: Mapping[str, Any], min_gap: float) -> str:
 
 
 def vertex_set(integ: obs.Integrator) -> tuple[dict[str, Any], dict[str, Any]]:
-    """The mesh's vertex set: its summary (count, unit and SHA-256 of the sorted keys) and the replay file."""
+    """The mesh's vertex set: its summary (count, unit and SHA-256 of the sorted keys) and the replay file,
+    whose keys are in creation order (each decision round's splits created a contiguous range of them)."""
     mesh = integ.mesh
-    keys = np.sort(mesh.vertex_keys()).astype("<i8")
-    digest = hashlib.sha256(keys.tobytes()).hexdigest()
+    created = mesh.vertex_keys().astype("<i8")
+    digest = hashlib.sha256(np.sort(created).tobytes()).hexdigest()
     summary = {
-        "count": int(len(keys)),
+        "count": int(len(created)),
         "base": int(mesh.base),
         "unit": int(mesh.unit),
         "sha256": digest,
         "file": VERTICES_FILE,
     }
     content = {
-        "description": "Vertex keys x * unit + y of the final quadtree, x and y in units of 1/unit from -1/2",
+        "description": (
+            "Vertex keys x * unit + y of the final quadtree, x and y in units of 1/unit from -1/2, in creation "
+            "order; sha256 is the digest of the sorted keys"
+        ),
         **{key: summary[key] for key in ("count", "base", "unit", "sha256")},
-        "keys": keys.tolist() if len(keys) <= VERTEX_KEYS_MAX else None,
+        "order": "creation",
+        "keys": created.tolist() if len(created) <= VERTEX_KEYS_MAX else None,
     }
     return summary, content
 
@@ -614,6 +621,7 @@ def run_qgeom(ctx: WannierStepContext) -> None:
     summary["integration"]["stop_vertices"] = integ.stop_at_vertices
     vertices, content = vertex_set(integ)
     summary["integration"]["vertex_set"] = vertices
+    summary["integration"]["decision_ties"] = integ.decision_record()
     write_json_compact(ctx.workspace / VERTICES_FILE, content)
     ctx.record.add_output(VERTICES_FILE, "Quantum geometry mesh vertices (replay record)", "data")
     ctx.record.provenance["queer_qgeom_sha256"] = source_sha256(list(QGEOM_SOURCES))

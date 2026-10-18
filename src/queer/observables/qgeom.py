@@ -19,6 +19,16 @@ replay of a run that stopped on its time budget, when the mesh reaches
 ``stop_vertices`` vertices, reported as that run's "time" stop. Without a
 deadline the vertex set and every integral depend only on the inputs.
 
+Beside the kernel's arithmetic, and without changing the mesh or the history, QUEER
+records the decisions rounding can flip (:meth:`Integrator.decision_record`): the
+occupation pass's seeds (:func:`seed_ties`), each must-split round, each refinement
+step and the second stage's A3 maximum, with every decision whose margin to its
+threshold lies within its band (TIE_ROUNDING of the run's spectral radius or largest
+velocity, TIE_INDICATOR of the compared indicator), per rule an additive digest of the
+leaves split (:func:`set_digest`) and the range of vertex ids their splits created, and
+the controlled quantities whose scale is rounding (they vanish identically, so their
+error estimates are rounding noise).
+
 :func:`layer_band_geometry` and :func:`nonlinear_hall_response` return
 :class:`~queer.observables.result.ObservableResult` arrays with dimensions, units
 and diagnostics. This is the Generator's ``pythtb_qgeom`` kernel, operation for
@@ -81,6 +91,57 @@ VERTEX_KEY = "_key"
 STOP_BUDGET = "budget"
 STOP_TIME = "time"
 STOP_DEPTH = "depth"
+
+# The decision record (QUEER's, not the kernel's): a comparison whose margin lies within its
+# rounding band is "tied", since another BLAS kernel may decide it the other way. An energy or
+# velocity band is TIE_ROUNDING times the run's own scale of that quantity (the spectral radius
+# over the occupation grid, the largest band or interband velocity of the base mesh); the error
+# indicators, their running sums and the A3 maximum are compared to TIE_INDICATOR of their value.
+TIE_ROUNDING = 1e-12
+TIE_INDICATOR = 1e-7
+# Tied decisions listed per run at most; beyond it the record keeps its counts and digests only.
+TIE_LIST_MAX = 20_000
+# A cell decision's outcomes, as indices into this tuple (bit i of a mask: outcome i possible).
+OUTCOMES = ("none", "seed", "gap", "edge", "error")
+MUST_SPLIT_RULES = ("seed", "gap", "edge")
+# The Fermi-surface columns of the error estimate, as :data:`FS_COLUMNS`.
+FS_NAMES = (
+    ("count",)
+    + tuple(f"v_{'xy'[a]} G_{'xy'[b]}{'xy'[c]}" for a in range(2) for b, c in SYMMETRIC_PAIRS)
+    + ("v_x omega", "v_y omega")
+)
+SEED_KINDS = ("gap", "extremum")
+_MASK64 = (1 << 64) - 1
+
+
+def key_hashes(keys: Any) -> np.ndarray:
+    """splitmix64 of int64 keys, as uint64 (wrapping arithmetic)."""
+    z = np.asarray(keys, np.int64).ravel().astype(np.uint64) + np.uint64(0x9E3779B97F4A7C15)
+    z = (z ^ (z >> np.uint64(30))) * np.uint64(0xBF58476D1CE4E5B9)
+    z = (z ^ (z >> np.uint64(27))) * np.uint64(0x94D049BB133111EB)
+    return z ^ (z >> np.uint64(31))
+
+
+def set_digest(keys: Any) -> str:
+    """An order-free digest of a set of int64 keys: the sum of their splitmix64 hashes modulo 2^64, in hex.
+
+    Digests of disjoint sets add, so a known part of a set can be taken out of its digest.
+    """
+    total = int(np.sum(key_hashes(keys), dtype=np.uint64)) if np.size(keys) else 0
+    return f"{total & _MASK64:016x}"
+
+
+def _tri(margin: Any, band: Any) -> tuple[np.ndarray, np.ndarray]:
+    """For a decision "margin > 0" (or ">= 0") known to within +-band: where it surely holds and where
+    it possibly holds."""
+    m = np.asarray(margin, float)
+    return m > band, m >= -np.asarray(band, float)
+
+
+def seed_id(index: int, kind: str, b0: int, b1: int) -> int:
+    """A seed's integer id: its grid index, kind and band (pair)."""
+    return ((int(index) * 4 + SEED_KINDS.index(kind)) * 4096 + int(b0)) * 4096 + int(b1)
+
 
 Payload = Callable[[np.ndarray], Mapping[str, np.ndarray]]
 
@@ -350,6 +411,14 @@ def local_extrema(grid: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return grid < stack.min(axis=0), grid > stack.max(axis=0)
 
 
+def extremum_margins(grid: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """The margins of :func:`local_extrema`'s strict tests: the neighbours' minimum less the value (a
+    minimum where positive) and the value less the neighbours' maximum (a maximum where positive)."""
+    nbrs = [np.roll(np.roll(grid, dx, 0), dy, 1) for dx in (-1, 0, 1) for dy in (-1, 0, 1) if dx or dy]
+    stack = np.stack(nbrs)
+    return stack.min(axis=0) - grid, grid - stack.max(axis=0)
+
+
 def occupation_pass(
     table: QgeomTable,
     *,
@@ -364,6 +433,7 @@ def occupation_pass(
     c3_points: int = 512,
     chunk: int = 4096,
     energies_fn: Callable[[np.ndarray], np.ndarray] | None = None,
+    ties: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Energies on a Gamma-centred n x n grid (plus ``extra_kfrac``): the band window, the electron
     count, the gaps, the refinement seeds, the PT flag and the Wannier C3 band floor.
@@ -373,6 +443,9 @@ def occupation_pass(
     moved to global gaps; ``n_occ`` is ``occupied_bands`` or the rounded count below
     E_F; seeds are the local gap minima below ``hot_gap`` and the band extrema in the
     widened range.
+
+    ``ties`` (QUEER's decision record, the returned values unchanged) receives the seed
+    decisions rounding can flip: :func:`seed_ties`.
     """
     energies = energies_fn or table.energies
     k = uniform_grid(n)
@@ -454,6 +527,20 @@ def occupation_pass(
     out["seeds"] = np.asarray(seeds, float).reshape(-1, 3)
     out["seed_info"] = seed_info
     out["mu_seeds"] = sorted(mu_seeds)
+    if ties is not None:
+        ties.update(
+            seed_ties(
+                E,
+                sorted(set(pairs)),
+                (lo, hi),
+                grid_shape,
+                hot_gap=hot_gap,
+                deg_tol=deg_tol,
+                extended=(lo_e, hi_e),
+                mu_range=mu_range,
+                radius=float(max(np.abs(emin).max(), np.abs(emax).max())),
+            )
+        )
     # PT pairs: most adjacent window pairs split by less than 1 meV.
     splits = [float(np.median(E[:, b + 1] - E[:, b])) for b in range(lo, hi - 1)]
     tiny = [s for s in splits if s < 1e-3]
@@ -471,6 +558,77 @@ def occupation_pass(
     else:
         out["c3_band_floor"] = None
     return out
+
+
+def seed_ties(
+    E: np.ndarray,
+    pairs: Sequence[tuple[int, int]],
+    window: tuple[int, int],
+    grid_shape: tuple[int, int],
+    *,
+    hot_gap: float,
+    deg_tol: float,
+    extended: tuple[float, float],
+    mu_range: tuple[float, float],
+    radius: float,
+) -> dict[str, Any]:
+    """The occupation pass's seed decisions and those rounding can flip (QUEER's record).
+
+    A seed is a strict local minimum of a pair's gap below ``hot_gap`` and above ``deg_tol``,
+    or a strict local extremum of a window band inside the ``extended`` range; its energy
+    joins the controlled mu inside ``mu_range``. An eigenvalue is known to within
+    ``TIE_ROUNDING`` times the spectral ``radius``: a band value to that band, a gap or a
+    neighbour difference of band values to twice it, a neighbour difference of gaps to four
+    times it. Returns the seed count, the digest of their ids (:func:`seed_id`), the number
+    of decisions judged and the tied ones as [grid index, kind, b0, b1, taken].
+    """
+    band = TIE_ROUNDING * radius
+    ids: list[int] = []
+    tied: list[list[int]] = []
+    judged = 0
+    mu_seeds = mu_tied = 0
+    for b0, b1 in pairs:
+        gap = (E[:, b1] - E[:, b0]).reshape(grid_shape)
+        mins, _ = local_extrema(gap)
+        g = gap.ravel()
+        taken = mins.ravel() & (g < hot_gap) & (g > deg_tol)
+        lower, _ = extremum_margins(gap)
+        s1, p1 = _tri(lower.ravel(), 4.0 * band)
+        s2, p2 = _tri(hot_gap - g, 2.0 * band)
+        s3, p3 = _tri(g - deg_tol, 2.0 * band)
+        sure, possible = s1 & s2 & s3, p1 & p2 & p3
+        ids += [seed_id(int(i), "gap", b0, b1) for i in np.flatnonzero(taken)]
+        tied += [[int(i), 0, b0, b1, int(taken[i])] for i in np.flatnonzero(possible & ~sure)]
+        judged += len(g)
+    for b in range(*window):
+        grid = E[:, b].reshape(grid_shape)
+        mins, maxs = local_extrema(grid)
+        e = grid.ravel()
+        taken = (mins | maxs).ravel() & (e >= extended[0]) & (e <= extended[1])
+        lower, upper = extremum_margins(grid)
+        smin, pmin = _tri(lower.ravel(), 2.0 * band)
+        smax, pmax = _tri(upper.ravel(), 2.0 * band)
+        slo, plo = _tri(e - extended[0], band)
+        shi, phi = _tri(extended[1] - e, band)
+        sure, possible = (smin | smax) & slo & shi, (pmin | pmax) & plo & phi
+        ids += [seed_id(int(i), "extremum", b, b) for i in np.flatnonzero(taken)]
+        tied += [[int(i), 1, b, b, int(taken[i])] for i in np.flatnonzero(possible & ~sure)]
+        judged += len(e)
+        in_mu = taken & (e >= mu_range[0]) & (e <= mu_range[1])
+        m0s, m0p = _tri(e - mu_range[0], band)
+        m1s, m1p = _tri(mu_range[1] - e, band)
+        mu_seeds += int(np.count_nonzero(in_mu))
+        mu_tied += int(np.count_nonzero((possible & m0p & m1p) & ~(sure & m0s & m1s)))
+    return {
+        "count": len(ids),
+        "digest": set_digest(np.asarray(ids, np.int64)),
+        "judged": judged,
+        "band_eV": band,
+        "tied_count": len(tied),
+        "tied": tied,
+        "mu_seeds": mu_seeds,
+        "mu_seeds_tied": mu_tied,
+    }
 
 
 # ---------------------------------------------------------------- the quadtree
@@ -725,6 +883,23 @@ class Integrator:
         self._scales_fixed: tuple[dict[str, Any], dict[float, tuple[float, float]]] | None = None
         self._totals: np.ndarray | None = None
         self._n_signed = 0
+        # QUEER's decision record (:meth:`decision_record`), kept beside the kernel's arithmetic.
+        # ``tie_scales`` may preset the energy scale (eV, the spectral radius) and the velocity
+        # scale (eV Å); the base mesh's own values are the floor of each.
+        self.tie_scales: dict[str, float] = {}
+        self.seed_ties: dict[str, Any] | None = None
+        self.decision_rounds: list[dict[str, Any]] = []
+        self._bands: dict[str, float] | None = None
+        self._bounds: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        self._judged = np.zeros(0, np.int64)
+        self._listed = 0
+        self._truncated = False
+        # Per stage: which error-estimate columns normalise a rounding-level quantity, and per leaf
+        # whether its indicator (its largest normalised error) is one of theirs.
+        self._noise = np.zeros(0, bool)
+        self._noisy = np.zeros(0, bool)
+        self._noise_names: dict[str, int] = {}
+        self._last_noisy = np.zeros(0, bool)
 
     # -- budget ------------------------------------------------------------
     def _out_of_budget(self) -> str | None:
@@ -750,6 +925,9 @@ class Integrator:
         todo = np.flatnonzero(~mesh.checked)
         n_all = len(mesh.lvl)
         flags: dict[str, np.ndarray] = {}
+        bands = self._tie_bands()
+        self._bounds = bounds = {}
+        cells = np.zeros(0, np.int64)
         if len(self.seeds):
             seed = np.zeros(n_all, bool)
             cells = mesh.contains(self.seeds)
@@ -757,6 +935,10 @@ class Integrator:
             d_all = mesh.diameter(mesh.lvl[cells])
             seed[cells] = d_all > self.seed_diameter
             flags["seed"] = seed
+            bounds["seed"] = self._widen_bounds(
+                n_all, cells, _tri(d_all - self.seed_diameter, bands["seed_diameter_invA"])
+            )
+        self._judged = np.union1d(todo, cells)
         mesh.checked[todo] = True
         if not len(todo):
             return flags
@@ -781,18 +963,291 @@ class Integrator:
             )
             split_pair &= gap > 1e-9  # a symmetry-degenerate pair is not an anticrossing
             gap_flag = split_pair.any(axis=1)
+            gs = vs = None
             if self.s_applies and "gap_S" in vals:
                 gs = vals["gap_S"][vid].min(axis=1)
                 vs = vals["v_S"][vid].max(axis=1)
                 gap_flag |= d * vs > self.gap_ratio * np.maximum(gs, self.gap_floor)
             flags["gap"] = widen(gap_flag)
+            bounds["gap"] = self._widen_bounds(n_all, todo, self._gap_bounds(E, nxt, gap, vmax, d, gs, vs))
         v = vals["v"][vid]  # (ncell, 5, nW, 2)
         span = E.max(axis=1) - E.min(axis=1)
         turn = (v.min(axis=1) < 0) & (v.max(axis=1) > 0)
         inner = turn.all(axis=-1)
         reach = (E.max(axis=1) >= self.ext[0]) & (E.min(axis=1) <= self.ext[1])
         flags["edge"] = widen((inner & reach & (span > self.edge_resolution)).any(axis=1))
+        bounds["edge"] = self._widen_bounds(n_all, todo, self._edge_bounds(E, v, span))
         return flags
+
+    # -- the decision record (QUEER's) -----------------------------------
+    def _tie_bands(self) -> dict[str, float]:
+        """The rounding bands of the must-split comparisons, fixed at the first judgement (the base mesh).
+
+        Energies: TIE_ROUNDING times the spectral radius (``tie_scales["energy"]``, at least the
+        base mesh's largest window energy); velocities: TIE_ROUNDING times the largest band,
+        interband or occupied-block velocity of the base mesh (at least ``tie_scales["velocity"]``);
+        the seed rule's diameter: TIE_ROUNDING times the seed diameter.
+        """
+        if self._bands is None:
+            vals = self.mesh.vals
+            energy = max(
+                [float(self.tie_scales.get("energy", 0.0))]
+                + [float(np.max(np.abs(vals[k]))) for k in ("E", "E_above") if k in vals and vals[k].size]
+            )
+            velocity = max(
+                [float(self.tie_scales.get("velocity", 0.0))]
+                + [
+                    float(np.max(np.abs(vals[k])))
+                    for k in ("v", "v_pair", "v_S")
+                    if k in vals and vals[k].size
+                ]
+            )
+            self._bands = {
+                "rounding": TIE_ROUNDING,
+                "indicator": TIE_INDICATOR,
+                "energy_scale_eV": energy,
+                "velocity_scale_eVA": velocity,
+                "energy_eV": TIE_ROUNDING * energy,
+                "velocity_eVA": TIE_ROUNDING * velocity,
+                "seed_diameter_invA": TIE_ROUNDING * self.seed_diameter,
+            }
+        return self._bands
+
+    @staticmethod
+    def _widen_bounds(
+        n_all: int, index: np.ndarray, bound: tuple[np.ndarray, np.ndarray]
+    ) -> tuple[np.ndarray, np.ndarray]:
+        sure, possible = np.zeros(n_all, bool), np.zeros(n_all, bool)
+        sure[index], possible[index] = bound
+        return sure, possible
+
+    def _gap_bounds(self, E, nxt, gap, vmax, d, gs, vs) -> tuple[np.ndarray, np.ndarray]:
+        """Where the gap rule surely and possibly holds, each comparison within its band: d vmax against
+        gap_ratio max(gap, gap_floor) to d times the velocity band plus gap_ratio times twice the energy
+        band, the extended range to the energy band, the 1e-9 eV degeneracy floor to twice it."""
+        b = self._tie_bands()
+        bE, bV = b["energy_eV"], b["velocity_eVA"]
+        lo, hi = self.ext
+        ratio_s, ratio_p = _tri(
+            d[:, None] * vmax - self.gap_ratio * np.maximum(gap, self.gap_floor),
+            d[:, None] * bV + self.gap_ratio * 2.0 * bE,
+        )
+        near_s, near_p = _tri(np.minimum(E - lo, hi - E).max(axis=1), bE)
+        next_s, next_p = _tri(np.minimum(nxt - lo, hi - nxt).max(axis=1), bE)
+        split_s, split_p = _tri(gap - 1e-9, 2.0 * bE)
+        sure = (ratio_s & (near_s | next_s) & split_s).any(axis=1)
+        possible = (ratio_p & (near_p | next_p) & split_p).any(axis=1)
+        if gs is not None:
+            s_s, s_p = _tri(
+                d * vs - self.gap_ratio * np.maximum(gs, self.gap_floor), d * bV + self.gap_ratio * 2.0 * bE
+            )
+            sure, possible = sure | s_s, possible | s_p
+        return sure, possible
+
+    def _edge_bounds(self, E, v, span) -> tuple[np.ndarray, np.ndarray]:
+        """Where the edge rule surely and possibly holds: each velocity component's sign within the
+        velocity band, the extended range within the energy band, the span within twice it."""
+        b = self._tie_bands()
+        bE, bV = b["energy_eV"], b["velocity_eVA"]
+        neg_s, neg_p = _tri(-v.min(axis=1), bV)
+        pos_s, pos_p = _tri(v.max(axis=1), bV)
+        reach_lo_s, reach_lo_p = _tri(E.max(axis=1) - self.ext[0], bE)
+        reach_hi_s, reach_hi_p = _tri(self.ext[1] - E.min(axis=1), bE)
+        span_s, span_p = _tri(span - self.edge_resolution, 2.0 * bE)
+        sure = ((neg_s & pos_s).all(axis=-1) & reach_lo_s & reach_hi_s & span_s).any(axis=1)
+        possible = ((neg_p & pos_p).all(axis=-1) & reach_lo_p & reach_hi_p & span_p).any(axis=1)
+        return sure, possible
+
+    def _centre_keys(self, idx: np.ndarray) -> np.ndarray:
+        """The integer key of each leaf's centre vertex, which names the cell."""
+        return np.asarray(self.mesh._buf[VERTEX_KEY][self.mesh.vid[np.asarray(idx, np.int64), 4]], np.int64)
+
+    def _list(self, rows: list[list[Any]]) -> list[list[Any]]:
+        """Rows of tied decisions within the run's listing budget (:data:`TIE_LIST_MAX`)."""
+        room = max(TIE_LIST_MAX - self._listed, 0)
+        if len(rows) > room:
+            self._truncated = True
+            rows = rows[:room]
+        self._listed += len(rows)
+        return rows
+
+    def _must_split_round(self, chosen: Mapping[str, np.ndarray]) -> dict[str, Any]:
+        """The record of a must-split round, before its splits: each judged leaf's possible outcomes
+        (the first rule that holds, in the order seed, gap, edge, below the depth limit; a capped gap
+        rule defers its leaves), the tied ones and the digest of the leaves each rule splits."""
+        mesh = self.mesh
+        n_all = len(mesh.lvl)
+        deferred = "gap" in chosen and mesh.vertices_by_rule.get("gap", 0) >= 0.3 * self.max_points
+        allowed = mesh.lvl < AdaptiveMesh.DEPTH - 2
+        possible = np.zeros((n_all, len(OUTCOMES)), bool)
+        settled = np.zeros(n_all, bool)
+        counts: dict[str, int] = {}
+        judged = self._judged
+        for rule in MUST_SPLIT_RULES:
+            if rule not in self._bounds:
+                continue
+            sure, maybe = self._bounds[rule]
+            reachable = ~settled & allowed
+            code = OUTCOMES.index("none" if rule == "gap" and deferred else rule)
+            possible[:, code] |= maybe & reachable
+            counts[rule] = int(np.count_nonzero((maybe & ~sure & reachable)[judged]))
+            settled |= sure & allowed
+        possible[:, 0] |= ~settled
+        outcome = np.zeros(n_all, np.int64)
+        splits: dict[str, int] = {}
+        digest: dict[str, str] = {}
+        for rule, idx in chosen.items():
+            if rule == "gap" and deferred:
+                continue
+            outcome[idx] = OUTCOMES.index(rule)
+            splits[rule] = int(len(idx))
+            digest[rule] = set_digest(self._centre_keys(idx))
+        # The run's own outcome lies inside its possible ones unless the bounds are not the rules.
+        outside = int(np.count_nonzero(~possible[judged, outcome[judged]]))
+        tied = judged[np.count_nonzero(possible[judged], axis=1) > 1]
+        masks = (possible[tied] * (1 << np.arange(len(OUTCOMES)))).sum(axis=1)
+        rows = [[int(k), int(m), int(o)] for k, m, o in zip(self._centre_keys(tied), masks, outcome[tied])]
+        return {
+            "phase": "must_split",
+            "history": None,
+            "judged": int(len(judged)),
+            "tied_count": int(len(tied)),
+            "tied_by_rule": counts,
+            "outside": outside,
+            "tied": self._list(rows),
+            "splits": splits,
+            "digest": digest,
+            "gap_deferred": bool(deferred),
+            "leaves": [n_all, n_all],
+            "vertices": [int(mesh.nv), int(mesh.nv)],
+            "ranges": {},
+        }
+
+    def _error_round(self, target: float, worst: float) -> dict[str, Any]:
+        """The record of a refinement step: its stop test worst <= target, tied within TIE_INDICATOR of
+        the larger of the two."""
+        band = TIE_INDICATOR * max(target, worst)
+        return {
+            "phase": "error",
+            "history": len(self.history) - 1,
+            "target": target,
+            "stop": {
+                "worst": worst,
+                "margin": target - worst,
+                "band": band,
+                "tied": bool(abs(target - worst) <= band),
+                "by": None,
+            },
+            "judged": 0,
+            "tied_count": 0,
+            "tied": [],
+            "splits": {},
+            "digest": {},
+            "leaves": [len(self.mesh.lvl), len(self.mesh.lvl)],
+            "vertices": [int(self.mesh.nv), int(self.mesh.nv)],
+            "ranges": {},
+        }
+
+    def _cut_ties(
+        self,
+        entry: dict[str, Any],
+        order: np.ndarray,
+        cum: np.ndarray,
+        worst: float,
+        target: float,
+        cap: int,
+        floor: int,
+    ) -> None:
+        """The refinement's batch: the count taken (the cumulative indicator against worst - 0.75 target,
+        within TIE_INDICATOR of worst) and the leaves whose membership rounding can flip (indicators
+        within TIE_INDICATOR of the cut value of the batch's last one, twice that between two leaves)."""
+        mesh = self.mesh
+        threshold = worst - 0.75 * target
+        band_sum = TIE_INDICATOR * max(worst, target)
+
+        def taken(take: int) -> int:
+            # The batch order[:n] holds at most every leaf.
+            return min(max(min(take, cap), floor), len(order))
+
+        n = taken(int(np.searchsorted(cum, threshold)) + 1)
+        n_lo = taken(int(np.searchsorted(cum, threshold - band_sum)) + 1)
+        n_hi = taken(int(np.searchsorted(cum, threshold + band_sum)) + 1)
+        values = mesh.ind[order]
+        cut = float(values[n - 1]) if n else 0.0
+        band = TIE_INDICATOR * abs(cut)
+        # Possibly in the top n_hi: within 2 bands of its n_hi-th value; surely in the top n_lo:
+        # more than 2 bands above the value after it.
+        possible = values >= (values[n_hi - 1] - 2.0 * band if n_hi else np.inf)
+        sure = values > (values[n_lo] + 2.0 * band if n_lo < len(values) else -np.inf)
+        rank = np.flatnonzero(possible & ~sure & (mesh.lvl[order] < AdaptiveMesh.DEPTH - 2))
+        cells = order[rank]
+        split = rank < n
+        mask = (1 << OUTCOMES.index("none")) | (1 << OUTCOMES.index("error"))
+        code = OUTCOMES.index("error")
+        rows = [
+            [int(k), mask, code if s else 0, float(value - cut)]
+            for k, s, value in zip(self._centre_keys(cells), split, values[rank])
+        ]
+        entry.update(
+            judged=int(len(order)),
+            tied_count=int(len(cells)),
+            tied=self._list(rows),
+            take={
+                "n": int(n),
+                "range": [int(n_lo), int(n_hi)],
+                "cap": int(cap),
+                "floor": int(floor),
+                "band": band_sum,
+            },
+            cut={"value": cut, "band": band},
+        )
+
+    def _close_round(self, entry: dict[str, Any]) -> None:
+        entry["leaves"][1] = int(len(self.mesh.lvl))
+        entry["vertices"][1] = int(self.mesh.nv)
+        self.decision_rounds.append(entry)
+
+    def record_restart(self, mu_out: np.ndarray, A3: np.ndarray, chosen: int, scale: float) -> None:
+        """The second stage's A3 maximum: the grid mu whose A3 lies within TIE_INDICATOR of ``scale``
+        (the larger of the largest A3 and the largest |M| element) of the maximum."""
+        band = TIE_INDICATOR * scale
+        tied = np.flatnonzero(np.asarray(A3) >= float(A3[chosen]) - 2.0 * band)
+        self.decision_rounds.append(
+            {
+                "phase": "restart",
+                "history": None,
+                "chosen_mu_eV": float(mu_out[chosen]),
+                "tied_mu_eV": [float(mu_out[j]) for j in tied],
+                "band": band,
+                "tied_count": int(len(tied) - 1),
+                "mu_subset": int(len(self.mu_subset)),
+                "leaves": [len(self.mesh.lvl)] * 2,
+                "vertices": [int(self.mesh.nv)] * 2,
+            }
+        )
+
+    def decision_record(self) -> dict[str, Any]:
+        """QUEER's record of the integration's decisions within rounding of their thresholds.
+
+        ``bands`` holds the rounding bands and the scales they come from; ``seeds`` the
+        occupation pass's seed decisions (:func:`seed_ties`); ``rounds`` one entry per
+        decision round in order: each must-split round (``history`` the index of the history
+        entry it appended, None for the round that split nothing), each refinement step
+        (``history`` the entry it appended before deciding) and the second stage's restart.
+        A round lists its tied decisions as [cell centre key, mask of the possible outcomes,
+        the run's outcome (indices into ``outcomes``) and, in a refinement step, the indicator
+        less the cut value], counts them, and gives per rule the number of leaves split, the
+        digest of their centre keys (:func:`set_digest`) and the range of the vertex ids their
+        splits created. ``truncated`` is true when more than TIE_LIST_MAX decisions were tied:
+        the counts and digests stay complete.
+        """
+        return {
+            "outcomes": list(OUTCOMES),
+            "bands": dict(self._tie_bands()) if self.mesh.nv else {},
+            "seeds": self.seed_ties,
+            "rounds": self.decision_rounds,
+            "truncated": self._truncated,
+        }
 
     def must_split(self, max_rounds: int = 200) -> None:
         for _ in range(max_rounds):
@@ -811,7 +1266,9 @@ class Integrator:
                 if len(idx):
                     chosen[rule] = idx
                     taken[idx] = True
+            entry = self._must_split_round(chosen)
             if not chosen:
+                self._close_round(entry)
                 return
             removed = np.zeros(0, np.int64)
             for rule, idx in chosen.items():
@@ -823,13 +1280,17 @@ class Integrator:
                     # Judged again next round, by the rules still in force.
                     self.mesh.checked[cur] = False
                     continue
+                start = int(self.mesh.nv)
                 self.mesh.split(cur, rule)
+                entry["ranges"][rule] = [start, int(self.mesh.nv)]
                 removed = np.union1d(removed, idx)
                 if rule == "gap" and self.mesh.vertices_by_rule["gap"] >= 0.3 * self.max_points:
                     self.gap_rule_capped = True
             self.history.append(
                 {"phase": "must_split", "vertices": int(self.mesh.nv), "leaves": int(len(self.mesh.lvl))}
             )
+            entry["history"] = len(self.history) - 1
+            self._close_round(entry)
 
     # -- error indicators --------------------------------------------------
     def _triangle_fields(self, vid: np.ndarray, lvl: np.ndarray, X: np.ndarray, E: np.ndarray):
@@ -912,13 +1373,68 @@ class Integrator:
         ind = np.empty(len(idx))
         total: np.ndarray | None = None
         size = self._chunk_cells()
+        noisy = np.zeros(len(idx), bool)
         for s in range(0, len(idx), size):
             err = self._errors(idx[s : s + size], scales, head)
             ind[s : s + size] = np.abs(err).max(axis=1)
             part = err.sum(axis=0)
             total = part if total is None else total + part
+            if self._noise.any():
+                # Leaves whose largest normalised error is a rounding-level quantity's.
+                rounding = np.abs(err[:, self._noise]).max(axis=1)
+                real = np.abs(err[:, ~self._noise]).max(axis=1) if (~self._noise).any() else 0.0
+                noisy[s : s + size] = (rounding > 0.0) & (rounding >= real)
         assert total is not None
+        self._last_noisy = noisy
         return ind, total
+
+    def _noise_columns(self, scales: Mapping[str, Any], head: Mapping[float, tuple[float, float]]) -> None:
+        """The error-estimate columns (in :meth:`_errors`' order) whose normalising scale is rounding: a
+        quantity that vanishes identically (by symmetry), whose estimate is then rounding over rounding.
+
+        A scale is rounding when it is nonzero (above the 1e-300 floor of an exactly zero integrand)
+        and at most TIE_ROUNDING times its family's: for a Fermi-surface column v_a G_bc or v_a omega the
+        largest of those columns at the same mu, for the sea and block columns (omega, the occupied
+        block's omega and metric) the largest of the area-integrated geometric scales. The count
+        columns are never rounding. A headline mu's signed alpha and beta mix its v_a G_bc columns:
+        they are rounding where one of those is.
+        """
+        blocks, fs, sea = scales["blocks"], scales["fs"], scales["sea"]
+        geometric = float(max(np.max(blocks), sea[1]))
+
+        def rounding(scale: Any, family: Any) -> np.ndarray:
+            scale = np.asarray(scale, float)
+            return (scale > 1e-300) & (scale <= TIE_ROUNDING * np.asarray(family, float))
+
+        cols = [B_OMEGA_C] + ([B_OMEGA_S] if self.s_applies else [])
+        parts = [rounding(blocks[cols], geometric)]
+        names = [("block omega", "block omega_S")[i] for i in range(len(cols))]
+        if self.s_applies:
+            parts.append(rounding([blocks[3] + blocks[5]], geometric))
+            names.append("block g_S trace")
+        fs_noise = rounding(fs, fs[:, 1:].max(axis=1, keepdims=True))
+        fs_noise[:, 0] = False
+        parts.append(fs_noise.ravel())
+        sea_noise = np.zeros((len(self.mu_subset), 2), bool)
+        sea_noise[:, 1] = bool(rounding(sea[1], geometric))
+        parts.append(sea_noise.ravel())
+        for j, m in enumerate(self.mu_subset):
+            if float(m) in head:
+                parts.append(np.repeat(bool(fs_noise[j, 1:7].any()), 2))
+        self._noise = np.concatenate(parts) if parts else np.zeros(0, bool)
+        counts: dict[str, int] = {}
+        for name, flag in zip(names, parts[0].tolist() + (parts[1].tolist() if self.s_applies else [])):
+            if flag:
+                counts[name] = 1
+        for q, name in enumerate(FS_NAMES):
+            if fs_noise[:, q].any():
+                counts[f"Fermi-surface {name}"] = int(fs_noise[:, q].sum())
+        if sea_noise[:, 1].any():
+            counts["sea omega"] = int(len(self.mu_subset))
+        signed = [j for j, m in enumerate(self.mu_subset) if float(m) in head and fs_noise[j, 1:7].any()]
+        if signed:
+            counts["headline alpha, beta"] = len(signed)
+        self._noise_names = counts
 
     def _errors(
         self, idx: np.ndarray, scales: Mapping[str, Any], head: Mapping[float, tuple[float, float]]
@@ -1001,12 +1517,18 @@ class Integrator:
         if self._scales_fixed is None:
             self._scales_fixed = (self._scales(), self._headline_signed())
             self._totals = None
+            self._noise_columns(*self._scales_fixed)
+            self._noisy = np.zeros(len(mesh.lvl), bool)
+            stage_start = True
+        else:
+            stage_start = False
         scales, head = self._scales_fixed
         while True:
             reason = self._out_of_budget()
             todo = np.flatnonzero(np.isnan(mesh.ind))
             if len(todo):
                 mesh.ind[todo], add = self._error_sums(todo, scales, head)
+                self._noisy[todo] = self._last_noisy
                 self._totals = add if self._totals is None else self._totals + add
             worst = float(np.max(np.abs(self._totals))) if self._totals is not None else 0.0
             self.history.append(
@@ -1018,9 +1540,25 @@ class Integrator:
                     "leaves": int(len(mesh.lvl)),
                 }
             )
+            entry = self._error_round(target, worst)
+            if stage_start:
+                entry["noise_quantities"] = dict(self._noise_names)
+                stage_start = False
+            if self._noise.any():
+                totals = np.abs(self._totals) if self._totals is not None else np.zeros(len(self._noise))
+                entry["noise"] = {
+                    "columns": int(self._noise.sum()),
+                    "leaves": int(np.count_nonzero(self._noisy)),
+                    "worst_real": float(np.max(totals[~self._noise])) if (~self._noise).any() else 0.0,
+                    "worst_rounding": float(np.max(totals[self._noise])),
+                }
             if worst <= target:
+                entry["stop"]["by"] = "target"
+                self._close_round(entry)
                 return True
             if reason:
+                entry["stop"]["by"] = reason
+                self._close_round(entry)
                 self._stopped(reason)
                 return False
             order = np.argsort(mesh.ind)[::-1]
@@ -1030,13 +1568,24 @@ class Integrator:
             cum = np.cumsum(mesh.ind[order])
             take = int(np.searchsorted(cum, worst - 0.75 * target)) + 1
             idx = order[: max(min(take, cap), floor)]
+            self._cut_ties(entry, order, cum, worst, target, cap, floor)
             idx = idx[mesh.lvl[idx] < AdaptiveMesh.DEPTH - 2]
             if not len(idx):
+                entry["stop"]["by"] = STOP_DEPTH
+                self._close_round(entry)
                 self._stopped(STOP_DEPTH)
                 return False
             assert self._totals is not None
             self._totals = self._totals - self._error_sums(idx, scales, head)[1]
+            entry["splits"] = {"error": int(len(idx))}
+            entry["digest"] = {"error": set_digest(self._centre_keys(idx))}
+            start = int(mesh.nv)
+            keep = np.ones(len(mesh.lvl), bool)
+            keep[np.unique(idx)] = False
             mesh.split(idx, "error")
+            self._noisy = np.concatenate([self._noisy[keep], np.zeros(len(mesh.lvl) - int(keep.sum()), bool)])
+            entry["ranges"] = {"error": [start, int(mesh.nv)]}
+            self._close_round(entry)
 
     # -- snapshots ----------------------------------------------------------
     def snapshot(self, name: str, mu_out: np.ndarray, kTs: Sequence[float]) -> dict[str, Any]:
@@ -1260,6 +1809,7 @@ def adaptive_response(
     kT_max = max(kTs)
     mu_range = (float(mu_out[0]), float(mu_out[-1]))
     t0 = time.time()
+    seed_record: dict[str, Any] = {}
     occ = occupation_pass(
         table,
         n=occupation_mesh,
@@ -1270,6 +1820,7 @@ def adaptive_response(
         deg_tol=deg_tol,
         extra_kfrac=extra_kfrac,
         energies_fn=parallel.energies(table) if parallel is not None else None,
+        ties=seed_record,
     )
     log(
         f"occupation pass: window {occ['window']}, n_occ {occ['n_occ']}, {len(occ['seeds'])} seeds "
@@ -1314,6 +1865,8 @@ def adaptive_response(
         frame=frame,
         log=log,
     )
+    integ.seed_ties = seed_record if seeds else None
+    integ.tie_scales["energy"] = float(max(np.abs(occ["band_min"]).max(), np.abs(occ["band_max"]).max()))
     integ.must_split()
     log(f"must-split: {integ.mesh.nv} vertices, by rule {integ.mesh.vertices_by_rule}")
     stages: dict[str, Any] = {}
@@ -1346,6 +1899,8 @@ def adaptive_response(
             head = dict(integ.headline_mu)
             head["max_A3"] = float(mu_out[j])
             integ.restart(head)
+            A3 = trigonal(M0)["A3"]
+            integ.record_restart(mu_out, A3, j, float(max(np.max(A3), np.max(np.abs(M0)))))
     smeared = None
     final = stages.get("tau2") or stages.get("tau")
     if final is not None and kT_max > 0:
