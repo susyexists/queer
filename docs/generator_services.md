@@ -755,7 +755,7 @@ occupied count and its source, the occupied manifold's applicability):
   chi (64 ulp of the M scale, weighted by |c_out| + 2 |c_in|); a turn of M's trigonal
   direction does not change the amplitude, so no direction term enters (the wpd set,
   c_out + 2 c_in = 0, is rounding only). sigma_xy to 1e-8 max(1, |sigma_xy|), the
-  density to the count tolerance per cell; the 5-digit curves of the response and
+  density to the count tolerance at each mu over the cell area; the 5-digit curves of the response and
   path files to half a unit in the 5th digit of each run plus the quantity's
   tolerance; the dipole sources,
   symmetry residuals, position checks, grid, window, electron count and verdict
@@ -763,19 +763,38 @@ occupied count and its source, the occupied manifold's applicability):
 - *mu_CNP* by the electron count: each run's count (n_occ plus its density curve times
   the cell area, interpolated linearly in mu on the grid block's full-precision grid,
   the rule that placed its mu_CNP) must be n_occ at its own mu_CNP and at the other
-  run's, within the count tolerance (1e-8 of the band count, at least one ulp of it
-  per vertex: the triangle rule's rounding) plus the print rounding. Two values in one
+  run's, within the count tolerance there plus the print rounding. The count
+  tolerance is the rounding of the count's sum, 4 ulp of the band count per vertex
+  (the triangle rule's `bincount` and `cumsum` add the terms one by one), plus the
+  count's slope |dN/dmu| times the eigenvalue tolerance: the count falls as any
+  eigenvalue rises (Fermi weights and triangle areas alike), and those partial
+  derivatives sum to -dN/dmu, so eigenvalues determined to τ_E determine the count
+  to |dN/dmu| τ_E. No fixed floor enters: an earlier 1e-8 of the band count was
+  2.3e-6 electrons on the 230-band production reference, where that run's own count
+  residual is 3e-14, and let a mu_CNP move 1.5 meV along the 2 K thermal tail with
+  its CNP row. With the derived tolerance (2.1e-7 there) the 2 K value may move
+  0.71 meV, inside which the count is n_occ to its rounding, and the 10 K and 30 K
+  values 0.007 and 0.005 meV. Two values in one
   gap, where the count is n_occ over a range of mu and rounding picks the interpolated
   value (another BLAS kernel picks another), are equal by this rule, and the detail
   says so; a mu_CNP on a band fails, whatever the density of states between the two
   values. Each run's CNP row must sit at the grid mu nearest its mu_CNP, and
   mu - mu_CNP must differ between the runs by exactly the mu_CNP difference. On a
-  decimated file each run's counts at the two values are compared with each other. A
+  decimated file the count at a skipped grid point is not recorded, but the count is
+  monotonic in mu, so it lies between the counts of the file points around it, and
+  n_occ must lie in that bracket (to the count tolerance); the detail says when a
+  bracket was used. A
   run without a mu_CNP fails unless its count misses n_occ at the edge of the range by
   no more than the count tolerance (then rounding decides whether mu_CNP lies on the
   grid: `not_comparable`). A headline point the runs place at different grid mu (two
-  mu_CNP that agree, or a near-tie of the A3 maximum) is documented, and its values
-  are checked against the other run's curve at their own mu;
+  mu_CNP that agree, or a near-tie of the A3 maximum) is documented, and each run's
+  row is checked field by field at its own mu: A3, A3_err, theta0 (where A3 > δ),
+  sigma_xy, the density and full_over_diag_A3 against the other run's curves there,
+  and chi and chi_err against their exact multiples -(c_out + 2 c_in) CHI_PER_M A3 and
+  |c_out + 2 c_in| CHI_PER_M A3_err of the row's own A3 and A3_err (to the rounding
+  term of the chi tolerance). A row mu a decimated file skipped is recorded as
+  undetermined, since the other run's curve does not hold it, and so is a near-tie
+  of the A3 maximum that a decimated file cannot show;
 - *unrounded curves*: each `Out/qgeom_response_full.json` must round to its run's
   5-digit file (`qgeom.response.full_precision`); where both runs wrote one, the
   response curves, the count and the CNP checks use it without print rounding;

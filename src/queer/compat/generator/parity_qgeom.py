@@ -47,8 +47,10 @@ undetermined, and a row is ``not_comparable`` only if nothing else in it is
 judged); the three chi amplitudes, whose trigonal part is exactly
 -(c_out + 2 c_in) CHI_PER_M times M's, to |c_out + 2 c_in| CHI_PER_M sqrt(2) δ plus
 the rounding of building and projecting chi; sigma_xy to 1e-8 max(1, |sigma_xy|),
-the density to the count tolerance (1e-8 of the band count, at least one ulp of it
-per vertex) per cell. The per-T curves of ``Out/qgeom_response.json`` and the path
+the density to the count tolerance at each mu over the cell area. The count
+tolerance is the rounding of the count's sum (4 ulp of the band count per vertex)
+plus |dN/dmu| times the eigenvalue tolerance: the count falls as any eigenvalue
+rises, with partial derivatives summing to -dN/dmu. The per-T curves of ``Out/qgeom_response.json`` and the path
 data of ``Out/qgeom_path.json`` are written with 5 significant digits: each value
 agrees to half a unit in that digit of each run plus the quantity's tolerance. The
 dipole sources, the symmetry residuals, the position checks, the grid, window,
@@ -60,10 +62,13 @@ own mu_CNP and at the other run's, within the count tolerance plus the print
 rounding. Two values in one gap, where the count is n_occ over a range of mu and
 rounding picks the interpolated value, are equal by this rule. Each run's CNP row
 must sit at the grid mu nearest its mu_CNP, and mu - mu_CNP must differ between the
-runs by exactly the mu_CNP difference. A headline point the two runs place at
-different grid mu (two mu_CNP that agree, or a near-tie of the A3 maximum) is
-documented, and its values are checked against the other run's curves at its own
-mu. A run without a mu_CNP fails unless its count misses n_occ by no more than the
+runs by exactly the mu_CNP difference. On a decimated file n_occ must lie between
+the counts of the file points around the other run's mu_CNP (the count is
+monotonic in mu). A headline point the two runs place at different grid mu (two
+mu_CNP that agree, or a near-tie of the A3 maximum) is documented, and each row is
+checked field by field against the other run's curves at its own mu, its chi and
+chi_err against their exact multiples of its own A3 and A3_err; a row mu a decimated
+file skipped is not judged. A run without a mu_CNP fails unless its count misses n_occ by no more than the
 count tolerance, where the other run's mu_CNP is rounding: ``not_comparable``.
 
 **Producer gaps.** The driver never reads the ``.win``'s ``kpoints`` block, so its
@@ -128,7 +133,7 @@ CHI_PER_M = 1.602176634e-19**2 / (6.62607015e-34 / (2.0 * math.pi)) * 1e-10 * 1e
 # Building chi from M and projecting it: a few ulp of the largest M element per run (generously 64 eps).
 CHI_ROUNDING = 64.0 * float(np.finfo(float).eps)
 # The triangle rule's count: one ulp of the band count per vertex, at least the plan's 1e-8.
-COUNT_ROUNDING = float(np.finfo(float).eps)
+COUNT_ROUNDING = 4.0 * float(np.finfo(float).eps)
 RESIDUAL_TOL = 1e-12
 FULL_RESPONSE_NAME = FULL_RESPONSE_FILE.split("/", 1)[1]
 SYMMETRIC_TIES = (
@@ -187,13 +192,15 @@ def _number(value: Any) -> bool:
 
 
 class CountCurve(NamedTuple):
-    """A run's electron count per cell on its response grid (eV), its print rounding and the file's stride."""
+    """A run's electron count per cell on its response grid (eV), its print rounding, the file's stride and
+    the count's slope dN/dmu (per eV, the larger of the two neighbouring differences at each grid mu)."""
 
     mu: np.ndarray
     electrons: np.ndarray
     rounding: np.ndarray
     stride: int
     n_occ: int
+    slope: np.ndarray
 
     def at(self, mu: float) -> tuple[float, float]:
         """The linear interpolation at ``mu`` (eV) and the print rounding of that value."""
@@ -203,6 +210,38 @@ class CountCurve(NamedTuple):
         return float(np.interp(mu, self.mu, self.electrons)), float(
             max(self.rounding[j], self.rounding[j + 1])
         )
+
+    def bracket(self, mu: float) -> tuple[float, float, float]:
+        """The range the run's count at ``mu`` lies in, and its print rounding.
+
+        On a full grid it is the linear interpolation the producer placed mu_CNP by. On a
+        decimated file the skipped grid points are unknown, but the count is monotonic in
+        mu, so between two file points it lies between their counts.
+        """
+        if self.stride == 1 or len(self.mu) == 1:
+            count, rounding = self.at(mu)
+            return count, count, rounding
+        j = int(np.clip(np.searchsorted(self.mu, mu) - 1, 0, len(self.mu) - 2))
+        for k in (j, j + 1):
+            if abs(float(self.mu[k]) - mu) <= 1e-12:
+                return float(self.electrons[k]), float(self.electrons[k]), float(self.rounding[k])
+        low, high = sorted((float(self.electrons[j]), float(self.electrons[j + 1])))
+        return low, high, float(max(self.rounding[j], self.rounding[j + 1]))
+
+    def slope_at(self, mu: float) -> float:
+        """The count's largest slope at the grid points around ``mu`` (per eV)."""
+        if len(self.mu) == 1:
+            return float(self.slope[0])
+        j = int(np.clip(np.searchsorted(self.mu, mu) - 1, 0, len(self.mu) - 2))
+        return float(max(self.slope[j], self.slope[j + 1]))
+
+
+def count_slope(mu: np.ndarray, electrons: np.ndarray) -> np.ndarray:
+    """|dN/dmu| at each grid mu: the larger of its two neighbouring finite differences (zero on one point)."""
+    if len(mu) < 2:
+        return np.zeros(len(mu))
+    steps = np.abs(np.diff(electrons) / np.diff(mu))
+    return np.maximum(np.concatenate([steps[:1], steps]), np.concatenate([steps, steps[-1:]]))
 
 
 def _max_abs(*values: Any) -> float:
@@ -227,6 +266,7 @@ class QgeomComparison(_Comparison):
         # Per temperature: the candidate's mu_CNP minus the reference's (eV).
         self.cnp_shift: dict[str, float] = {}
         self._mesh: tuple[list[str], list[str], str] | None = None
+        self._counts: dict[tuple[str, bool], tuple[CountCurve | None, CountCurve | None]] = {}
         # Both runs wrote unrounded curves (each the source of its 5-digit file): no print rounding.
         self.full_curves = False
 
@@ -330,15 +370,46 @@ class QgeomComparison(_Comparison):
                 values += [row.get("A3_A_per_eV") for row in rows.values() if isinstance(row, dict)]
         return RELATIVE * _max_abs(*values)
 
-    def count_tolerance(self) -> float:
-        """1e-8 of the band count, or one ulp of it per vertex where the triangle rule sums more terms."""
+    def count_rounding(self) -> float:
+        """The rounding of a run's electron count: COUNT_ROUNDING of the band count per vertex summed."""
         bands = (self.reference.block("qgeom").get("window") or {}).get("bands") or [0, 1]
         vertices = [
             (run.block("qgeom").get("integration") or {}).get("vertices")
             for run in (self.reference, self.candidate)
         ]
-        terms = max([v for v in vertices if isinstance(v, int) and not isinstance(v, bool)] or [0])
-        return max(RELATIVE, terms * COUNT_ROUNDING) * max(1.0, float(bands[-1]))
+        terms = max([v for v in vertices if isinstance(v, int) and not isinstance(v, bool)] or [1])
+        return max(1, terms) * COUNT_ROUNDING * max(1.0, float(bands[-1]))
+
+    def count_tolerance(self, slope: Any) -> Any:
+        """How far two correct runs' electron counts may differ at one mu.
+
+        Every eigenvalue is determined to the eigenvalue tolerance δE, and the count falls
+        as any eigenvalue rises (Fermi weights and triangle areas alike), with the partial
+        derivatives summing to -dN/dmu; so the count is determined to dN/dmu δE, plus the
+        rounding of its sum. ``slope`` is |dN/dmu| per eV (a number or an array).
+        """
+        return self.count_rounding() + np.abs(np.asarray(slope, float)) * self.eigenvalue_tol
+
+    def slope_between(self, T: str, mu: float) -> float:
+        """The larger of both runs' count slopes at ``mu`` (per eV); zero where neither has a count curve."""
+        slopes = [curve.slope_at(mu) for curve in self.count_curves(T) if curve is not None]
+        return max(slopes or [0.0])
+
+    def density_tolerance(self, T: str, shape: tuple[int, ...] | None = None) -> Any:
+        """The density curves' tolerance (cm^-2) at each grid mu: the count tolerance over the cell area."""
+        curves = [curve for curve in self.count_curves(T) if curve is not None]
+        slope: Any = 0.0
+        if curves and all(curve.slope.shape == curves[0].slope.shape for curve in curves):
+            slope = np.max(np.stack([curve.slope for curve in curves]), axis=0)
+            if shape is not None and slope.shape != shape:
+                slope = float(np.max(slope))
+        return self.count_tolerance(slope) / (self.area() * 1e-16)
+
+    def count_curves(self, T: str) -> tuple[CountCurve | None, CountCurve | None]:
+        key = (T, self.full_curves)
+        if key not in self._counts:
+            self._counts[key] = (self.count_curve(self.reference, T), self.count_curve(self.candidate, T))
+        return self._counts[key]
 
     def area(self) -> float:
         lattice = np.asarray(self.reference.block("model").get("lattice"), float).reshape(3, 3)
@@ -788,7 +859,10 @@ class QgeomComparison(_Comparison):
         if mu.shape != mu_file.shape or np.any(np.abs(mu - mu_file) > print_precision(mu_file) + 1e-12):
             return None
         per_cell = self.area() * 1e-16
-        return CountCurve(mu, n_occ + density * per_cell, self.printing(density) * per_cell, stride, n_occ)
+        electrons = n_occ + density * per_cell
+        return CountCurve(
+            mu, electrons, self.printing(density) * per_cell, stride, n_occ, count_slope(mu, electrons)
+        )
 
     def compare_mu_cnp(self, T: str, a: Any, b: Any) -> None:
         """mu_CNP judged by the electron count: each run's count at the other run's mu_CNP must be n_occ.
@@ -796,20 +870,26 @@ class QgeomComparison(_Comparison):
         Each run's count curve (its own response file) is interpolated linearly in mu, the
         rule that placed its mu_CNP, so its count at its own mu_CNP is n_occ up to the
         print rounding; at the other run's mu_CNP it must be n_occ within the count
-        tolerance (1e-8 of the band count, which bounds the triangle rule's rounding over
-        the run's vertices) plus that rounding. Two values in one gap, where the count is
-        n_occ over a range of mu and its rounding picks the interpolated mu_CNP, are equal
-        by this rule, and the detail says so. On a decimated file the count between grid
-        points is the file's interpolation, so the rule compares each run's count at the
-        two values with each other. Each run's CNP row must sit at the grid mu nearest its
+        tolerance there (the rounding of the count's sum plus its slope times the
+        eigenvalue tolerance) plus that rounding. Two values in one gap, where the count
+        is n_occ over a range of mu and rounding picks the interpolated mu_CNP, are equal
+        by this rule, and the detail says so. On a decimated file the count between two
+        file points is known only to lie between theirs (it is monotonic in mu), so n_occ
+        must lie in that bracket. Each run's CNP row must sit at the grid mu nearest its
         mu_CNP. A wrong mu_CNP fails; a difference no count curve can judge makes the
         comparison not comparable.
         """
         name = f"qgeom.electron_count.mu_cnp_meV.{T}"
-        tolerance = self.count_tolerance()
-        allowed = f"count tolerance {tolerance:.3g} plus print rounding"
-        curves = {run.role: self.count_curve(run, T) for run in (self.reference, self.candidate)}
+        curves = dict(zip((self.reference.role, self.candidate.role), self.count_curves(T)))
+        allowed = "count tolerance plus print rounding"
         problems = []
+
+        def miss(curve: CountCurve, mu: float) -> tuple[float, float]:
+            """How far n_occ lies outside the run's count at ``mu``, and the tolerance it is judged to."""
+            low, high, rounding = curve.bracket(mu)
+            tolerance = float(self.count_tolerance(self.slope_between(T, mu))) + rounding
+            return max(0.0, low - curve.n_occ, curve.n_occ - high), tolerance
+
         for run, value in ((self.reference, a), (self.candidate, b)):
             curve = curves[run.role]
             row = (((run.block("qgeom").get("headline") or {}).get(T)) or {}).get("CNP")
@@ -825,12 +905,12 @@ class QgeomComparison(_Comparison):
                         f"the {run.role}'s CNP row sits at {row.get('mu_meV')} meV, not at the grid mu "
                         f"nearest its mu_CNP ({nearest:g} meV)"
                     )
-            if curve is not None and curve.stride == 1:
-                count, rounding = curve.at(float(value) * 1e-3)
-                if abs(count - curve.n_occ) > tolerance + rounding:
+            if curve is not None:
+                off, tolerance = miss(curve, float(value) * 1e-3)
+                if off > tolerance:
                     problems.append(
-                        f"the {run.role}'s own count at its mu_CNP {value} meV is {count:.12g}, "
-                        f"not n_occ {curve.n_occ} ({allowed})"
+                        f"the {run.role}'s own count at its mu_CNP {value} meV misses n_occ {curve.n_occ} by "
+                        f"{off:.3g} ({allowed} {tolerance:.3g})"
                     )
         if not (_number(a) and _number(b)):
             if a is None and b is None and not problems:
@@ -864,22 +944,22 @@ class QgeomComparison(_Comparison):
                 self.quantity(name, UNEXPLAINED, detail=f"{a} vs {b} meV; one run has no count curve")
             return
         mu_a, mu_b = float(a) * 1e-3, float(b) * 1e-3
-        worst, reasons, same_gap = 0.0, [], True
-        for role, curve, own, other in (
-            (self.reference.role, curve_a, mu_a, mu_b),
-            (self.candidate.role, curve_b, mu_b, mu_a),
+        worst, reasons, same_gap, bracketed = 0.0, [], True, False
+        for role, curve, other in (
+            (self.reference.role, curve_a, mu_b),
+            (self.candidate.role, curve_b, mu_a),
         ):
-            count, rounding = curve.at(other)
-            if curve.stride == 1:
-                deviation = abs(count - curve.n_occ)
-            else:
-                base, base_rounding = curve.at(own)
-                deviation, rounding = abs(count - base), rounding + base_rounding
-            worst = max(worst, deviation / (tolerance + rounding))
-            reasons.append(f"the {role}'s count at {other * 1e3:.9g} meV deviates by {deviation:.3g}")
+            off, tolerance = miss(curve, other)
+            worst = max(worst, off / tolerance if tolerance > 0 else (math.inf if off > 0 else 0.0))
+            reasons.append(f"the {role}'s count at {other * 1e3:.9g} meV misses n_occ by {off:.3g}")
+            bracketed = bracketed or curve.stride > 1
             between = (curve.mu >= min(mu_a, mu_b)) & (curve.mu <= max(mu_a, mu_b))
-            off = np.abs(curve.electrons[between] - curve.n_occ) > tolerance + curve.rounding[between]
-            same_gap = same_gap and bool(between.any()) and not bool(off.any())
+            same_grid = curve_a.slope.shape == curve_b.slope.shape
+            bound = self.count_tolerance(
+                np.maximum(curve_a.slope, curve_b.slope) if same_grid else curve.slope
+            )
+            off_points = np.abs(curve.electrons - curve.n_occ) > bound + curve.rounding
+            same_gap = same_gap and bool(between.any()) and not bool(off_points[between].any())
         if worst > 1.0:
             problems.append(f"{a} vs {b} meV: " + "; ".join(reasons) + f" ({allowed})")
         if problems:
@@ -894,6 +974,8 @@ class QgeomComparison(_Comparison):
             )
         else:
             detail = f"{a} vs {b} meV: each run's count at the other's mu_CNP is n_occ ({'; '.join(reasons)}; {allowed})"
+        if bracketed:
+            detail += "; on a decimated file n_occ lies between the counts of the file points around it"
         self.quantity(name, AGREE, worst, 1.0, _shorten(detail))
 
     def cnp_edge(self, name: str, T: str, a: Any, b: Any, curve: CountCurve | None) -> None:
@@ -910,7 +992,6 @@ class QgeomComparison(_Comparison):
                 name, UNEXPLAINED, detail=f"{a!r} vs {b!r} meV; the {missing.role} has no count curve"
             )
             return
-        tolerance = self.count_tolerance()
         low, high = int(np.argmin(curve.electrons)), int(np.argmax(curve.electrons))
         bottom = float(curve.electrons[low]) - float(curve.rounding[low])
         top = float(curve.electrons[high]) + float(curve.rounding[high])
@@ -921,12 +1002,14 @@ class QgeomComparison(_Comparison):
                 detail=f"{a!r} vs {b!r} meV: the {missing.role}'s count reaches n_occ {curve.n_occ} on the grid",
             )
             return
-        miss = min(abs(curve.n_occ - bottom), abs(curve.n_occ - top))
-        if miss <= tolerance:
+        edge = low if abs(curve.n_occ - bottom) <= abs(curve.n_occ - top) else high
+        gap = min(abs(curve.n_occ - bottom), abs(curve.n_occ - top))
+        tolerance = float(self.count_tolerance(self.slope_between(T, float(curve.mu[edge]))))
+        if gap <= tolerance:
             self.precondition(
                 "mu_cnp_determined",
                 False,
-                f"{T}: the {missing.role}'s count misses n_occ {curve.n_occ} by {miss:.3g} at the edge of the mu "
+                f"{T}: the {missing.role}'s count misses n_occ {curve.n_occ} by {gap:.3g} at the edge of the mu "
                 f"range, within the count tolerance {tolerance:.3g}, where the other run places mu_CNP at "
                 f"{value} meV: whether mu_CNP lies on the grid is decided by rounding",
             )
@@ -934,7 +1017,7 @@ class QgeomComparison(_Comparison):
         self.quantity(
             name,
             UNEXPLAINED,
-            detail=f"{a!r} vs {b!r} meV: the {missing.role}'s count misses n_occ {curve.n_occ} by {miss:.3g}",
+            detail=f"{a!r} vs {b!r} meV: the {missing.role}'s count misses n_occ {curve.n_occ} by {gap:.3g}",
         )
 
     # ------------------------------------------------------------ headline
@@ -947,20 +1030,38 @@ class QgeomComparison(_Comparison):
         rounding = CHI_ROUNDING * (abs(c_out) + 2.0 * abs(c_in)) * max(scale_M, delta)
         return CHI_PER_M * (exact + rounding)
 
-    def curve_value(self, run: RunDirectory, T: str, key: str, mu_meV: float) -> float | None:
-        """A run's 5-digit curve value at ``mu_meV`` (the nearest grid point), for a documented tie."""
-        response = self.response(run)
-        mu = _array(response.get("mu_eV"))
-        if mu is None or not len(mu):
+    def file_index(self, run: RunDirectory, mu_meV: float) -> int | None:
+        """The index of ``mu_meV`` on the run's response grid, or None where the file does not hold it
+        (a grid point a decimated file skipped)."""
+        mu = _array(self.response(run).get("mu_eV"))
+        if mu is None or mu.ndim != 1 or not len(mu):
             return None
         j = int(np.argmin(np.abs(mu - mu_meV * 1e-3)))
+        if abs(float(mu[j]) - mu_meV * 1e-3) > float(self.printing(mu[j])) + 1e-12:
+            return None
+        return j
+
+    def curve_value(
+        self, run: RunDirectory, T: str, key: str, mu_meV: float, level: str = "main"
+    ) -> float | None:
+        """A run's curve value at the grid point ``mu_meV``, for a documented tie (None off its file)."""
+        j = self.file_index(run, mu_meV)
+        if j is None:
+            return None
+        entry = (self.response(run).get("per_T") or {}).get(T) or {}
         if key == "density_cm2":
-            values = _array(((response.get("per_T") or {}).get(T) or {}).get("density_cm2"))
+            values = _array(entry.get("density_cm2"))
+        elif key.startswith("err."):
+            values = _array((entry.get("err") or {}).get(key[4:]))
         else:
-            values = self.level_curve(run, T, self.main_level(run), key)
-        if values is None or j >= len(values):
+            values = self.level_curve(run, T, self.main_level(run) if level == "main" else level, key)
+        if values is None or values.ndim != 1 or j >= len(values):
             return None
         return float(values[j])
+
+    def density_tolerance_at(self, T: str, mu_meV: float) -> float:
+        """The density tolerance (cm^-2) at one mu: the count tolerance there over the cell area."""
+        return float(self.count_tolerance(self.slope_between(T, mu_meV * 1e-3))) / (self.area() * 1e-16)
 
     def a3_near_tie(self, T: str, mu_a: float, mu_b: float, delta: float) -> bool:
         """Whether each run's A3 at the other's maximum lies within tolerance of its own maximum."""
@@ -977,8 +1078,6 @@ class QgeomComparison(_Comparison):
         if set(a) != set(b):
             self.quantity("qgeom.headline", UNEXPLAINED, detail=f"temperatures {sorted(a)} vs {sorted(b)}")
             return
-        area = self.area()
-        tol_density = self.count_tolerance() / (area * 1e-16)
         for T in sorted(a, key=lambda key: float(key[:-1])):
             rows_a, rows_b = a[T] or {}, b[T] or {}
             delta = self.delta(T)
@@ -997,7 +1096,6 @@ class QgeomComparison(_Comparison):
                     rows_b[point],
                     delta,
                     scale_M,
-                    tol_density,
                 )
 
     def compare_row(
@@ -1009,7 +1107,6 @@ class QgeomComparison(_Comparison):
         b: Mapping[str, Any],
         delta: float,
         scale_M: float,
-        tol_density: float,
     ) -> None:
         mu_a, mu_b = float(a.get("mu_meV", math.nan)), float(b.get("mu_meV", math.nan))
         sigma_tol = RELATIVE * max(1.0, _max_abs(a.get("sigma_xy_e2_h"), b.get("sigma_xy_e2_h")))
@@ -1023,30 +1120,30 @@ class QgeomComparison(_Comparison):
                         "row sits at the grid mu nearest its own"
                     ),
                 )
-            elif point == "max_A3" and self.a3_near_tie(T, mu_a, mu_b, delta):
-                documented, why = True, "A3 at the two maxima is within tolerance in both runs"
+            elif point == "max_A3":
+                off_file = [
+                    f"{mu:g} meV is not on the {run.role}'s decimated response grid"
+                    for mu in (mu_a, mu_b)
+                    for run in (self.reference, self.candidate)
+                    if self.file_index(run, mu) is None
+                ]
+                if off_file:
+                    self.not_determined(
+                        f"{name}.mu_meV",
+                        f"{mu_a} vs {mu_b} meV: "
+                        + "; ".join(off_file)
+                        + ", so the near-tie cannot be judged",
+                    )
+                    return
+                if self.a3_near_tie(T, mu_a, mu_b, delta):
+                    documented, why = True, "A3 at the two maxima is within tolerance in both runs"
             if not documented:
                 self.quantity(f"{name}.mu_meV", UNEXPLAINED, abs(mu_a - mu_b), 1e-9, f"{mu_a} vs {mu_b} meV")
                 return
             self.quantity(
                 f"{name}.mu_meV", DOCUMENTED, abs(mu_a - mu_b), None, f"{mu_a} vs {mu_b} meV: {why}"
             )
-            # Each run's row against the other run's curve at the row's own mu.
-            checks = [
-                ("A3_A_per_eV", "A3", delta),
-                ("sigma_xy_e2_h", "sigma_xy_e2_h", sigma_tol),
-                ("density_cm2", "density_cm2", tol_density),
-            ]
-            for key, curve_key, tolerance in checks:
-                for row, other, mu in ((a, self.candidate, mu_a), (b, self.reference, mu_b)):
-                    value = self.curve_value(other, T, curve_key, mu)
-                    self.curve(
-                        f"{name}.{key}@{mu:g}meV.{other.role}_curve",
-                        row.get(key),
-                        value,
-                        tolerance,
-                        printed=self.printed,
-                    )
+            self.compare_tied_rows(name, T, a, b, delta, scale_M, sigma_tol)
             return
         self.quantity(f"{name}.mu_meV", AGREE, 0.0, 1e-9, f"{mu_a} meV")
         A3_a, A3_b = float(a.get("A3_A_per_eV") or 0.0), float(b.get("A3_A_per_eV") or 0.0)
@@ -1094,7 +1191,12 @@ class QgeomComparison(_Comparison):
                     2.0 * tolerance,
                 )
         self.values(f"{name}.sigma_xy_e2_h", a.get("sigma_xy_e2_h"), b.get("sigma_xy_e2_h"), sigma_tol)
-        self.values(f"{name}.density_cm2", a.get("density_cm2"), b.get("density_cm2"), tol_density)
+        self.values(
+            f"{name}.density_cm2",
+            a.get("density_cm2"),
+            b.get("density_cm2"),
+            self.density_tolerance_at(T, mu_a),
+        )
         if "full_over_diag_A3" in a or "full_over_diag_A3" in b:
             ratio_a, ratio_b = a.get("full_over_diag_A3"), b.get("full_over_diag_A3")
             if (
@@ -1109,6 +1211,132 @@ class QgeomComparison(_Comparison):
                 self.values(f"{name}.full_over_diag_A3", ratio_a, ratio_b, tolerance)
             else:
                 self.values(f"{name}.full_over_diag_A3", ratio_a, ratio_b, 0.0)
+
+    def compare_tied_rows(
+        self,
+        name: str,
+        T: str,
+        a: Mapping[str, Any],
+        b: Mapping[str, Any],
+        delta: float,
+        scale_M: float,
+        sigma_tol: float,
+    ) -> None:
+        """Rows the runs place at different grid mu: each against the other run's curves at its own mu.
+
+        A3, A3_err, theta0, sigma_xy, density and full_over_diag_A3 must equal the other
+        run's curves there (theta0 judged where A3 exceeds the M tolerance), and chi and
+        chi_err must be their exact multiples of the row's own A3 and A3_err (chi's
+        trigonal part is -(c_out + 2 c_in) CHI_PER_M times M's). A row mu a decimated
+        file skipped is recorded as not judged.
+        """
+        chi_a, chi_b = a.get("chi_mA_nm_per_V2") or {}, b.get("chi_mA_nm_per_V2") or {}
+        if set(chi_a) != set(chi_b) or set(a.get("chi_err") or {}) != set(b.get("chi_err") or {}):
+            self.quantity(
+                f"{name}.chi", UNEXPLAINED, detail=f"conventions {sorted(chi_a)} vs {sorted(chi_b)}"
+            )
+        for row, other in ((a, self.candidate), (b, self.reference)):
+            mu = float(row.get("mu_meV", math.nan))
+            at = f"@{mu:g}meV"
+            A3_row, err_row = _finite(row.get("A3_A_per_eV")), _finite(row.get("A3_err"))
+            for convention, value in sorted((row.get("chi_mA_nm_per_V2") or {}).items()):
+                if convention not in CHI_SETS:
+                    self.quantity(
+                        f"{name}.chi.{convention}{at}", UNEXPLAINED, detail="unknown chi convention"
+                    )
+                    continue
+                c_out, c_in = CHI_SETS[convention]
+                rounding = CHI_PER_M * CHI_ROUNDING * (abs(c_out) + 2.0 * abs(c_in)) * max(scale_M, delta)
+                exact = None if A3_row is None else -(c_out + 2.0 * c_in) * CHI_PER_M * A3_row
+                self.values(
+                    f"{name}.chi.{convention}{at}.own_A3",
+                    value,
+                    exact,
+                    rounding,
+                    "chi against its exact multiple of the row's own A3",
+                )
+                spread = None if err_row is None else abs(c_out + 2.0 * c_in) * CHI_PER_M * err_row
+                self.values(
+                    f"{name}.chi_err.{convention}{at}.own_A3_err",
+                    (row.get("chi_err") or {}).get(convention),
+                    spread,
+                    2.0 * rounding,
+                    "chi_err against its exact multiple of the row's own A3_err",
+                )
+            if self.file_index(other, mu) is None:
+                self.not_determined(
+                    f"{name}{at}.{other.role}_curve",
+                    f"{mu:g} meV is not on the {other.role}'s decimated response grid",
+                )
+                continue
+            checks = [
+                ("A3_A_per_eV", "A3", delta),
+                ("A3_err", "err.A3", 2.0 * delta),
+                ("sigma_xy_e2_h", "sigma_xy_e2_h", sigma_tol),
+                ("density_cm2", "density_cm2", self.density_tolerance_at(T, mu)),
+            ]
+            for key, curve_key, tolerance in checks:
+                self.curve(
+                    f"{name}.{key}{at}.{other.role}_curve",
+                    row.get(key),
+                    self.curve_value(other, T, curve_key, mu),
+                    tolerance,
+                    printed=self.printed,
+                )
+            A3_curve = self.curve_value(other, T, "A3", mu)
+            lowest = math.nan
+            if A3_row is not None and A3_curve is not None:
+                lowest = max(min(A3_row, A3_curve - 2.0 * float(self.printing(A3_curve))), 0.0)
+            self.curve(
+                f"{name}.theta0_deg{at}.{other.role}_curve",
+                row.get("theta0_deg"),
+                self.curve_value(other, T, "theta0_deg", mu),
+                float(theta_tolerance(delta, np.array([lowest]))[0]),
+                circular=True,
+                undetermined=f"A3 within the M tolerance δ = {delta:.3g}: the trigonal direction is not determined",
+                printed=self.printed,
+            )
+            if "full_over_diag_A3" in row:
+                self.compare_tied_ratio(f"{name}.full_over_diag_A3{at}.{other.role}_curve", T, row, other, mu)
+
+    def compare_tied_ratio(
+        self, name: str, T: str, row: Mapping[str, Any], other: RunDirectory, mu: float
+    ) -> None:
+        """A tied row's full_over_diag_A3 against the other run's full and diag A3 curves at its mu."""
+        ratio = row.get("full_over_diag_A3")
+        full = self.curve_value(other, T, "A3", mu, level="full")
+        diag = self.curve_value(other, T, "A3", mu, level="diag")
+        delta, delta_diag = self.delta(T), self.delta(T, "diag")
+        if full is None or diag is None:
+            self.quantity(name, UNEXPLAINED, detail=f"the {other.role} has no full and diag A3 at {mu:g} meV")
+            return
+        p_full, p_diag = float(self.printing(full)), float(self.printing(diag))
+        if not isinstance(ratio, (int, float)) or isinstance(ratio, bool):
+            # The row has no ratio where its diag A3 is zero.
+            determined = diag - p_diag > delta_diag
+            self.quantity(
+                name,
+                UNEXPLAINED if determined or ratio is not None else AGREE,
+                detail=f"{ratio!r} vs the {other.role}'s diag A3 {diag:.6g} at {mu:g} meV",
+            )
+            return
+        if diag - p_diag - delta_diag <= 0.0:
+            self.not_determined(
+                name, f"the {other.role}'s diag A3 at {mu:g} meV is within its tolerance of zero"
+            )
+            return
+        # The ratio of two A3 values each determined to its tolerance and print rounding (A3 >= 0).
+        spread_full, spread_diag = delta + p_full, delta_diag + p_diag
+        low = max(full - spread_full, 0.0) / (diag + spread_diag)
+        high = (full + spread_full) / (diag - spread_diag)
+        expected = full / diag
+        excess = max(0.0, low - float(ratio), float(ratio) - high)
+        self.bounded(
+            name,
+            excess,
+            RELATIVE * abs(expected),
+            f"{ratio:.9g} against [{low:.9g}, {high:.9g}] from the {other.role}'s full and diag A3 curves",
+        )
 
     # ------------------------------------------------------- response curves
     def compare_response(self) -> None:
@@ -1136,8 +1364,6 @@ class QgeomComparison(_Comparison):
                 "qgeom.response.per_T", UNEXPLAINED, detail=f"temperatures {sorted(per_a)} vs {sorted(per_b)}"
             )
             return
-        area = self.area()
-        tol_density = self.count_tolerance() / (area * 1e-16)
         for T in sorted(per_a, key=lambda key: float(key[:-1])):
             ea, eb = per_a[T] or {}, per_b[T] or {}
             prefix = f"qgeom.response.{T}"
@@ -1148,6 +1374,8 @@ class QgeomComparison(_Comparison):
                 eb.get("dos"),
                 RELATIVE * _max_abs(ea.get("dos"), eb.get("dos")),
             )
+            density = _array(ea.get("density_cm2"))
+            tol_density = self.density_tolerance(T, None if density is None else density.shape)
             curve(f"{prefix}.density_cm2", ea.get("density_cm2"), eb.get("density_cm2"), tol_density)
             curve(
                 f"{prefix}.drude_eV",

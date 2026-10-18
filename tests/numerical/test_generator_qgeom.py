@@ -48,7 +48,7 @@ from queer.compat.generator.parity import (  # noqa: E402
 )
 from queer.compat.generator.parity_qgeom import CHI_PER_M, CHI_SETS, SYMMETRIC_TIES  # noqa: E402
 from queer.compat.generator.pythtb_params import translate_pythtb  # noqa: E402
-from queer.compat.generator.qgeom_step import compact  # noqa: E402
+from queer.compat.generator.qgeom_step import compact, decimate  # noqa: E402
 from queer.compat.generator.runner import run  # noqa: E402
 from queer.compat.generator.wannier_steps import WannierStepContext  # noqa: E402
 
@@ -599,29 +599,52 @@ def test_another_derived_decision_is_not_comparable(metal, tmp_path):
     assert report["verdict"] == NOT_COMPARABLE and not preconditions(report)["derived_decisions"]["ok"]
 
 
+def curves_of(directory):
+    """A run's response with its unrounded curves where it wrote them."""
+    directory = Path(directory)
+    response = read(directory / "Out" / "qgeom_response.json")
+    full_path = directory / "Out" / "qgeom_response_full.json"
+    if full_path.exists():
+        full = read(full_path)
+        response.update(mu_eV=full["mu_eV"], per_T=full["per_T"])
+    return response
+
+
+def row_from_curves(row, response, T, j):
+    """A headline row as a run writes it at grid index ``j`` of its own curves."""
+    entry = response["per_T"][T]
+    level = entry["levels"]["full"]
+    A3, err = level["A3"][j], entry["err"]["A3"][j]
+    row.update(
+        mu_meV=float(response["mu_eV"][j]) * 1e3,
+        A3_A_per_eV=A3,
+        A3_err=err,
+        theta0_deg=level["theta0_deg"][j],
+        chi_mA_nm_per_V2={k: -(c + 2.0 * d) * CHI_PER_M * A3 for k, (c, d) in CHI_SETS.items()},
+        chi_err={k: abs(c + 2.0 * d) * CHI_PER_M * err for k, (c, d) in CHI_SETS.items()},
+        sigma_xy_e2_h=level["sigma_xy_e2_h"][j],
+        density_cm2=entry["density_cm2"][j],
+    )
+    if "full_over_diag_A3" in row:
+        diag = entry["levels"]["diag"]["A3"][j]
+        row["full_over_diag_A3"] = A3 / diag if diag > 0 else None
+
+
 def move_cnp(directory, T, mu_meV, row_index=None):
     """Move a run's mu_CNP at T, its CNP row onto its own curves at the grid mu nearest it (or ``row_index``),
     and its mu - mu_CNP curve with it, as a run with that mu_CNP would have written them."""
     directory = Path(directory)
-    response = read(directory / "Out" / "qgeom_response.json")
+    response = curves_of(directory)
     mu = np.asarray(response["mu_eV"], float)
     j = int(np.argmin(np.abs(mu * 1e3 - mu_meV))) if row_index is None else row_index
-    entry = response["per_T"][T]
-    level = entry["levels"]["full"]
 
     def mutate(document):
         qgeom = document["qgeom"]
         qgeom["electron_count"]["mu_cnp_meV"][T] = mu_meV
-        qgeom["headline"][T]["CNP"].update(
-            mu_meV=float(mu[j]) * 1e3,
-            A3_A_per_eV=level["A3"][j],
-            theta0_deg=level["theta0_deg"][j],
-            sigma_xy_e2_h=level["sigma_xy_e2_h"][j],
-            density_cm2=entry["density_cm2"][j],
-        )
+        row_from_curves(qgeom["headline"][T]["CNP"], response, T, j)
 
     edit(directory, mutate)
-    entry["mu_minus_cnp_eV"] = [float(x) for x in mu - mu_meV * 1e-3]
+    response["per_T"][T]["mu_minus_cnp_eV"] = [float(x) for x in mu - mu_meV * 1e-3]
     write_response(directory, response)
 
 
@@ -696,6 +719,142 @@ def test_a_cnp_row_off_its_mu_cnp_fails(insulator, tmp_path):
     assert report["verdict"] == FAIL
     cnp = item(report, "qgeom.electron_count.mu_cnp_meV.60K")
     assert cnp["class"] == UNEXPLAINED and "not at the grid mu nearest its mu_CNP" in cnp["detail"]
+
+
+def test_a_mu_cnp_moved_along_a_thermal_tail_fails_beyond_the_counts_rounding(insulator, tmp_path):
+    """At 20 K the count leaves n_occ by about 1e-8 at 162 meV, 32 meV above its mu_CNP: inside 1e-8 per band,
+    far outside the count's rounding over the vertices plus its slope times the eigenvalue tolerance."""
+    reference, candidate = insulator
+    moved = copy(candidate, tmp_path / "moved")
+    move_cnp(moved, "20K", 162.0)
+    report = compare("QUEER_QGEOM", reference, moved)
+    assert report["verdict"] == FAIL
+    cnp = item(report, "qgeom.electron_count.mu_cnp_meV.20K")
+    assert cnp["class"] == UNEXPLAINED and "misses n_occ" in cnp["detail"], cnp
+
+
+@pytest.mark.parametrize(
+    ("forge", "name"),
+    [
+        (lambda row: row["chi_mA_nm_per_V2"].update(lka_2_m05=123.0), "chi.lka_2_m05@170meV.own_A3"),
+        (lambda row: row["chi_err"].update(qk_05_m1=1e3), "chi_err.qk_05_m1@170meV.own_A3_err"),
+        (lambda row: row.update(A3_err=999.0), "A3_err@170meV.reference_curve"),
+        (
+            lambda row: row.update(sigma_xy_e2_h=row["sigma_xy_e2_h"] + 1e-3),
+            "sigma_xy_e2_h@170meV.reference_curve",
+        ),
+    ],
+    ids=["chi", "chi_err", "A3_err", "sigma_xy"],
+)
+def test_a_tied_rows_own_fields_are_checked(insulator, tmp_path, forge, name):
+    """A CNP row the runs place at different grid mu is checked field by field, not only by its A3."""
+    reference, candidate = insulator
+    mu = read(reference / "pythtb_results.json")["qgeom"]["electron_count"]["mu_cnp_meV"]["0K"]
+    moved = copy(candidate, tmp_path / "moved")
+    move_cnp(moved, "0K", mu - 10.0)
+    assert compare("QUEER_QGEOM", reference, moved)["verdict"] == PASS_DOCUMENTED
+    edit(moved, lambda document: forge(document["qgeom"]["headline"]["0K"]["CNP"]))
+    report = compare("QUEER_QGEOM", reference, moved)
+    assert report["verdict"] == FAIL
+    assert quantities(report)[f"qgeom.headline.0K.CNP.{name}"] == UNEXPLAINED
+    # Inside the gap A3 is within the M tolerance: the row's theta0 is recorded as undetermined.
+    assert quantities(report)["qgeom.headline.0K.CNP.theta0_deg@170meV.reference_curve"] == NOT_APPLICABLE
+
+
+def tie_max_a3(directory, T):
+    """Raise A3 at a neighbour of the maximum to the maximum, and return that neighbour's index."""
+    response = curves_of(directory)
+    level = response["per_T"][T]["levels"]["full"]
+    j = int(np.argmax(level["A3"]))
+    k = j + 1 if j + 1 < len(level["A3"]) else j - 1
+    level["A3"][k] = level["A3"][j]
+    write_response(directory, response)
+    return k
+
+
+@pytest.mark.parametrize(
+    ("forge", "name"),
+    [
+        (None, None),
+        (lambda row: row.update(full_over_diag_A3=row["full_over_diag_A3"] * 1.01), "full_over_diag_A3"),
+        (lambda row: row.update(theta0_deg=row["theta0_deg"] + 1.0), "theta0_deg"),
+    ],
+    ids=["consistent", "ratio", "theta0"],
+)
+def test_a_tied_max_a3_row_is_checked_on_the_other_runs_curves(metal, tmp_path, forge, name):
+    """Two QUEER runs whose A3 maximum is tied: the run that places the row at the neighbour is checked there."""
+    _, candidate = metal
+    first, second = copy(candidate, tmp_path / "first"), copy(candidate, tmp_path / "second")
+    tie_max_a3(first, "0K")
+    k = tie_max_a3(second, "0K")
+    response = curves_of(second)
+    edit(
+        second,
+        lambda document: row_from_curves(document["qgeom"]["headline"]["0K"]["max_A3"], response, "0K", k),
+    )
+    if forge is not None:
+        edit(second, lambda document: forge(document["qgeom"]["headline"]["0K"]["max_A3"]))
+    report = compare("QUEER_QGEOM", first, second)
+    assert quantities(report)["qgeom.headline.0K.max_A3.mu_meV"] == DOCUMENTED
+    mu = float(response["mu_eV"][k]) * 1e3
+    if forge is None:
+        assert report["verdict"] == PASS_DOCUMENTED, report["summary"]
+        judged = [
+            entry["name"] for entry in report["quantities"] if f"@{mu:g}meV.reference_curve" in entry["name"]
+        ]
+        assert {"full_over_diag_A3", "theta0_deg", "A3_err"} <= {
+            n.split(".")[4].split("@")[0] for n in judged
+        }
+    else:
+        assert report["verdict"] == FAIL
+        assert quantities(report)[f"qgeom.headline.0K.max_A3.{name}@{mu:g}meV.reference_curve"] == UNEXPLAINED
+
+
+def decimate_run(source, target, stride):
+    """A run's response files and grid record decimated as a run writes them past its size budget."""
+    target = copy(source, target)
+    response = read(target / "Out" / "qgeom_response.json")
+    n = len(response["mu_eV"])
+    full_path = target / "Out" / "qgeom_response_full.json"
+    if full_path.exists():
+        full = read(full_path)
+        full.update(mu_eV=decimate(full["mu_eV"], stride, n), per_T=decimate(full["per_T"], stride, n))
+        write(full_path, full)
+        response.update(mu_eV=compact(full["mu_eV"]), per_T=compact(full["per_T"]))
+    else:
+        response.update(
+            mu_eV=decimate(response["mu_eV"], stride, n), per_T=decimate(response["per_T"], stride, n)
+        )
+    write(target / "Out" / "qgeom_response.json", response)
+    name = "queer_results.json" if (target / "queer_results.json").exists() else "pythtb_results.json"
+    edit(target, lambda document: document["qgeom"]["grid"].update(downsampled=stride), name=name)
+    return target
+
+
+def test_a_mu_cnp_beside_a_gap_edge_on_a_decimated_file_is_equal(insulator, tmp_path):
+    """90 meV is a grid point a stride-2 file skips, next to the valence band at 80 meV: the count there is only
+    known to lie between the file points around it, which holds n_occ."""
+    reference, candidate = insulator
+    moved = copy(candidate, tmp_path / "moved")
+    move_cnp(moved, "0K", 90.0)
+    report = compare(
+        "QUEER_QGEOM",
+        decimate_run(reference, tmp_path / "reference", 2),
+        decimate_run(moved, tmp_path / "decimated", 2),
+    )
+    assert report["verdict"] == PASS_DOCUMENTED, report["summary"]
+    cnp = item(report, "qgeom.electron_count.mu_cnp_meV.0K")
+    assert cnp["class"] == AGREE and "decimated" in cnp["detail"]
+    # The candidate's row at 90 meV is not on the reference's decimated file: not judged there.
+    assert quantities(report)["qgeom.headline.0K.CNP@90meV.reference_curve"] == NOT_APPLICABLE
+    # A mu_CNP in the valence band still fails on the decimated files.
+    wrong = copy(candidate, tmp_path / "wrong")
+    move_cnp(wrong, "0K", 40.0)
+    report = compare(
+        "QUEER_QGEOM", tmp_path / "reference", decimate_run(wrong, tmp_path / "wrong_decimated", 2)
+    )
+    assert report["verdict"] == FAIL
+    assert quantities(report)["qgeom.electron_count.mu_cnp_meV.0K"] == UNEXPLAINED
 
 
 def drop_cnp(directory, T):
