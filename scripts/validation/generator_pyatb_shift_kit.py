@@ -96,7 +96,7 @@ CASES = {
         "pass_with_documented_differences",
         ["agree_after_convention", "differs_documented"],
         "smearing 0: PyATB's integer bins without 1/domega (x domega, half a bin); its Hartree scale moves a "
-        "few transitions across bin edges (bounded by bin_moves, documented)",
+        "few transitions across bin edges (QUEER records each, checked from its energy: documented)",
     ),
     "d_scissors": (
         "soc.scfout",
@@ -246,6 +246,9 @@ def queer_side(output: Path, case: str, model: str, self_convergence: bool, work
         "min_pair_gap_eV": block["diagnostics"]["min_pair_gap_eV"],
         "exact_degenerate_kpoints": block["diagnostics"]["exact_degenerate_kpoints"],
         "regularised_kpoints": block["diagnostics"]["regularisation"]["flagged_kpoints"],
+        "moved_transitions": None
+        if not (block["diagnostics"]["pyatb_scheme"].get("moved_transitions") or {}).get("recorded")
+        else len(block["diagnostics"]["pyatb_scheme"]["moved_transitions"]["energy_eV"]),
         "transitions": block["diagnostics"]["transitions"]["count"],
         "clean_control_eligible": block["diagnostics"]["clean_control"]["eligible"],
         "queer_source_sha256": block["build"]["queer_source_sha256"],
@@ -305,7 +308,10 @@ def readme(output: Path, summary: dict) -> str:
         "`queer-side/<case>/queer_results.json` holds QUEER's run of each case: `shift_current.sigma_uA_V2` is",
         "QUEER's physical value, the estimator judged, and `shift_current.diagnostics.pyatb_scheme.sigma_uA_V2`",
         "the table PyATB should print (its Hartree scale, window rule, int() bins, Gaussian truncation,",
-        "constants, spin factor and signed volume applied to QUEER's transitions), a diagnostic only.",
+        "constants, spin factor and signed volume applied to QUEER's transitions), a diagnostic only. Without",
+        "smearing `pyatb_scheme.moved_transitions` lists the transitions PyATB's bins place in another row than",
+        "QUEER's histogram (`moved_transitions` in the summary counts them); no case has a k-point PyATB's",
+        "method 1 regularizes, so none needs the scfout recomputed.",
         "`queer-side/summary.json` lists the headline numbers and the build (`queer_source_sha256`) the runs",
         "come from.",
         "",
@@ -325,8 +331,9 @@ def readme(output: Path, summary: dict) -> str:
         "`QUEER_PYATB_SHIFT_CALIBRATION_DIR` overrides the default data directory",
         "`~/.cache/queer-parity-data/pyatb-shift-kit` and `QUEER_PARITY_REPORT_DIR` receives every report. The",
         "clean control (`a_clean_control`) is judged first: every component must meet QUEER's physical value",
-        "directly (to 1e-4 of the peak beside the derived effect of PyATB's Hartree scale), and the emulation",
-        "must reproduce PyATB's table to its print precision (1e-6 of each value). Its report, for the same",
+        "directly (to 1e-4 of the peak, PyATB's table moved to QUEER's Hartree constant from its own curve; no",
+        "number of QUEER's run widens that), and the emulation must reproduce PyATB's table to its print",
+        "precision (1e-6 of each value). Every case is compared with its scfout (`scfout=`). Its report, for the same",
         "build (queer_version, RECORD, build_sha, and the digest of every .py file of the queer package that ran",
         "the case and that compares it), is applied to every other case: a difference is documented only after",
         "it passed.",
