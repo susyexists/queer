@@ -689,7 +689,12 @@ vertices replays with `qgeom_replay_vertices = N`. Setting `qgeom_max_points` to
 instead would not: the vertex budget also caps the gap rule at 30 % of it, and it
 reports `budget`. The production reference job-1cd360d9 stopped on its vertex budget
 (1 041 183 vertices of 1 000 000 allowed, the must-split phase overshooting), so it
-replays with its own parameters and `qgeom_time_stop: false`.
+replays with its own parameters and `qgeom_time_stop: false`. Rounding can still
+steer a refinement decision that lies exactly at its threshold (a velocity that
+vanishes by symmetry in the band-edge rule, the error estimates of symmetry-related
+cells that tie in the refinement order, an A3 maximum that ties): the goldens use a
+layer without exact symmetries, and a symmetric model replays most safely with the
+reference's own NumPy and BLAS.
 
 **Comparator** (`queer.compat.generator.parity_qgeom`, through `compare` and the
 `compare` command). On top of the Wannier family's preconditions (inputs by SHA-256,
