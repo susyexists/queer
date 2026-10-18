@@ -701,16 +701,21 @@ replays with its own parameters and `qgeom_time_stop: false`. Rounding can still
 steer a decision that lies exactly at its threshold: a strict local extremum of the
 occupation pass whose neighbour ties it by symmetry (the seeds), a velocity that
 vanishes by symmetry in the band-edge rule, the error estimates of symmetry-related
-cells that tie in the refinement order, an A3 maximum that ties. Another BLAS kernel
-breaks such ties another way: a Haldane metal (C3-symmetric bands) gives 127 band-edge
-vertices under OpenBLAS's Sandybridge kernel and 150 under SkylakeX, so 10 014 vs
-10 037 vertices, and the occupation pass finds 0 vs 2 seeds on a Haldane metal and
-3 vs 1 on Kane-Mele (Sandybridge vs SkylakeX; `OPENBLAS_CORETYPE=Haswell` and `Zen`
-crash in the development environment's OpenBLAS 0.3.34 on a Zen 4 host, so
-Sandybridge, SkylakeX, Prescott, Nehalem and Barcelona were used). The goldens use a
-layer without exact symmetries; a symmetric model replays
-reproducibly only with the reference's own NumPy and BLAS, and the comparator says so
-(below).
+cells that tie in the refinement order, an A3 maximum that ties; and a controlled
+quantity that vanishes identically (by symmetry) has a rounding-level scale, so its
+normalised error estimate is rounding noise that orders the refinement. Another BLAS
+kernel breaks such ties another way. A Haldane metal (C3-symmetric bands, the test's
+`SYMMETRIC` settings) gives 127 band-edge vertices under OpenBLAS's Sandybridge,
+Prescott, Nehalem, Barcelona and Haswell kernels and 150 under SkylakeX (10 014 vs
+10 037 vertices); a Rice-Mele stack (`rice_mele(1.0, 0.6, staggered=0.15)`, E_F 0.9 eV,
+whose Berry curvature and off-diagonal metric vanish identically) gives 10 108
+vertices under Sandybridge, Prescott, Nehalem and Barcelona, 10 310 under Haswell and
+10 564 under SkylakeX. `OPENBLAS_CORETYPE=Haswell` and `Zen` crash in the development
+environment's OpenBLAS 0.3.34 (NumPy 2.5.3) on this Zen 4 host; Haswell runs with
+NumPy 2.4.6's bundled OpenBLAS (a `PYTHONPATH` overlay). The goldens, the QWZ square
+metal and the production-like insulator keep one vertex set on all six kernels. A
+symmetric model replays reproducibly only with the reference's own NumPy and BLAS; the
+comparator identifies the reason of each mesh difference (below).
 
 **Comparator** (`queer.compat.generator.parity_qgeom`, through `compare` and the
 `compare` command). On top of the Wannier family's preconditions (inputs by SHA-256,
@@ -731,16 +736,17 @@ occupied count and its source, the occupied manifold's applicability):
   run's vertex count, its keys, when written, hashing to its digest, a QUEER run's
   digest its `vertex_set`'s), and a QUEER candidate without one fails against a
   reference that has one;
-- *symmetric ties* (precondition `mesh_determined`): where both runs record bands
-  C3-symmetric to the eigenvalue tolerance (`symmetry.c3_band_floor_meV` on a
-  hexagonal lattice, which the driver writes too), symmetry-related k-points tie
-  exactly, so different vertex sets are `not_comparable`: "the reference's adaptive
-  mesh depends on rounding at exact symmetric ties: replay on the same BLAS kernel or
-  compare on a fixed uniform grid", never `fail`. A record that is not its run's
-  mesh still fails, and without that symmetry record a mesh difference fails. The
-  production model (job-1cd360d9, C3 floor 9.2 meV) is not exactly symmetric. Ties
-  of other symmetries (inversion or a mirror on another lattice) leave no record in
-  the driver's documents and still fail;
+- *mesh attribution* (precondition `mesh_determined`, the rule below): where the
+  vertex sets differ, the comparator locates the first divergence and identifies its
+  reason from the runs' decision records. A difference identified as rounding at tied
+  decisions is `not_comparable`, naming the point, the rule, the tie count and the
+  difference, with the remedy "run both on one BLAS kernel (the same
+  OPENBLAS_CORETYPE and numpy build)"; an unidentified difference is compared and
+  fails (`qgeom.mesh` `differs_unexplained`, the analysis in its detail). The C3 gate
+  (both runs' bands C3-symmetric on a hexagonal lattice) is retired: it let a real
+  defect on an exactly C3 model hide behind `not_comparable` and failed correct runs
+  of a mirror-symmetric model. `symmetry.lattice_hexagonal` and `c3_band_floor_meV`
+  stay informational;
 - *quantities*, with δ(T) = 1e-8 max(max A3, max |M|) over both runs: C, C_in to
   1e-8 max(1, |C|); K_in, K_diag, K_upper_loose to 1e-8 of their largest element;
   the headline A3 to δ; theta0 to asin(δ/A3)/3 on 3 theta0 modulo 360° where
@@ -810,19 +816,170 @@ occupied count and its source, the occupied manifold's applicability):
 Negative controls fail (`tests/numerical/test_generator_qgeom.py`): theta0 shifted by
 1° where A3 is determined, a doubled Chern number, a sign-flipped K_in, a
 sign-flipped or zeroed chi at E_F and at a CNP with a determined A3, a dropped vertex
-(with or without the vertex keys), vertex keys that do not hash to their digest,
-another stop reason, forged error estimates, a mu_CNP moved onto a band (at 0, 5, 20
-and 60 K, with its row and curves moved consistently and with the gap's DOS zeroed),
-a CNP row off its mu_CNP, a missing mu_CNP whose count crosses n_occ, unrounded
-curves that are not the run's 5-digit file, an A3 move of 1e-6 that the 5 digits
-hide; an unknown producer, a clock-stopped reference without its vertex count or
-without a matching replay, a candidate stopped on its own clock and a symmetric
-model's mesh difference are `not_comparable`. Rerun under OpenBLAS kernels
-(`OPENBLAS_CORETYPE`, in a subprocess, skipped where a kernel cannot run): the
-insulator under Prescott, Nehalem and Sandybridge passes against its golden, under
-Prescott also against QUEER's own default-kernel run unrounded, and the Haldane metal
-under Sandybridge and SkylakeX is `not_comparable` (on this host their vertex sets
-differ), never `fail`.
+(with or without the vertex keys, whatever the model's symmetry), vertex keys that do
+not hash to their digest, another stop reason, forged error estimates, a mu_CNP moved
+onto a band (at 0, 5, 20 and 60 K, with its row and curves moved consistently and with
+the gap's DOS zeroed), a CNP row off its mu_CNP, a missing mu_CNP whose count crosses
+n_occ, unrounded curves that are not the run's 5-digit file, an A3 move of 1e-6 that
+the 5 digits hide, and the mesh defects of the attribution rule below; an unknown
+producer, a clock-stopped reference without its vertex count or without a matching
+replay, a candidate stopped on its own clock and a mesh difference identified as
+rounding are `not_comparable`. Rerun under OpenBLAS kernels (`OPENBLAS_CORETYPE`, in
+a subprocess, skipped where a kernel cannot run): the insulator under Prescott,
+Nehalem and Sandybridge passes against its golden, under Prescott also against
+QUEER's own default-kernel run unrounded; the Haldane metal and the Rice-Mele stack
+under Sandybridge and SkylakeX are `not_comparable` with their identified reasons (on
+this host their vertex sets differ), and the QWZ square metal passes.
+
+#### Why two QGEOM meshes differ
+
+*The user's decisions (2026-10-18).* (1) When a QGEOM comparison cannot be made
+exactly, the comparator identifies the reason of the mismatch; the plan's error-bar
+fallback (|ΔX| ≤ err_ref + err_Q) is not used. (2) A mesh mismatch identified as
+rounding at tied decisions ends as `not_comparable` with that reason (the point, the
+rule and the tie count) and the remedy (run both on one BLAS kernel); an unidentified
+mismatch is compared and fails. (3) `Out/qgeom_response_full.json` stays always
+written.
+
+*The decision record* (`qgeom.integration.decision_ties`, QUEER-only,
+`queer.observables.qgeom.Integrator.decision_record`). Beside the kernel's
+arithmetic, without changing the mesh or the history (the port tests compare QUEER's
+integration with the vendored kernel's exactly, and a 305 631-vertex run gives the
+same vertex set, history and wall time with and without the record, which takes
+27.5 kB), QUEER computes each decision's margin to its threshold and records the
+decisions within their rounding band:
+
+- *seeds*: the strict local extrema of each pair's gap and each window band on the
+  occupation grid and their thresholds (hot gap, degeneracy, the extended range) and
+  the controlled-mu range; the record gives the seed count, the digest of the seed
+  ids and the tied ones (grid index, kind, bands, taken);
+- *must-split rounds*, one per round, also the last that splits nothing: each judged
+  leaf's possible outcomes (the first rule that holds, in the order seed, gap, edge,
+  below the depth limit, a capped gap rule deferring its leaves) from the margins of
+  the seed diameter, the gap rule's d vmax > gap_ratio max(gap, gap_floor), its
+  extended range and 1e-9 eV degeneracy floor, the occupied-block rule and the edge
+  rule's velocity signs, reach and span; the tied leaves (centre key, mask of possible
+  outcomes, the run's outcome), the tie count per rule, the leaves decided outside
+  their bounds (a QUEER bug, never expected), and per rule the number of leaves split,
+  an additive digest of their centre keys (the sum of their splitmix64 hashes modulo
+  2^64: digests of disjoint sets add) and the range of vertex ids their splits created;
+- *refinement steps*, one per history entry: the stop test worst <= target, the
+  batch's count (the cumulative indicator against worst - 0.75 target) and the leaves
+  whose membership rounding can flip (indicators within the band of the batch's cut);
+  per stage the controlled quantities whose scale is rounding (below), and per step
+  the leaves whose indicator is one of theirs and the worst summed error from them and
+  from the others;
+- *the second stage's A3 maximum*: the grid mu within its band of the maximum.
+
+`Out/qgeom_vertices.json` holds the keys in creation order (`order: creation`; the
+digest stays that of the sorted keys), so each round's splits are the cells whose
+child centres its vertex range created: a vertex whose two coordinates share their
+lowest set bit l is the centre of the cell of size 2 l, which exists only once its
+parent is split.
+
+*The bands* are derived from the run's own scales. An energy comparison is tied within
+TIE_ROUNDING = 1e-12 of the spectral radius over the occupation grid (a gap or a
+neighbour difference within twice that, a difference of gaps within four times); a
+velocity comparison within 1e-12 of the largest band, interband or occupied-block
+velocity of the base mesh (a gap-rule margin d vmax - gap_ratio max(gap, floor)
+within d times the velocity band plus gap_ratio times twice the energy band); the
+refinement's indicators, their sums and the A3 maximum within TIE_INDICATOR = 1e-7 of
+the cut value, of max(worst, target) and of max(max A3, max |M|) (twice that between
+two leaves or two mu). A quantity's scale is rounding when it is nonzero and at most
+1e-12 of its family's (a Fermi-surface v_a G_bc or v_a omega column against the largest
+of those at the same mu; the sea and block omega and metric columns against the
+largest area-integrated geometric scale; a headline's alpha and beta where one of its
+v_a G_bc is). Measured on the six models (Haldane, Rice-Mele, QWZ square, the three
+goldens) under Sandybridge, SkylakeX, Prescott, Nehalem, Barcelona and Haswell, for
+every decision of the rounds before the first divergence:
+
+| decisions | largest kernel-to-kernel margin difference | closest margin of a generic model |
+| --- | --- | --- |
+| seed extrema and thresholds | 5.8e-4 band (1.2e-15 of the spectral radius) | 1.5e6 bands |
+| gap rule (ratio, range, degeneracy, occupied block) | 1.3e-3 band | 2.2e7 bands; 131 to 210 bands for the 1e-9 eV floor against the top band's zero gap |
+| edge rule (velocity signs, reach, span) | 2.1e-3 band (2.1e-15 of the velocity scale) | 4.5e6 bands (signs), 4.9e3 bands (span) |
+| batch cut (indicators) | 3.8e-3 band (3.8e-10 of the cut value) | 148 bands between neighbouring indicators at the cut |
+| stop and batch count (worst, cumulative indicator) | 9.4e-4 band | |
+| A3 maximum | 9.7e-7 band | |
+| indicators of rounding-level quantities (Rice-Mele) | 3.75e6 bands (0.38 of the cut) | |
+
+So each band exceeds the largest measured difference 260 to 10^6 times, and the
+closest margins of models without exact symmetries lie 130 bands or more beyond it
+(a symmetric model's exact ties sit at margin 0). The closest is the 1e-9 eV
+degeneracy floor, a fixed energy against bands that grow with the spectral radius:
+131 bands at the Haldane metal's 3.8 eV, 25 at 20 eV. A flip in the other run puts this
+run's margin within twice the rounding, inside its band, which is why one run's
+record can speak for a decision.
+
+*The attribution rule* (`queer.compat.generator.qgeom_mesh.attribute`). A record is
+first checked against its own run: its rounds chain from the base mesh (2 base^2
+vertices, base^2 leaves; a split adds 3 leaves and 4 to 8 vertices,
+`AdaptiveMesh.split`) to the run's vertex count, its history entries are the run's,
+its counts are its lists, it decides no leaf outside its bounds and, with the keys,
+each round's splits are what its vertices show and each tied leaf was a leaf then
+with the outcome its vertices show. A record that is not its run's (a forged tie, a
+count that is not its list, a dropped vertex) is `differs_unexplained`, never a
+reason. Then:
+
+- *two records* (two QUEER runs): the seeds and the seed energies inside the mu range
+  (a count that differs needs that many energies tied at the range's ends in both
+  records), then each round in order; a round agrees
+  when its splits per rule (count and digest), stop and A3 maximum agree, and the
+  meshes before the first round that does not are then the same. There the
+  difference is identified only if the leaves split outside the decisions tied in
+  both records are the same (the tied leaves are taken out of each digest), each tied
+  decision decided differently was possible the other way in both records, a stop
+  decided differently is tied in both, an A3 maximum decided differently is tied in
+  both, or the stage normalises rounding-level quantities that set an indicator or
+  the worst sum in both runs (the refinement is then ordered by rounding noise);
+- *one record* (the driver's reference has neither keys nor a record, and keeps its
+  last 12 history entries): the seed count (at most the tied seed decisions may
+  differ), then the first history entry that differs, aligned to the record's full
+  history. The round that produced it must tie at least |Δleaves|/3 split decisions
+  and no more than 8 vertices per tied decision may differ; a phase or stage that
+  ended in one run only needs a tied end; a refinement step ordered by rounding-level
+  quantities explains any count. Where the reference's 12 entries begin at an entry
+  the candidate never reached, the difference is identified only if the must-split
+  vertices per rule agree and every refinement step of the candidate is ordered by
+  rounding;
+- *equal records without keys* (a driver reference whose recorded mesh equals the
+  candidate's): `qgeom.mesh` agrees and says what is established (vertex count,
+  vertices per rule, seeds, controlled mu, deepest level and finest cell, the last
+  history entries) and what is not: that the vertex sets are equal, since an
+  exchange of leaves that keeps these counts is not seen; the candidate's record
+  counts the tied decisions that could do so.
+
+*Scenarios* (this host): the Haldane metal under SkylakeX against any of the other
+five kernels is `not_comparable` at must-split round 2 (1 of the 14 edge decisions
+tied in both runs splits one more leaf); the Rice-Mele stack under SkylakeX or Haswell
+against the other four is `not_comparable` at refinement step 5 or 4 (710 of 1116
+error columns normalise rounding-level quantities, which set the indicator of about
+930 leaves and a worst sum of 0.2 against 0.016 from the others); against a driver
+reference made from the other kernel's run, the Haldane metal is identified at
+history entry 2 (+3 leaves against 14 tied decisions) and the Rice-Mele stack in the
+refinement before the reference's recorded history. Without vertex keys (a
+305 631-vertex Haldane run, above the 250 000-key cap) two QUEER runs on Sandybridge
+and SkylakeX are identified by their digests at must-split round 0 (1 of 10 tied edge
+decisions). A gap-rule ratio a fifth low or
+one gap-flagged leaf left unsplit in the candidate fails on both models (against QUEER
+and against the driver), as does a first stage that never refines its worst leaf on
+the insulator, a forged record that calls the defective decisions tied, and a real tie
+struck from the candidate's record.
+
+*Out of reach.* A difference after the first divergence: once the meshes differ every
+later decision may legitimately differ, so a defect that acts only after a rounding
+divergence (a refinement dropped after the Haldane metal's round-2 tie) is
+`not_comparable`. A defect in a refinement stage ordered by rounding-level quantities
+(the Rice-Mele stack's whole refinement) is indistinguishable from that noise. Against
+a driver reference the identification is by counts: a defect that changes no more
+decisions than the ties at that point, or exchanges leaves without changing counts,
+cannot be told from rounding, and a divergence before the reference's last 12 history
+entries is identified only through the rounding-ordered refinement: the 305 631-vertex
+Haldane run under SkylakeX against a driver reference made from its Sandybridge run
+diverges at must-split round 0, 49 rounds before the reference's recorded entries, and
+fails. A record is the
+run's own account: its margins are not recomputed, so a forgery consistent with its
+own mesh is caught only by the other run's record.
 
 **Goldens.** `qgeom_full_metal`, `qgeom_full_insulator`, `qgeom_diagonal_budget` and
 `qgeom_position_unavailable` (a generic three-band layer without exact symmetries, so
@@ -838,14 +995,16 @@ moves its CNP row to another grid mu (documented).
 time budget with an unknown vertex count, or a candidate not replayed at it) is
 `not_comparable` with the reason, not compared under the plan's error-bar fallback
 |ΔX| ≤ err_ref + err_Q: that fallback puts both runs' own error estimates into the
-tolerance (pending the user's approval). The per-T curves are compared at the
-driver's 5-digit print precision plus 1e-8 against the driver, which writes nothing
-finer, and unrounded between two QUEER runs. The replay is a vertex-count stop
-reported as `time`, not `qgeom_max_points = N`.
+tolerance, and the user decided (2026-10-18) that the comparator identifies the reason
+of a mismatch instead. The per-T curves are compared at the driver's 5-digit print
+precision plus 1e-8 against the driver, which writes nothing finer, and unrounded
+between two QUEER runs. The replay is a vertex-count stop reported as `time`, not
+`qgeom_max_points = N`.
 
 **QUEER-only records and the Generator.** `Out/qgeom_vertices.json` (the replay
-record) and `Out/qgeom_response_full.json` (the unrounded curves) are comparison
-records, not products. The backend picks them up with the job's `Out/**` like every
+record, keys in creation order), `Out/qgeom_response_full.json` (the unrounded curves,
+always written) and `qgeom.integration.decision_ties` (the decision record, in the
+results document) are comparison records, not products. The backend picks them up with the job's `Out/**` like every
 data file, and its parity service already fetches every `Out/*.json` of
 both runs (within its 64 MiB budget per run), which is how a comparison finds them;
 deleting either only makes a later comparison fall back (to the recorded mesh, or to
