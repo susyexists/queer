@@ -46,7 +46,9 @@ from queer.compat.generator.parity_shift import (
 )
 from queer.compat.generator.pyatb_conventions import pyatb_shift_constant_ratio
 from queer.compat.generator.pyatb_files import SHIFT_COMPONENTS, shift_current_text
+from queer.compat.generator.pyatb_shift_integrand import PYATB_HARTREE, ShiftRun, recompute
 from queer.compat.generator.runner import main, run
+from queer.compat.generator.shift_scfout import codata_hartree, read_records
 
 SPINOR = {"occ_band": 2, "omega": [0.3, 6.5], "domega": 0.02, "eta": 0.1, "grid": [3, 3, 2]}
 COLLINEAR = {"occ_band": 1, "omega": [0.2, 4.5], "domega": 0.04, "eta": 0.1, "grid": [6, 6, 1]}
@@ -308,6 +310,11 @@ def classes(report):
 
 def components(report):
     return {item["class"] for item in report["quantities"] if item["name"].startswith("sigma_")}
+
+
+def failed_or_passed(report, name):
+    """A precondition's detail."""
+    return next(item["detail"] for item in report["preconditions"] if item["name"] == name)
 
 
 def failed_preconditions(report):
@@ -628,6 +635,160 @@ def test_a_transition_on_a_bin_edge_may_change_rows_but_not_vanish_or_count_twic
             assert item["class"] == UNEXPLAINED and "sum over the photon energies" in item["detail"], item
 
 
+def outer_edge_run(directory, omega):
+    """The collinear model without smearing on ``omega``, with its recomputation."""
+    block = {**COLLINEAR, "smearing_method": 0, "omega": omega}
+    run_dir = candidate(directory, shift_collinear_scfout, {}, 1, block)
+    full = {**SHIFT_DEFAULTS, **block}
+    return run_dir, recompute(read_records(run_dir / "scf.scfout"), ShiftRun.from_block(full), workers=1)
+
+
+def moved(table, row, chosen):
+    """A table's row with the groups ``chosen`` of its outer edges on the other side."""
+    return table.value[row] + sum((table.placements[index].change[row] for index in chosen), np.zeros(18))
+
+
+def inside(table, row):
+    """A table's row with every group of its outer edges inside the table."""
+    return moved(table, row, [index for index, item in enumerate(table.placements) if not item.inside])
+
+
+@pytest.mark.parametrize(
+    ("label", "omega", "key", "row"),
+    [
+        ("binned-first", [1.64, 3.0], "binned_uA_V2", 0),
+        ("per-eV-first", [1.66, 3.0], "sigma_uA_V2", 0),
+        ("binned-last", [0.2, 1.605], "binned_uA_V2", -1),
+    ],
+)
+def test_a_transition_on_an_outer_edge_lies_inside_the_table_or_outside_it(tmp_path, label, omega, key, row):
+    """The collinear model's transitions at exactly 1.64 eV (two k-points of equal weight; nothing else shares their
+    row) on the first or the last edge of QUEER's histogram: each k-point's transitions inside the table or outside it
+    pass, in every combination (half their weight is one k-point's inside); the edge row holding twice, minus, a
+    quarter or one and a half times their weight fails. The earlier allowance passed those within their weight, since
+    on an outer edge it moved the sum of every row beyond."""
+    run_dir, recomputation = outer_edge_run(tmp_path / label, omega)
+    reference = reference_from(tmp_path / f"reference-{label}", run_dir, port_table(run_dir))
+    name = "binned" if key == "binned_uA_V2" else "sigma"
+    tables = {
+        key: recomputation.physical[name],
+        f"legacy_single_channel.{key}": recomputation.physical[
+            "legacy_binned" if name == "binned" else "legacy"
+        ],
+    }
+    assert all(table.groups == 2 and table.placements_exact for table in tables.values())
+
+    def at_edge(target):
+        def edit(block):
+            for owner, table in tables.items():
+                holder = block["legacy_single_channel"] if owner.startswith("legacy") else block
+                values = columns(holder[key])
+                values[row] = target(table)
+                holder[key] = as_columns(values)
+
+        return edit
+
+    cases = [
+        (f"placed {chosen}", lambda table, chosen=chosen: moved(table, row, chosen), True)
+        for chosen in ([], [0], [1], [0, 1])
+    ]
+    cases += [
+        (f"{factor} x inside", lambda table, factor=factor: factor * inside(table, row), False)
+        for factor in (2.0, -1.0, 0.25, 1.5)
+    ]
+    assert judge(run_dir, reference)["verdict"] != FAIL
+    for case, target, honest in cases:
+        copy = edited(tmp_path / f"{label}-{case}".replace(" ", "_"), run_dir, at_edge(target))
+        report = judge(copy, reference)
+        quantities = {item["name"]: item for item in report["quantities"]}
+        judged = [quantities[f"physical.{owner}"] for owner in tables]
+        if honest:
+            assert report["verdict"] != FAIL and all(item["class"] == AGREE for item in judged), (
+                case,
+                judged,
+            )
+        else:
+            assert report["verdict"] == FAIL and all(item["class"] == UNEXPLAINED for item in judged), case
+            assert "outer edges tested inside and outside the table" in judged[0]["detail"]
+
+
+def test_outer_edge_placements_not_tested_exactly_are_not_determined(tmp_path, monkeypatch):
+    """Beyond the groups whose placements are tested exactly (here a limit of one against the two k-points on the
+    binned table's first edge) those transitions keep their allowance and their entries are not determined: honest or
+    with row 0 holding twice their absolute weight, the comparison is not comparable, never a pass."""
+    from queer.compat.generator import pyatb_shift_integrand
+
+    monkeypatch.setattr(pyatb_shift_integrand, "OUTER_PLACEMENTS", 1)
+    run_dir, recomputation = outer_edge_run(tmp_path / "run", [1.64, 3.0])
+    table = recomputation.physical["binned"]
+    assert table.groups == 2 and not table.placements_exact and not table.placements
+    reference = reference_from(tmp_path / "reference", run_dir, port_table(run_dir))
+
+    def doubled(block):
+        for holder, name in ((block, "binned"), (block["legacy_single_channel"], "legacy_binned")):
+            values = columns(holder["binned_uA_V2"])
+            values[0] = 2 * (
+                recomputation.physical[name].value[0] + recomputation.physical[name].outer_edge[0]
+            )
+            holder["binned_uA_V2"] = as_columns(values)
+
+    for copy in (run_dir, edited(tmp_path / "doubled", run_dir, doubled)):
+        report = judge(copy, reference)
+        assert report["verdict"] == NOT_COMPARABLE, render_markdown(report)
+        assert "not placed exactly" in failed_preconditions(report)["determined"]
+
+
+def test_a_transition_on_pyatbs_window_edge_lies_inside_it_or_outside_it(tmp_path):
+    """The collinear model's 1.64 eV transitions on PyATB's energy scale (2.3e-6 of their energy lower) at exactly the
+    first photon energy without smearing: PyATB's window holds them or not, and each k-point's choice reproduces its
+    table; row 0 holding twice or a quarter of their weight is not reproduced (not comparable, never a pass)."""
+    run_dir, recomputation = outer_edge_run(tmp_path / "run", [1.64 * PYATB_HARTREE / codata_hartree(), 3.0])
+    literal = recomputation.literal
+    assert literal.groups == 2 and literal.placements_exact
+    weight = inside(literal, 0)
+    assert np.max(np.abs(weight)) > 0.1 * np.max(np.abs(literal.value))
+    own = port_table(run_dir)
+    for case, row, verdict in (
+        ("own", None, None),
+        ("placed [0]", moved(literal, 0, [0]), None),
+        ("placed [0, 1]", moved(literal, 0, [0, 1]), None),
+        ("twice", 2 * weight, NOT_COMPARABLE),
+        ("a quarter", 0.25 * weight, NOT_COMPARABLE),
+    ):
+        table = own.copy()
+        if row is not None:
+            table[0] = row
+        report = judge(run_dir, reference_from(tmp_path / case.replace(" ", "_"), run_dir, table))
+        reproduced = report["semantics"]["rules"]["pyatb_reproduced"]["reproduced"]
+        if verdict is None:
+            assert report["verdict"] in {PASS, PASS_DOCUMENTED} and reproduced, (
+                case,
+                render_markdown(report),
+            )
+        else:
+            assert report["verdict"] == verdict and not reproduced, case
+            assert NOT_REPRODUCED in failed_preconditions(report)["pyatb_reproduced"]
+
+
+def test_a_vanishing_table_is_reported_as_vanishing(runs, printed, tmp_path):
+    """A response that vanishes passes as zero, and the report says so wherever it judges it: the determination, check
+    A's quantity and every component's class name the table vanishing, so the pass is not read as a statement about
+    its values below the rounding of what cancels in it."""
+    report = judge_run(runs, printed, tmp_path, "centro")
+    assert report["verdict"] == PASS, render_markdown(report)
+    determined = report["semantics"]["rules"]["determined"]
+    assert determined["vanishing"] and set(determined["vanishing_tables"]) == {
+        "physical.sigma_uA_V2",
+        "literal",
+    }
+    detail = failed_or_passed(report, "determined")
+    assert "every table vanishes" in detail and "physical.sigma_uA_V2 vanishing (largest" in detail
+    quantities = {item["name"]: item["detail"] for item in report["quantities"]}
+    assert quantities["physical.sigma_uA_V2"].startswith("vanishing (largest ")
+    assert all("both vanish" in quantities[f"sigma_{name}"] for name in SHIFT_COMPONENTS)
+    assert "vanishing" in render_markdown(report)
+
+
 def test_a_queer_error_at_the_near_degenerate_kpoints_alone_fails(runs, printed, tmp_path, monkeypatch):
     """QUEER's estimator wrong only at the 8 TRIM points of the split model, where Kramers pairs 4e-5 eV apart make
     PyATB's method 1 regularize its denominators: every record of the run follows the error, and the recomputation
@@ -929,6 +1090,12 @@ def test_pyatbs_cut_at_natural_near_degeneracies_of_the_real_scfout_is_documente
     assert report["verdict"] == PASS_DOCUMENTED, render_markdown(report)
     rules = report["semantics"]["rules"]
     assert rules["determined"]["tables"]["physical.sigma_uA_V2"]["vanishing"]
+    # The physical table vanishes (1.6e-6 of the 322 microA/V^2 that cancel in it) and is reported so: check A
+    # judges it as zero, not its values below that rounding.
+    assert classes(report)["physical.sigma_uA_V2"] == AGREE
+    detail = next(item["detail"] for item in report["quantities"] if item["name"] == "physical.sigma_uA_V2")
+    assert detail.startswith("vanishing (largest ")
+    assert "physical.sigma_uA_V2 vanishing" in failed_or_passed(report, "determined")
     assert report["tolerance_basis"]["recomputation"]["flagged_kpoints"] == 4
     documented = [values for values in rules["attribution"].values() if values["class"] == DOCUMENTED]
     assert len(documented) >= 6 and all(

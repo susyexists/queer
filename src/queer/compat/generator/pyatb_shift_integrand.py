@@ -74,7 +74,11 @@ bc} = Im(r_mn^b r_nm;a^c + r_mn^c r_nm;a^b)``. QUEER's weight of a transition is
   :data:`KERNEL_ROUNDING`, :data:`ENERGY_ROUNDING` relative);
 - for a transition within :data:`EDGE_EV` of a discontinuity of the kernel (a bin edge, PyATB's rows and window
   ends), the difference of placing it either side (``edge``; ``edge_cumulative`` is what that choice moves in the
-  sum over the rows up to each one, which an interior edge leaves unchanged beyond its two rows).
+  sum over the rows up to each one, which an interior edge leaves unchanged beyond its two rows). On an outer edge
+  of the table (the first or last edge of a histogram, PyATB's window ends: one side lies outside the table) the
+  choice moves the sum over the rows by the transition's whole weight, so there no allowance is given: each
+  k-point's transitions on that edge have exactly two placements (``placements``: inside the table or outside it),
+  and a comparison tests the table against each combination of them (:class:`Placement`).
 
 Where PyATB's own value depends on its eigensolver's basis inside degenerate levels, the bases differ by that
 dependence, and the tolerance says so. No number of the candidate's enters a tolerance.
@@ -123,6 +127,10 @@ TERM_FLOOR = 32 * float(np.finfo(float).eps)
 KERNEL_ROUNDING = 64 * float(np.finfo(float).eps)
 ENERGY_ROUNDING = 64 * float(np.finfo(float).eps)
 EDGE_EV = 1e-9
+# A table's transitions on its outer edges are tested in their exact placements, one choice per k-point and edge, up
+# to this many such groups (2^OUTER_PLACEMENTS combinations); beyond it, or where the recomputation's own placement
+# splits a k-point's group across the edge, those entries are not determined.
+OUTER_PLACEMENTS = 10
 # For the physical mode's rounding, levels closer than this share of the kernel's width (eta, or domega without
 # smearing) are one group: their transitions land at the same photon energies, so a rotation inside the group moves
 # the table only by what the evaluation bases measure.
@@ -891,6 +899,10 @@ class Kernel:
     offset: Callable[[np.ndarray], np.ndarray] | None = None
     # A histogram's distance (eV) from each transition to its nearest bin edge.
     distance: Callable[[np.ndarray], np.ndarray] | None = None
+    # The kernel of transitions at the first energies placed by the rows and window of the second (the same energies
+    # moved across an edge): either placement of a transition on an edge, with its own value (None: ``value`` of the
+    # second, for a kernel constant between its edges).
+    placed: Callable[[np.ndarray, np.ndarray], np.ndarray] | None = None
 
 
 def queer_rows(run: ShiftRun, energies: np.ndarray, *, binned: bool) -> np.ndarray:
@@ -984,6 +996,9 @@ class Kernels:
             part("rounding"),
             near,
             lambda energies: (photon - energies[None, :]) / run.eta,
+            placed=lambda energies, side: np.where(
+                mask(side), self._gaussian(energies, "value", photon), 0.0
+            ),
         )
 
 
@@ -1085,6 +1100,32 @@ class _Sums:
             "exact_kpoints": 0,
             "min_spacing_eV": math.inf,
         }
+        # Per table: the placements of its outer edges' groups (dropped beyond OUTER_PLACEMENTS), their number and
+        # the number the recomputation's own placement splits across the edge.
+        self.placements: dict[str, list[Placement]] = {}
+        self.groups: dict[str, list[int]] = {}
+
+    def merge(self, other: _Sums) -> None:
+        """Adds another task's sums."""
+        for key, value in other.tables.items():
+            self.tables[key] = self.tables.get(key, 0.0) + value
+        for key in ("transitions", "flagged_kpoints", "exact_kpoints"):
+            self.facts[key] += other.facts[key]
+        self.facts["min_spacing_eV"] = min(self.facts["min_spacing_eV"], other.facts["min_spacing_eV"])
+        for key, (count, split) in other.groups.items():
+            self.placed(key, other.placements.get(key, []), count, split)
+
+    def placed(self, prefix: str, placements: Sequence[Placement], count: int, split: int) -> None:
+        """Adds ``count`` groups on a table's outer edges (``split`` of them split by the recomputation's own
+        placement), with the ``placements`` of those it keeps."""
+        groups = self.groups.setdefault(prefix, [0, 0])
+        groups[0] += count
+        groups[1] += split
+        kept = self.placements.setdefault(prefix, [])
+        if groups[0] > OUTER_PLACEMENTS:
+            kept.clear()
+        else:
+            kept.extend(placements)
 
     def add(self, name: str, kernel: Callable[[np.ndarray], np.ndarray], energies: Any, weights: Any) -> None:
         energies = np.asarray(energies, float).reshape(-1)
@@ -1170,17 +1211,76 @@ class _Sums:
             key = f"{prefix}.{name}"
             self.tables[key] = self.tables.get(key, 0.0) + value
         flat = energies[0].reshape(-1)
-        near = kernel.near_edge(flat)
-        for name in (prefix + ".edge", prefix + ".edge_cumulative"):
-            self.tables.setdefault(name, np.zeros((count, width)))
-        if near.any():
-            # A transition on a discontinuity of the kernel lands on either side of it: per row the difference of the
-            # two placements, and, summed over the rows up to each one, what that choice moves (an interior edge only
-            # the row below it, the lower end of the table every row).
-            jump = kernel.value(flat[near] + 2 * EDGE_EV) - kernel.value(flat[near] - 2 * EDGE_EV)
-            amounts = np.abs(weights[0].reshape(-1, width)[near])
-            self.tables[prefix + ".edge"] += np.abs(jump) @ amounts
-            self.tables[prefix + ".edge_cumulative"] += np.abs(np.cumsum(jump, axis=0)) @ amounts
+        signed = weights[0].reshape(-1, width)
+        # A transition the table does not sum has no placement.
+        near = kernel.near_edge(flat) & np.any(signed != 0, axis=1)
+        for name in ("edge", "edge_cumulative", "outer_edge", "outer_cumulative"):
+            self.tables.setdefault(f"{prefix}.{name}", np.zeros((count, width)))
+        self.placed(prefix, [], 0, 0)
+        if not near.any():
+            return
+        # A transition on a discontinuity of the kernel lands on either side of it: per row the difference of the two
+        # placements, and, summed over the rows up to each one, what that choice moves (an interior edge only the row
+        # below it). On an outer edge (one side lies outside the table) the choice moves the sum of every row beyond:
+        # there each k-point's transitions have their two placements instead (Placement), and the allowance is kept
+        # apart for a table whose placements are not tested exactly.
+        chosen = np.flatnonzero(near)
+        here = flat[chosen]
+        place = kernel.placed or (lambda energies, side: kernel.value(side))
+        below = place(here, here - 2 * EDGE_EV)
+        above = place(here, here + 2 * EDGE_EV)
+        jump = above - below
+        amounts = np.abs(signed[chosen])
+        empty_below = ~below.any(axis=0)
+        outer = empty_below ^ ~above.any(axis=0)
+        inner = ~outer
+        self.tables[prefix + ".edge"] += np.abs(jump) @ amounts
+        self.tables[prefix + ".edge_cumulative"] += np.abs(np.cumsum(jump[:, inner], axis=0)) @ amounts[inner]
+        if not outer.any():
+            return
+        self.tables[prefix + ".outer_edge"] += np.abs(jump[:, outer]) @ amounts[outer]
+        self.tables[prefix + ".outer_cumulative"] += (
+            np.abs(np.cumsum(jump[:, outer], axis=0)) @ amounts[outer]
+        )
+        current = kernel.value(here[outer])
+        inside = np.where(empty_below, above, below)[:, outer]
+        counted = current.any(axis=0)
+        transitions = chosen[outer]
+        kpoint = transitions // pairs
+        lower = empty_below[outer]
+        found: list[Placement] = []
+        split = 0
+        keys = sorted(set(zip(kpoint.tolist(), lower.tolist(), strict=True)))
+        for point, side in keys:
+            group = (kpoint == point) & (lower == side)
+            members = transitions[group]
+            if counted[group].all():
+                # Moved out: the table's own rounding already holds theirs.
+                found.append(Placement(-current[:, group] @ signed[members], True, np.zeros((count, width))))
+                continue
+            if counted[group].any():
+                split += 1
+                continue
+            # Moved in: the ordinary rounding of these transitions in the row they would take.
+            moved = inside[:, group]
+            envelope = np.max(
+                [moved @ np.abs(other.reshape(-1, width)[members] - signed[members]) for other in weights[1:]]
+                or [np.zeros((count, width))],
+                axis=0,
+            )
+            extra = noise.reshape(-1, width)[members]
+            if grouped:
+                extra = extra + residual.reshape(-1, width)[members]
+            rounding = SPREAD_MULTIPLE * envelope + TERM_FLOOR * (moved @ extra)
+            if kernel.offset is not None:
+                offset = kernel.offset(flat[members])
+                rounding += KERNEL_ROUNDING * ((moved * (1 + offset**2)) @ np.abs(signed[members]))
+                rounding += ENERGY_ROUNDING * (
+                    (moved * (2 * np.abs(offset) / self.run.eta))
+                    @ (magnitude.reshape(-1, width)[members] * scales.reshape(-1, 1)[members])
+                )
+            found.append(Placement(moved @ signed[members], False, rounding))
+        self.placed(prefix, found, len(keys), split)
 
 
 def _transitions_mask(run: ShiftRun, shifted: np.ndarray, tolerance: float | None) -> np.ndarray:
@@ -1378,25 +1478,38 @@ def _task(context: _Context, kpoints: np.ndarray) -> _Sums:
         part = _batch(context, prepared, kpoints[start : start + context.batch])
         if total is None:
             total = part
-            continue
-        for key, value in part.tables.items():
-            total.tables[key] = total.tables.get(key, 0.0) + value
-        for key in ("transitions", "flagged_kpoints", "exact_kpoints"):
-            total.facts[key] += part.facts[key]
-        total.facts["min_spacing_eV"] = min(total.facts["min_spacing_eV"], part.facts["min_spacing_eV"])
+        else:
+            total.merge(part)
     assert total is not None
     return total
 
 
 # --------------------------------------------------------------------------- the recomputation
+@dataclass(frozen=True)
+class Placement:
+    """A k-point's transitions on one outer edge of a table, which the table counts (``inside``) or not: ``change``
+    ``(count, 18)`` is what placing them all on the other side of the edge adds to the table (inside the table or
+    outside it, nothing in between), and ``rounding`` the ordinary rounding they then add to its tolerance (that of
+    their entries in the row they take; zero when they leave the table)."""
+
+    change: np.ndarray
+    inside: bool
+    rounding: np.ndarray
+
+
 @dataclass
 class Table:
     """A table ``(count, 18)`` (microA/V^2) in the first orbital basis, in the second, the largest difference to it
     over the other bases (``spread``), its rounding tolerance at each entry, the same kernel of its transitions'
     magnitudes (``absolute``: the size of what cancels in it) and the part of the tolerance that transitions on a
-    discontinuity of the kernel add (``edge``: either placement; and ``edge_cumulative``: what that choice moves in the
-    sum over the rows up to each one). ``smooth`` is the tolerance without the edges: how far rounding alone moves an
-    entry."""
+    discontinuity of the kernel add (``edge``: either placement; ``edge_cumulative``: what that choice moves in the
+    sum over the rows up to each one at its interior edges). ``smooth`` is the tolerance without the edges: how far
+    rounding alone moves an entry.
+
+    The transitions on its outer edges (where one placement lies outside the table) have their exact placements
+    instead (``placements``, one per k-point and edge, of ``groups`` such groups, ``split`` of them split across the
+    edge by the recomputation's own placement); ``outer_edge`` (part of ``edge``) and ``outer_cumulative`` are their
+    allowance, for a table whose placements are not tested exactly (:attr:`placements_exact`)."""
 
     value: np.ndarray
     other: np.ndarray
@@ -1405,10 +1518,21 @@ class Table:
     edge: np.ndarray
     edge_cumulative: np.ndarray
     spread: np.ndarray
+    outer_edge: np.ndarray
+    outer_cumulative: np.ndarray
+    placements: tuple[Placement, ...] = ()
+    groups: int = 0
+    split: int = 0
 
     @property
     def smooth(self) -> np.ndarray:
         return self.rounding - self.edge
+
+    @property
+    def placements_exact(self) -> bool:
+        """Whether every group on the outer edges has its two placements here: none split by the recomputation's
+        own placement, at most :data:`OUTER_PLACEMENTS` of them."""
+        return self.split == 0 and self.groups <= OUTER_PLACEMENTS and len(self.placements) == self.groups
 
     def scaled(self, factor: float) -> Table:
         size = abs(factor)
@@ -1420,9 +1544,17 @@ class Table:
             size * self.edge,
             size * self.edge_cumulative,
             size * self.spread,
+            size * self.outer_edge,
+            size * self.outer_cumulative,
+            tuple(
+                Placement(factor * item.change, item.inside, size * item.rounding) for item in self.placements
+            ),
+            self.groups,
+            self.split,
         )
 
     def __add__(self, other: Table) -> Table:
+        groups = self.groups + other.groups
         return Table(
             self.value + other.value,
             self.other + other.other,
@@ -1431,6 +1563,11 @@ class Table:
             self.edge + other.edge,
             self.edge_cumulative + other.edge_cumulative,
             self.spread + other.spread,
+            self.outer_edge + other.outer_edge,
+            self.outer_cumulative + other.outer_cumulative,
+            self.placements + other.placements if groups <= OUTER_PLACEMENTS else (),
+            groups,
+            self.split + other.split,
         )
 
 
@@ -1529,19 +1666,10 @@ def recompute(
     )
     options = ExecutionOptions(workers=planned, batch_size=chunk, native_threads=1).resolved()
     parts = pmap(functools.partial(_task, context), chunks(kpoints, chunk), options)
-    tables: dict[str, np.ndarray] = {}
-    facts: dict[str, Any] = {
-        "transitions": 0,
-        "flagged_kpoints": 0,
-        "exact_kpoints": 0,
-        "min_spacing_eV": math.inf,
-    }
+    sums = _Sums(run)
     for part in parts:
-        for key, value in part.tables.items():
-            tables[key] = tables.get(key, 0.0) + value
-        for key in ("transitions", "flagged_kpoints", "exact_kpoints"):
-            facts[key] += part.facts[key]
-        facts["min_spacing_eV"] = min(facts["min_spacing_eV"], part.facts["min_spacing_eV"])
+        sums.merge(part)
+    tables, facts = sums.tables, sums.facts
     volume = abs(float(np.linalg.det(records.lattice))) * codata_bohr() ** 3
     conversion = -math.pi * QUEER_E_CHARGE**2 / QUEER_HBAR * 1e6 / volume / run.kpoints
     ratio = (
@@ -1568,6 +1696,7 @@ def recompute(
             + ENERGY_ROUNDING * tables[prefix + ".slope"]
             + tables[prefix + ".edge"]
         )
+        groups, split = sums.groups[prefix]
         return Table(
             tables[prefix + ".value"],
             tables[prefix + ".other.1"],
@@ -1576,6 +1705,11 @@ def recompute(
             tables[prefix + ".edge"],
             tables[prefix + ".edge_cumulative"],
             spread,
+            tables[prefix + ".outer_edge"],
+            tables[prefix + ".outer_cumulative"],
+            tuple(sums.placements[prefix]),
+            groups,
+            split,
         )
 
     names = ["sigma"] + (["binned"] if run.smearing == 0 else [])
@@ -1627,6 +1761,7 @@ def recompute(
             "spread_multiple": SPREAD_MULTIPLE,
             "term_floor": TERM_FLOOR,
             "edge_eV": EDGE_EV,
+            "outer_placements": OUTER_PLACEMENTS,
             "basis_seed": BASIS_SEED,
         }
     )

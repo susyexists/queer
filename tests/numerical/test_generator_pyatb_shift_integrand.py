@@ -424,6 +424,35 @@ def test_a_transition_on_a_bin_edge_is_priced_both_ways(tmp_path):
     assert np.all(table.smooth <= 1e-9 * np.max(np.abs(table.value)))
 
 
+def test_a_transition_on_an_outer_edge_lies_inside_the_table_or_outside_it(tmp_path):
+    """With the first photon energy at 1.64 eV the collinear model's transitions there (at two k-points) lie on the
+    first edge of the bins (w, w + domega]: each k-point's transitions are one group with exactly two placements,
+    inside row 0 or outside the table, and no allowance moves the rows' sums, which the transition's whole weight
+    would move in every row beyond (the earlier allowance let row 0 hold anything within that weight). The per-eV
+    table's edges lie at 1.62 and 1.66 eV."""
+    shift_collinear_scfout(tmp_path / "collinear.scfout")
+    block = {**COLLINEAR, "smearing_method": 0, "omega": [1.64, 3.0]}
+    _, _, recomputation = recomputed(tmp_path / "collinear.scfout", block)
+    physical = recomputation.physical
+    assert physical["sigma"].groups == 0 and not np.any(physical["sigma"].outer_edge)
+    for name in ("binned", "legacy_binned"):
+        table = physical[name]
+        assert (table.groups, table.split, table.placements_exact) == (2, 0, True), name
+        inside = table.value[0] + sum(item.change[0] for item in table.placements if not item.inside)
+        assert np.max(np.abs(inside)) > 0.1 * np.max(np.abs(table.value)), name
+        for item in table.placements:
+            # Only row 0 moves; a group moved into it brings its own rounding there.
+            assert np.flatnonzero(np.max(np.abs(item.change), axis=1)).tolist() == [0]
+            assert not np.any(item.rounding[1:]) and (item.inside or np.max(item.rounding[0]) > 0)
+        # Nothing on an interior edge; the outer edge's allowance is kept apart: row 0 entrywise, every row's sum.
+        assert not np.any(table.edge_cumulative)
+        assert np.array_equal(table.edge, table.outer_edge)
+        assert np.all(table.outer_edge[0] >= np.abs(inside) * (1 - 1e-12)) and not np.any(
+            table.outer_edge[1:]
+        )
+        assert np.allclose(table.outer_cumulative, table.outer_edge[0], rtol=1e-12, atol=0)
+
+
 def test_its_workers_give_the_same_tables(tmp_path, monkeypatch):
     """The recomputation split over worker processes sums the same k-points (in another order)."""
     from queer.compat.generator import pyatb_shift_integrand

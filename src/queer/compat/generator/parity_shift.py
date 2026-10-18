@@ -24,20 +24,25 @@ per-release clean-control report by this recomputation: each comparison verifies
    literal one) is determined when its rounding tolerance without the edge placements lies within
    :data:`DETERMINED_SHARE` of 1e-4 of its table's largest value; every entry is when the table vanishes (its
    values and rounding below :data:`VANISHING_RELATIVE` of the broadened magnitudes it cancels from, and its
-   values within :data:`VANISHING_ROUNDING` times its rounding).
+   values within :data:`VANISHING_ROUNDING` times its rounding: it is then judged as zero, not in its values below
+   that rounding, and the report names it vanishing); not an entry at an outer edge whose transitions' placements
+   are not tested exactly (more than ``OUTER_PLACEMENTS`` k-points there, or a k-point's transitions split across
+   the edge by the recomputation's own placement).
 3. **QUEER's physical value** (check A; a mismatch is ``differs_unexplained``, a QUEER defect, and fails
    whatever PyATB printed): ``sigma_uA_V2``, without smearing ``binned_uA_V2``, and for a collinear scfout
    ``legacy_single_channel`` (PyATB's spin factor times the spin-up channel; ``sigma_uA_V2`` is both channels)
    each equal the recomputation's physical mode at every determined entry within its rounding tolerance, and their
-   sums over the photon energies up to each one within the summed tolerance (a transition on a bin edge may land
-   on either side of it, never vanish or count twice); an entry the scfout does not determine counts at most its
+   sums over the photon energies up to each one within the summed tolerance (a transition on an interior bin edge
+   may land on either side of it, never vanish or count twice; on the table's first or last edge each k-point's
+   transitions lie inside the table or outside it, and the table must meet one combination of those placements,
+   nothing in between); an entry the scfout does not determine counts at most its
    tolerance, so it never fails, and makes the comparison ``not_comparable`` (near-degenerate levels; PyATB's own
    value changing with its eigensolver's basis inside degenerate levels); the candidate's photon energies are
    PyATB's; its own ``shift_current.dat`` holds the lattice's handedness times its table.
 4. **PyATB's table** (check B): PyATB's printed table equals the recomputation's PyATB-literal mode within its
    print precision (half a unit in the seventh significant digit of each printed value) and the literal mode's
-   rounding tolerance; else ``not_comparable`` ("PyATB's table is not reproduced", with the gap): a reader or
-   transcription difference is never a pass.
+   rounding tolerance (with the same placements at its window's ends); else ``not_comparable`` ("PyATB's table is
+   not reproduced", with the gap): a reader or transcription difference is never a pass.
 5. **Classes**, per component, with ``tol = 1e-4 max|sigma_P| + print precision + both rounding tolerances``:
    ``agree`` when QUEER's value in PyATB's layout (the lattice's handedness, the legacy channel of a collinear
    scfout, the bins without smearing) meets PyATB's table (``agree_after_convention`` when that layout is not
@@ -56,9 +61,9 @@ reported as information, not gates. A literature anchor (:func:`literature_ancho
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -66,6 +71,9 @@ from .parity import AFTER_CONVENTION, AGREE, DOCUMENTED, MALFORMED, NOT_APPLICAB
 from .parity_pyatb import PyatbRun, QueerRun, _PyatbComparison
 from .pyatb_files import INPUT_FILENAME, SHIFT_COMPONENTS, SHIFT_CURRENT_FILE, parse_shift_current
 from .results import ERR_MISSING_INPUT, sha256_file, to_jsonable
+
+if TYPE_CHECKING:
+    from .pyatb_shift_integrand import Table
 
 AGREEMENT_RELATIVE = 1e-4
 DETERMINED_SHARE = 0.1
@@ -141,6 +149,60 @@ def symmetry_gate(reference: np.ndarray, candidate: np.ndarray, domega: float) -
 
 def _largest(values: Any) -> float:
     return float(np.max(np.abs(np.asarray(values, float)), initial=0.0))
+
+
+def placements(values: Table) -> Iterator[tuple[int, np.ndarray, np.ndarray]]:
+    """The placements of a table's transitions on its outer edges, as changes to it and to its rounding tolerance
+    (the ordinary rounding of the transitions a placement moves into the table), with how many of their groups (one
+    per k-point and edge) each moves to the other side: the recomputation's own first, then every other combination;
+    only its own when they are not tested exactly (:attr:`Table.placements_exact`)."""
+    zero = np.zeros_like(values.value)
+    yield 0, zero, zero
+    if not values.placements_exact:
+        return
+    for chosen in range(1, 1 << len(values.placements)):
+        moved = [item for bit, item in enumerate(values.placements) if chosen >> bit & 1]
+        yield (
+            len(moved),
+            np.sum([item.change for item in moved], axis=0),
+            np.sum([item.rounding for item in moved], axis=0),
+        )
+
+
+def allowances(values: Table) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """A table's tolerance at each entry, the edges' part of it, and the edges' allowance in its sums over the rows.
+    With its outer edges' placements tested exactly (:func:`placements`) they have no allowance; otherwise their
+    entries are not determined (:meth:`_ShiftComparison.determine`) and keep it."""
+    if not values.groups:
+        return values.rounding, values.edge, values.edge_cumulative
+    if values.placements_exact:
+        # The interior edges' part (never below zero by the rounding of the difference).
+        inner = np.maximum(values.edge - values.outer_edge, 0.0)
+        return values.smooth + inner, inner, values.edge_cumulative
+    return values.rounding, values.edge, values.edge_cumulative + values.outer_cumulative
+
+
+def placement_note(values: Table, moved: int) -> str:
+    """What a detail says of a table's outer edges."""
+    if not values.groups:
+        return ""
+    if values.placements_exact:
+        return (
+            f"; the transitions of {values.groups} k-point(s) on its outer edges tested inside and outside the table "
+            f"({1 << values.groups} placements" + (f", {moved} moved" if moved else "") + ")"
+        )
+    return (
+        f"; the transitions of {values.groups} k-point(s) on its outer edges are not placed exactly (their entries "
+        "are not determined)"
+    )
+
+
+def vanishing_note(item: Mapping[str, Any]) -> str:
+    """What a detail says of a table that vanishes (:meth:`_ShiftComparison.determine`)."""
+    return (
+        f"vanishing (largest {item['largest_uA_V2']:.3g} of the {item['cancelled_scale_uA_V2']:.3g} microA/V^2 that "
+        "cancel in it: judged as zero, not its values below that rounding)"
+    )
 
 
 class _ShiftComparison(_PyatbComparison):
@@ -375,27 +437,41 @@ class _ShiftComparison(_PyatbComparison):
                     f"physical.{name}", UNEXPLAINED, detail=f"QUEER's results lack {name} of this run"
                 )
                 continue
-            undetermined = self.undetermined.get(f"physical.{name}", np.zeros(recomputed.value.shape, bool))
-            tolerance = recomputed.rounding
-            difference = values - recomputed.value
-            judged = np.where(undetermined, np.clip(difference, -tolerance, tolerance), difference)
-            gap = np.abs(judged)
+            key = f"physical.{name}"
+            undetermined = self.undetermined.get(key, np.zeros(recomputed.value.shape, bool))
+            tolerance, edge, edge_cumulative = allowances(recomputed)
+            # A transition on an interior discontinuity of the kernel (a bin edge) may land on either side of it, so
+            # its entries allow either placement; their sum over the rows does not depend on that choice beyond the
+            # edge's own rows: QUEER may move such a transition across its edge, never drop it or count it twice. On
+            # an outer edge of the table the transitions of each k-point lie inside the table or outside it: each
+            # combination is tried, and nothing in between is allowed.
+            found: tuple[Any, ...] | None = None
+            for moved, change, rounding in placements(recomputed):
+                limit = tolerance + rounding
+                difference = values - (recomputed.value + change)
+                judged = np.where(undetermined, np.clip(difference, -limit, limit), difference)
+                gap = np.abs(judged)
+                cumulative = np.abs(np.cumsum(judged, axis=0))
+                allowed = (
+                    np.cumsum(recomputed.smooth + rounding + np.where(undetermined, edge, 0.0), axis=0)
+                    + edge_cumulative
+                )
+                ok = bool(np.all(gap <= limit))
+                conserved = bool(np.all(cumulative <= allowed))
+                if found is None or (ok and conserved):
+                    found = (moved, limit, difference, gap, cumulative, allowed, ok, conserved)
+                if ok and conserved:
+                    break
+            assert found is not None
+            moved, tolerance, difference, gap, cumulative, allowed, ok, conserved = found
             ratio = gap / np.maximum(tolerance, 1e-300)
             row, column = np.unravel_index(int(np.argmax(ratio)), ratio.shape)
-            ok = bool(np.all(gap <= tolerance))
-            # A transition on a discontinuity of the kernel (a bin edge) may land on either side of it, so its entries
-            # allow either placement; their sum over the rows does not depend on that choice beyond the edge's own
-            # rows: QUEER may move such a transition across its edge, never drop it or count it twice.
-            cumulative = np.abs(np.cumsum(judged, axis=0))
-            allowed = (
-                np.cumsum(recomputed.smooth + np.where(undetermined, recomputed.edge, 0.0), axis=0)
-                + recomputed.edge_cumulative
-            )
-            conserved = bool(np.all(cumulative <= allowed))
             beyond = int(np.count_nonzero(gap > tolerance))
             skipped = int(np.count_nonzero(undetermined & (np.abs(difference) > tolerance)))
+            facts = self.determination["tables"].get(key) or {}
             detail = (
-                f"QUEER's {name} against the recomputed physical value: worst {SHIFT_COMPONENTS[column]} at "
+                (vanishing_note(facts) + ": " if facts.get("vanishing") else "")
+                + f"QUEER's {name} against the recomputed physical value: worst {SHIFT_COMPONENTS[column]} at "
                 f"{self.reference_omega()[row]:.5f} eV, |Q - T| {gap[row, column]:.4g} vs its rounding "
                 f"{tolerance[row, column]:.4g} microA/V^2 ({beyond} entries beyond"
                 + (
@@ -405,6 +481,7 @@ class _ShiftComparison(_PyatbComparison):
                     else ""
                 )
                 + ")"
+                + placement_note(recomputed, moved)
             )
             if ok and not conserved:
                 excess = cumulative - allowed
@@ -476,8 +553,9 @@ class _ShiftComparison(_PyatbComparison):
         PyATB's literal one) the scfout determines to a share of the agreement tolerance: an entry whose rounding
         without the edge placements (which check A bounds through the rows' sums) lies within
         :data:`DETERMINED_SHARE` x 1e-4 of its table's largest value, or every entry of a table that vanishes (its
-        values and rounding below :data:`VANISHING_RELATIVE` of the broadened magnitudes it cancels from). Records
-        the facts; True when every entry is determined."""
+        values and rounding below :data:`VANISHING_RELATIVE` of the broadened magnitudes it cancels from), but not
+        an entry whose outer edges' placements are not tested exactly beyond that share. Records the facts; True
+        when every entry is determined."""
         recomputation = self.recomputation
         tables = [(f"physical.{name}", recomputed) for name, _, recomputed in self.queer_tables()]
         tables.append(("literal", recomputation.literal))
@@ -492,7 +570,13 @@ class _ShiftComparison(_PyatbComparison):
                 and scale <= VANISHING_ROUNDING * _largest(smooth)
             )
             allowed = DETERMINED_SHARE * AGREEMENT_RELATIVE * scale
-            undetermined = np.zeros(values.value.shape, bool) if vanishing else smooth > allowed
+            rounded = np.zeros(values.value.shape, bool) if vanishing else smooth > allowed
+            # Transitions on the outer edges whose placements are not tested exactly keep their allowance, so their
+            # entries are not determined.
+            unplaced = (
+                np.zeros(values.value.shape, bool) if values.placements_exact else values.outer_edge > allowed
+            )
+            undetermined = rounded | unplaced
             self.undetermined[name] = undetermined
             facts[name] = {
                 "largest_uA_V2": scale,
@@ -502,6 +586,11 @@ class _ShiftComparison(_PyatbComparison):
                 "cancelled_scale_uA_V2": cancelled,
                 "basis_spread_uA_V2": _largest(values.spread),
                 "vanishing": vanishing,
+                "outer_edge_groups": values.groups,
+                "outer_edge_split": values.split,
+                "outer_edge_exact": values.placements_exact,
+                "rounding_undetermined_entries": int(np.count_nonzero(rounded)),
+                "unplaced_entries": int(np.count_nonzero(unplaced)),
                 "undetermined_entries": int(np.count_nonzero(undetermined)),
                 "determined": not undetermined.any(),
             }
@@ -515,6 +604,8 @@ class _ShiftComparison(_PyatbComparison):
             "vanishing_relative": VANISHING_RELATIVE,
             "vanishing_rounding": VANISHING_ROUNDING,
             "vanishing": both,
+            "vanishing_tables": [name for name, item in facts.items() if item["vanishing"]],
+            "outer_placements": recomputation.facts["outer_placements"],
             "tables": facts,
         }
         return all(item["determined"] for item in facts.values())
@@ -524,29 +615,53 @@ class _ShiftComparison(_PyatbComparison):
         the comparison not comparable."""
         facts = self.determination["tables"]
         if determined:
-            detail = (
-                f"every table vanishes within its rounding (below {VANISHING_RELATIVE:g} of the magnitudes it cancels "
-                "from)"
-                if self.determination["vanishing"]
-                else f"every entry's rounding within {DETERMINED_SHARE:g} x 1e-4 of its table's largest value (at most "
-                + ", ".join(f"{name} {item['rounding_uA_V2']:.3g}" for name, item in facts.items())
-                + " microA/V^2)"
-            )
+            vanishing = [
+                f"{name} {vanishing_note(item)}" for name, item in facts.items() if item["vanishing"]
+            ]
+            if self.determination["vanishing"]:
+                detail = (
+                    f"every table vanishes within its rounding (below {VANISHING_RELATIVE:g} of the magnitudes it "
+                    "cancels from): " + "; ".join(vanishing)
+                )
+            else:
+                detail = "; ".join(
+                    vanishing
+                    + [
+                        f"every entry's rounding within {DETERMINED_SHARE:g} x 1e-4 of its table's largest value (at "
+                        "most "
+                        + ", ".join(
+                            f"{name} {item['rounding_uA_V2']:.3g}"
+                            for name, item in facts.items()
+                            if not item["vanishing"]
+                        )
+                        + " microA/V^2)"
+                    ]
+                )
             return self.precondition("determined", True, detail)
         causes = []
+        limit = self.rules["determined"]["outer_placements"]
         for name, item in facts.items():
             if item["determined"]:
                 continue
-            cause = (
-                "PyATB's own value changes with its eigensolver's basis inside (near-)degenerate levels"
-                if name == "literal"
-                else "QUEER's physical value is ill-conditioned at near-degenerate levels"
-            )
-            causes.append(
-                f"{name}: {item['undetermined_entries']} entries with rounding up to {item['rounding_uA_V2']:.4g} "
-                f"microA/V^2 beyond {DETERMINED_SHARE:g} x 1e-4 of its largest value = {item['allowed_uA_V2']:.4g} "
-                f"(spread over the bases {item['basis_spread_uA_V2']:.4g}; {cause})"
-            )
+            if item["rounding_undetermined_entries"]:
+                cause = (
+                    "PyATB's own value is bounded only to that rounding inside (near-)degenerate levels, where its "
+                    "eigensolver's basis enters it"
+                    if name == "literal"
+                    else "QUEER's physical value is ill-conditioned at near-degenerate levels"
+                )
+                causes.append(
+                    f"{name}: {item['rounding_undetermined_entries']} entries with rounding up to "
+                    f"{item['rounding_uA_V2']:.4g} microA/V^2 beyond {DETERMINED_SHARE:g} x 1e-4 of its largest value "
+                    f"= {item['allowed_uA_V2']:.4g} (spread over the bases {item['basis_spread_uA_V2']:.4g}; {cause})"
+                )
+            if item["unplaced_entries"]:
+                causes.append(
+                    f"{name}: {item['unplaced_entries']} entries at its outer edges, where the transitions of "
+                    f"{item['outer_edge_groups']} k-point(s) are not placed exactly ({item['outer_edge_split']} split "
+                    f"across the edge by the recomputation's own placement; at most {limit} are tested in "
+                    "each placement)"
+                )
         return self.precondition(
             "determined",
             False,
@@ -557,17 +672,29 @@ class _ShiftComparison(_PyatbComparison):
         """Check B: PyATB's printed table against the recomputation's PyATB-literal mode."""
         literal = self.recomputation.literal
         precision = print_precision(printed)
-        difference = printed - literal.value
-        gap = np.abs(difference)
-        allowed = precision + literal.rounding
-        excess = gap - allowed
+        tolerance, _, edge_cumulative = allowances(literal)
+        # As in check A, a transition on one of PyATB's row edges may land on either side, never vanish; on its
+        # window's ends each k-point's transitions lie inside or outside it.
+        found: tuple[Any, ...] | None = None
+        for moved, change, rounding in placements(literal):
+            allowed = precision + tolerance + rounding
+            difference = printed - (literal.value + change)
+            gap = np.abs(difference)
+            excess = gap - allowed
+            cumulative = np.abs(np.cumsum(difference, axis=0))
+            conserved = bool(
+                np.all(
+                    cumulative <= np.cumsum(precision + literal.smooth + rounding, axis=0) + edge_cumulative
+                )
+            )
+            ok = bool(np.all(excess <= 0)) and conserved
+            if found is None or ok:
+                found = (moved, allowed, gap, excess, conserved, ok)
+            if ok:
+                break
+        assert found is not None
+        moved, allowed, gap, excess, conserved, ok = found
         row, column = np.unravel_index(int(np.argmax(excess)), excess.shape)
-        # As in check A, a transition on one of PyATB's row or window edges may land on either side, never vanish.
-        cumulative = np.abs(np.cumsum(difference, axis=0))
-        conserved = bool(
-            np.all(cumulative <= np.cumsum(precision + literal.smooth, axis=0) + literal.edge_cumulative)
-        )
-        ok = bool(np.all(excess <= 0)) and conserved
         self.rules["pyatb_reproduced"] = {
             "reproduced": ok,
             "worst_component": SHIFT_COMPONENTS[column],
@@ -576,12 +703,14 @@ class _ShiftComparison(_PyatbComparison):
             "allowed_uA_V2": float(allowed[row, column]),
             "largest_gap_uA_V2": _largest(gap),
             "rows_summed_within_tolerance": conserved,
+            "outer_edge_groups_moved": moved,
         }
         detail = (
             f"PyATB's table against the recomputed PyATB-literal table: worst {SHIFT_COMPONENTS[column]} at "
             f"{self.reference_omega()[row]:.5f} eV, gap {gap[row, column]:.4g} vs print precision and rounding "
             f"{allowed[row, column]:.4g} microA/V^2"
             + ("" if conserved else "; its sum over the photon energies differs beyond the summed tolerance")
+            + placement_note(literal, moved)
         )
         if not self.physical_ok:
             # QUEER's own value is wrong: that fails whatever PyATB printed.
@@ -627,7 +756,11 @@ class _ShiftComparison(_PyatbComparison):
             )
             if np.all(excess <= 0):
                 kind = AFTER_CONVENTION if layout else AGREE
-                detail = f"QUEER's {name} meets PyATB's table"
+                detail = f"QUEER's {name} meets PyATB's table" + (
+                    ": both vanish and agree as zero, not in their values below the rounding of what cancels in them"
+                    if self.vanishing
+                    else ""
+                )
             elif np.all(np.abs(moved[:, index] - printed[:, index]) <= tolerance[:, index]):
                 kind = AFTER_CONVENTION
                 detail = (
