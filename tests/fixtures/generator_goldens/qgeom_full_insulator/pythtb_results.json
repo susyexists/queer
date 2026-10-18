@@ -1,0 +1,748 @@
+{
+ "schema_version": 1,
+ "status": "ok",
+ "step_type": "PYTHTB_QGEOM",
+ "provenance": {
+  "core_sha256": "0efcc4b3079266a8d35644d3d06f648857e31d86b12be173c6f03298a5d505c0",
+  "params_sha256": "ba018e62de53fe69040976553ead5c52a6f1a32c2e3cbc2f5234dc06554506cd",
+  "python": "3.12.12",
+  "numpy": "2.5.4",
+  "host": "golden",
+  "cpus": 16,
+  "memory_available_bytes": 19038060544,
+  "pythtb": "2.0.2",
+  "scipy": "1.18.1",
+  "matplotlib": "3.11.2",
+  "qgeom_sha256": "4fb51a38691931f2b687d731619a21ae2caa094b1dd4681d1d97073041f23ee3",
+  "inputs": {
+   "wannier90.win": {
+    "bytes": 289,
+    "sha256": "ccdeea0841e3a874d424e1a183847bb63f6202a69e077f0718a76981e7d4b05b"
+   },
+   "wannier90_hr.dat": {
+    "bytes": 13659,
+    "sha256": "b83f78d1385e623365f941554bb38d4ec6bd9447d8e13f1774466efcfa3d2075"
+   },
+   "wannier90_centres.xyz": {
+    "bytes": 171,
+    "sha256": "1bdb9c35ced287bbd3a172946bfea22390d264b9e7658742828b79f8091b4302"
+   },
+   "wannier90_band.kpt": {
+    "bytes": 820,
+    "sha256": "43ff6863c53bd8cf4e8c9a2157e6d83772f2b85ee2ff2609f86e8ba4e9ee371b"
+   },
+   "wannier90_band.dat": {
+    "bytes": 1275,
+    "sha256": "ddd212b2dba1ff9618804ac981c0a4cb6335b9dba7fa97bc85d81c26d3233966"
+   },
+   "wannier90_band.labelinfo.dat": {
+    "bytes": 120,
+    "sha256": "49614d6db2a4a0db0abc2d27169519baa00c1d0a37fd3fc9be9c20ebb107beda"
+   },
+   "wannier90_tb.dat": {
+    "bytes": 35811,
+    "sha256": "4a8cc4a69620ce229526018890035baf393c42262781d63c5bbabe3db053f299"
+   }
+  },
+  "parallel": [
+   {
+    "stage": "validation",
+    "k_points": 19,
+    "chunk": 256,
+    "tasks": 1,
+    "workers": 1,
+    "processes": 1
+   },
+   {
+    "stage": "quantum geometry",
+    "k_points": 10000000,
+    "chunk": 256,
+    "tasks": 39063,
+    "workers": 1,
+    "processes": 1
+   },
+   {
+    "stage": "quantum geometry path",
+    "k_points": 43,
+    "chunk": 256,
+    "tasks": 1,
+    "workers": 1,
+    "processes": 1
+   }
+  ],
+  "wall_seconds": 1.73,
+  "peak_rss_bytes": 277790720,
+  "peak_worker_rss_bytes": 0
+ },
+ "citation": "T. Cole, S. Coh and D. Vanderbilt, Python Tight Binding (PythTB), doi:10.5281/zenodo.12721315",
+ "approximation": "Tight-binding (diagonal position) approximation: the Wannier centres are the orbital positions and the off-diagonal position matrix elements are dropped. Band energies and integer invariants are unaffected; Berry-curvature, quantum-metric and Hall magnitudes are approximate.",
+ "model": {
+  "num_wann": 3,
+  "n_R": 25,
+  "n_R_after_ws": 25,
+  "n_R_model": 25,
+  "folded_axes": [
+   2
+  ],
+  "n_hops": 111,
+  "spinors": false,
+  "periodic_dirs": [
+   0,
+   1
+  ],
+  "dimension": 2,
+  "lattice": [
+   [
+    2.5,
+    0.0,
+    0.0
+   ],
+   [
+    -1.25,
+    2.1650635095,
+    0.0
+   ],
+   [
+    0.0,
+    0.0,
+    20.0
+   ]
+  ],
+  "fermi_energy": 0.55,
+  "fermi_source": "reference_band",
+  "ws_correction": {
+   "requested": "auto",
+   "mode": "off",
+   "selected_by": "band_dat",
+   "scores": {
+    "off": {
+     "in_window_max_meV": 4.898158101340755e-06,
+     "in_window_rms_meV": 2.5175510216807468e-06,
+     "max_meV": 4.898158101340755e-06
+    },
+    "recompute": {
+     "in_window_max_meV": 337.7806753410273,
+     "in_window_rms_meV": 101.95045260149159,
+     "max_meV": 337.7806753410273
+    }
+   }
+  },
+  "cutoffs": {
+   "min_hopping_norm": null,
+   "max_distance": null
+  },
+  "species": [
+   "B",
+   "N",
+   "C"
+  ],
+  "orbital_species": [
+   "N",
+   "C",
+   "B"
+  ],
+  "mp_grid": [
+   4,
+   4,
+   1
+  ],
+  "win_scalars": {
+   "dis_froz_min": -1.0,
+   "dis_froz_max": 1.5,
+   "dis_win_min": -6.0,
+   "dis_win_max": 6.0
+  },
+  "approximation": "Tight-binding (diagonal position) approximation: the Wannier centres are the orbital positions and the off-diagonal position matrix elements are dropped. Band energies and integer invariants are unaffected; Berry-curvature, quantum-metric and Hall magnitudes are approximate.",
+  "pythtb_version": "2.0.2",
+  "source_wannier_job_id": "job-wannier",
+  "reference_band_job_id": "job-band"
+ },
+ "validation": {
+  "band_dat": {
+   "max_meV": 4.898158545429965e-06,
+   "rms_meV": 2.590020172609269e-06,
+   "window_eV": [
+    -1.55,
+    0.95
+   ],
+   "in_window_max_meV": 4.898158545429965e-06,
+   "in_window_rms_meV": 2.517551042238511e-06,
+   "in_window_points": 49,
+   "available": true,
+   "n_k": 19
+  },
+  "fermi_in_frozen_window": true,
+  "hermiticity_error": 0.0,
+  "localization": {
+   "decay_length_A": 3.246597413455476,
+   "max_distance_A": 12.373365740134982
+  }
+ },
+ "qgeom": {
+  "approximation": "full position matrix in Wannier space (wannier90 _tb.dat): curvature quantities complete to the finite-difference accuracy of r; the metric and K are in-W lower bounds",
+  "approximation_level": "full_position_in_wannier_space",
+  "conventions": {
+   "omega": "-2 Im Q",
+   "sigma_xy": "-(e^2/h)(1/2pi) sum int f Omega, charge -e",
+   "chi": "-(e^3/hbar)[c_out M_abc + c_in(M_bac + M_cab)]",
+   "chi_sets": {
+    "wpd_1_m05": [
+     1.0,
+     -0.5
+    ],
+    "lka_2_m05": [
+     2.0,
+     -0.5
+    ],
+    "qk_05_m1": [
+     0.5,
+     -1.0
+    ]
+   },
+   "k_units": "1/angstrom, 2 pi included",
+   "frame": {
+    "e1": [
+     1.0,
+     0.0,
+     0.0
+    ],
+    "e2": [
+     -0.0,
+     1.0,
+     0.0
+    ],
+    "normal": [
+     0.0,
+     -0.0,
+     1.0
+    ]
+   }
+  },
+  "position": {
+   "mode": "full",
+   "source": "wannier90_tb_dat",
+   "tb": {
+    "bytes": 35811,
+    "expected_bytes": 35811,
+    "nrpts": 25,
+    "read_seconds": 0.0
+   },
+   "checks": {
+    "h_vs_hr_max_meV": 2.51999998646113e-05,
+    "centres_inplane_max_A": 3.047835298368444e-08,
+    "antihermitian_rel": 0.034644448597312305,
+    "offdiag_sum_xy_A2": 1.4385759920289238,
+    "rz_offdiag_sum_A2": 0.7386542869503069,
+    "omega_I_A2": 3.25
+   }
+  },
+  "electron_count": {
+   "n_occ": 2,
+   "source": "count_at_EF",
+   "count_at_EF": 1.9726353361094586,
+   "gap_at_gamma_meV": 922.8439189724587,
+   "min_direct_gap_meV": 341.4203536499452,
+   "global_gap_meV": 99.54772883728491,
+   "state_at_cnp": "insulator",
+   "mu_cnp_meV": {
+    "0K": 179.99999999869232,
+    "5K": 99.99999998229227,
+    "20K": 129.9975074775673,
+    "60K": 138.2569982276299
+   }
+  },
+  "window": {
+   "bands": [
+    1,
+    3
+   ],
+   "always_occupied": 1,
+   "degeneracy_tol_used_meV": 0.001,
+   "pt_pairs": {
+    "detected": false,
+    "median_split_meV": 979.3469285457312
+   }
+  },
+  "grid": {
+   "mu_min_meV": -300.0,
+   "mu_max_meV": 300.0,
+   "mu_step_meV": 10.000000000000009,
+   "temperatures_K": [
+    0.0,
+    5.0,
+    20.0,
+    60.0
+   ],
+   "downsampled": 1
+  },
+  "integration": {
+   "base_mesh": 16,
+   "seeds": 5,
+   "mu_subset": 139,
+   "vertices": 7571,
+   "vertices_by_rule": {
+    "base": 512,
+    "seed": 976,
+    "gap": 1020,
+    "edge": 579,
+    "error": 4484
+   },
+   "gap_rule_capped": false,
+   "max_level": 7,
+   "finest_cell_invA": 0.0024543692605839495,
+   "tolerance": 0.05,
+   "converged": true,
+   "confirmed": true,
+   "stop": null,
+   "history": [
+    {
+     "phase": "error",
+     "target": 0.025,
+     "worst": 0.04322728877627035,
+     "vertices": 4060,
+     "leaves": 1831
+    },
+    {
+     "phase": "error",
+     "target": 0.025,
+     "worst": 0.04063028339468971,
+     "vertices": 4294,
+     "leaves": 1939
+    },
+    {
+     "phase": "error",
+     "target": 0.025,
+     "worst": 0.03451987667786306,
+     "vertices": 4540,
+     "leaves": 2053
+    },
+    {
+     "phase": "error",
+     "target": 0.025,
+     "worst": 0.033965440038014154,
+     "vertices": 4811,
+     "leaves": 2176
+    },
+    {
+     "phase": "error",
+     "target": 0.025,
+     "worst": 0.03165109261006679,
+     "vertices": 5090,
+     "leaves": 2305
+    },
+    {
+     "phase": "error",
+     "target": 0.025,
+     "worst": 0.03073654408326408,
+     "vertices": 5377,
+     "leaves": 2443
+    },
+    {
+     "phase": "error",
+     "target": 0.025,
+     "worst": 0.030449881221662194,
+     "vertices": 5679,
+     "leaves": 2587
+    },
+    {
+     "phase": "error",
+     "target": 0.025,
+     "worst": 0.026453323742343705,
+     "vertices": 6009,
+     "leaves": 2740
+    },
+    {
+     "phase": "error",
+     "target": 0.025,
+     "worst": 0.025531958294112197,
+     "vertices": 6351,
+     "leaves": 2902
+    },
+    {
+     "phase": "error",
+     "target": 0.025,
+     "worst": 0.025060787410998993,
+     "vertices": 6734,
+     "leaves": 3076
+    },
+    {
+     "phase": "error",
+     "target": 0.025,
+     "worst": 0.02518853385867442,
+     "vertices": 7132,
+     "leaves": 3259
+    },
+    {
+     "phase": "error",
+     "target": 0.025,
+     "worst": 0.02455585992654078,
+     "vertices": 7571,
+     "leaves": 3454
+    }
+   ],
+   "smeared_check_rel": 0.10582688944830604,
+   "wall_seconds": 1.1,
+   "step_seconds": 1.4
+  },
+  "occupied": {
+   "applicable": true,
+   "n_occ": 2,
+   "chern": -0.00014860021012980392,
+   "chern_integer_distance": 0.00014860021012980392,
+   "chern_in": 0.21348120786684752,
+   "K_in": [
+    [
+     2.210437368444356,
+     -0.838170948394659
+    ],
+    [
+     -0.838170948394659,
+     0.9680382950042212
+    ]
+   ],
+   "K_in_minus_abs_C": 2.96499445558173,
+   "psd_in_min_rel": 1.3411683028448893e-05,
+   "K_upper_loose": 6.95117834098796,
+   "K_diag": 2.5956756964268197,
+   "verdict": "ok"
+  },
+  "headline": {
+   "0K": {
+    "E_F": {
+     "mu_meV": 0.0,
+     "A3_A_per_eV": 0.06589854397034704,
+     "A3_err": 0.0006619289687275209,
+     "theta0_deg": 11.660761079204336,
+     "chi_mA_nm_per_V2": {
+      "wpd_1_m05": 0.0,
+      "lka_2_m05": -0.0016040593952896915,
+      "qk_05_m1": 0.0024060890929345374
+     },
+     "chi_err": {
+      "wpd_1_m05": 3.644205006958204e-20,
+      "lka_2_m05": 1.6112243417390395e-05,
+      "qk_05_m1": 2.4168365126085375e-05
+     },
+     "sigma_xy_e2_h": 0.049480973000944825,
+     "density_cm2": -50297453143358.41,
+     "full_over_diag_A3": 0.9671515101010867
+    },
+    "CNP": {
+     "mu_meV": 180.0,
+     "A3_A_per_eV": 1.2654086992382645e-14,
+     "A3_err": 4.536942699517506e-15,
+     "theta0_deg": -18.88181190524057,
+     "chi_mA_nm_per_V2": {
+      "wpd_1_m05": 1.0295671838684942e-32,
+      "lka_2_m05": -3.080175358362711e-16,
+      "qk_05_m1": 4.620263037544067e-16
+     },
+     "chi_err": {
+      "wpd_1_m05": 2.474695686300576e-32,
+      "lka_2_m05": 1.1043530136761096e-16,
+      "qk_05_m1": 1.6565295205141632e-16
+     },
+     "sigma_xy_e2_h": 0.00014860021014826926,
+     "density_cm2": 55.791557406605975,
+     "full_over_diag_A3": 1.1696054459435514
+    },
+    "max_A3": {
+     "mu_meV": -210.0,
+     "A3_A_per_eV": 0.09654738516012623,
+     "A3_err": 0.0006714844507848539,
+     "theta0_deg": 37.3975118673741,
+     "chi_mA_nm_per_V2": {
+      "wpd_1_m05": 1.5982434994407325e-19,
+      "lka_2_m05": -0.00235009350626078,
+      "qk_05_m1": 0.00352514025939117
+     },
+     "chi_err": {
+      "wpd_1_m05": 3.0108597529349393e-19,
+      "lka_2_m05": 1.6344836732008067e-05,
+      "qk_05_m1": 2.4517255098011666e-05
+     },
+     "sigma_xy_e2_h": -0.049788120372074536,
+     "density_cm2": -514541283391991.75,
+     "full_over_diag_A3": 0.9979953893518969
+    }
+   },
+   "5K": {
+    "E_F": {
+     "mu_meV": 0.0,
+     "A3_A_per_eV": 0.06591730581008537,
+     "A3_err": 0.0006796265283537245,
+     "theta0_deg": 11.661515259564732,
+     "chi_mA_nm_per_V2": {
+      "wpd_1_m05": 2.666608855798197e-20,
+      "lka_2_m05": -0.001604516083760969,
+      "qk_05_m1": 0.002406774125641453
+     },
+     "chi_err": {
+      "wpd_1_m05": 2.666608855798197e-20,
+      "lka_2_m05": 1.6543025876026088e-05,
+      "qk_05_m1": 2.4814538814039565e-05
+     },
+     "sigma_xy_e2_h": 0.04948030968640014,
+     "density_cm2": -50297865829637.59,
+     "full_over_diag_A3": 0.967136465108036
+    },
+    "CNP": {
+     "mu_meV": 100.00000000000003,
+     "A3_A_per_eV": 8.94479334441928e-15,
+     "A3_err": 4.3797097379173894e-17,
+     "theta0_deg": 5.308193167695098,
+     "chi_mA_nm_per_V2": {
+      "wpd_1_m05": 8.471033938030386e-33,
+      "lka_2_m05": -2.1772832810231344e-16,
+      "qk_05_m1": 3.2659249215347016e-16
+     },
+     "chi_err": {
+      "wpd_1_m05": 1.1548077789756901e-32,
+      "lka_2_m05": 1.0660803912313518e-18,
+      "qk_05_m1": 1.5991205868470647e-18
+     },
+     "sigma_xy_e2_h": 0.00014860021013375177,
+     "density_cm2": 42.664132134463394,
+     "full_over_diag_A3": 0.8884633066767323
+    },
+    "max_A3": {
+     "mu_meV": -210.0,
+     "A3_A_per_eV": 0.09608573658877892,
+     "A3_err": 0.0006533934680547915,
+     "theta0_deg": 37.47139580298834,
+     "chi_mA_nm_per_V2": {
+      "wpd_1_m05": -1.0022924826978141e-19,
+      "lka_2_m05": -0.0023388563577051917,
+      "qk_05_m1": 0.0035082845365577878
+     },
+     "chi_err": {
+      "wpd_1_m05": 1.7807310165475767e-20,
+      "lka_2_m05": 1.5904477824667598e-05,
+      "qk_05_m1": 2.3856716737000096e-05
+     },
+     "sigma_xy_e2_h": -0.04975207627200733,
+     "density_cm2": -514526662449037.9,
+     "full_over_diag_A3": 0.9984779141603497
+    }
+   },
+   "20K": {
+    "E_F": {
+     "mu_meV": 0.0,
+     "A3_A_per_eV": 0.0660571930438204,
+     "A3_err": 0.0005641212258576944,
+     "theta0_deg": 11.66801513756801,
+     "chi_mA_nm_per_V2": {
+      "wpd_1_m05": 0.0,
+      "lka_2_m05": -0.001607921127606167,
+      "qk_05_m1": 0.002411881691409251
+     },
+     "chi_err": {
+      "wpd_1_m05": 6.251454555567793e-20,
+      "lka_2_m05": 1.3731471105439931e-05,
+      "qk_05_m1": 2.0597206658159138e-05
+     },
+     "sigma_xy_e2_h": 0.049477291062542283,
+     "density_cm2": -50318063467324.26,
+     "full_over_diag_A3": 0.9668698923551645
+    },
+    "CNP": {
+     "mu_meV": 130.0,
+     "A3_A_per_eV": 1.540095079352114e-13,
+     "A3_err": 5.247928717347973e-16,
+     "theta0_deg": 5.484873154266745,
+     "chi_mA_nm_per_V2": {
+      "wpd_1_m05": 5.58623630725189e-32,
+      "lka_2_m05": -3.748799036873731e-15,
+      "qk_05_m1": 5.6231985553105964e-15
+     },
+     "chi_err": {
+      "wpd_1_m05": 1.112435793996969e-31,
+      "lka_2_m05": 1.2774165949191015e-17,
+      "qk_05_m1": 1.9161248923786917e-17
+     },
+     "sigma_xy_e2_h": 0.00014860021019838992,
+     "density_cm2": 3.2818563180356457,
+     "full_over_diag_A3": 0.8891884482081451
+    },
+    "max_A3": {
+     "mu_meV": -229.99999999999997,
+     "A3_A_per_eV": 0.09551808783593684,
+     "A3_err": 0.0012593858371797717,
+     "theta0_deg": 38.69414348108888,
+     "chi_mA_nm_per_V2": {
+      "wpd_1_m05": -2.4242637529021144e-19,
+      "lka_2_m05": -0.0023250390218376416,
+      "qk_05_m1": 0.0034875585327564626
+     },
+     "chi_err": {
+      "wpd_1_m05": 9.524873840199142e-20,
+      "lka_2_m05": 3.065514900195713e-05,
+      "qk_05_m1": 4.5982723502934614e-05
+     },
+     "sigma_xy_e2_h": -0.05373002693277745,
+     "density_cm2": -575202170278993.5,
+     "full_over_diag_A3": 1.0065658677250304
+    }
+   },
+   "60K": {
+    "E_F": {
+     "mu_meV": 0.0,
+     "A3_A_per_eV": 0.0659373434332639,
+     "A3_err": 0.00022367557372048041,
+     "theta0_deg": 11.672655223051082,
+     "chi_mA_nm_per_V2": {
+      "wpd_1_m05": -6.221512687948365e-20,
+      "lka_2_m05": -0.00160500382652101,
+      "qk_05_m1": 0.0024075057397815146
+     },
+     "chi_err": {
+      "wpd_1_m05": 2.587215104591212e-20,
+      "lka_2_m05": 5.444564991976229e-06,
+      "qk_05_m1": 8.166847487964778e-06
+     },
+     "sigma_xy_e2_h": 0.04963095940724564,
+     "density_cm2": -50881104098575.13,
+     "full_over_diag_A3": 0.9677547598397589
+    },
+    "CNP": {
+     "mu_meV": 140.0,
+     "A3_A_per_eV": 1.0962593449138451e-06,
+     "A3_err": 8.908104821318717e-09,
+     "theta0_deg": 19.24869724001096,
+     "chi_mA_nm_per_V2": {
+      "wpd_1_m05": 2.798158189404966e-24,
+      "lka_2_m05": -2.668443027625085e-08,
+      "qk_05_m1": 4.002664541437628e-08
+     },
+     "chi_err": {
+      "wpd_1_m05": 4.195501569346261e-24,
+      "lka_2_m05": 2.168352799918013e-10,
+      "qk_05_m1": 3.252529199877086e-10
+     },
+     "sigma_xy_e2_h": 0.0001496421780868469,
+     "density_cm2": 179407626.3056743,
+     "full_over_diag_A3": 1.487790061881551
+    },
+    "max_A3": {
+     "mu_meV": -219.99999999999997,
+     "A3_A_per_eV": 0.09485441128874149,
+     "A3_err": 0.00031720504908827607,
+     "theta0_deg": 38.04402962617275,
+     "chi_mA_nm_per_V2": {
+      "wpd_1_m05": -4.432669889844851e-20,
+      "lka_2_m05": -0.0023088842400045082,
+      "qk_05_m1": 0.003463326360006762
+     },
+     "chi_err": {
+      "wpd_1_m05": 9.907692408117907e-21,
+      "lka_2_m05": 7.721198505574421e-06,
+      "qk_05_m1": 1.1581797758362065e-05
+     },
+     "sigma_xy_e2_h": -0.051944373182024085,
+     "density_cm2": -544877085276121.2,
+     "full_over_diag_A3": 1.0030526961565358
+    }
+   }
+  },
+  "dipole_sources": {
+   "level": "full",
+   "T_K": 0.0,
+   "gap_bins_meV": [
+    1.0,
+    10.0,
+    100.0
+   ],
+   "frozen_window_meV": [
+    -1550.0,
+    950.0
+   ],
+   "points": {
+    "E_F": {
+     "mu_meV": 0.0,
+     "triangles": 268,
+     "A3_A_per_eV": 0.06589854397034678,
+     "shares": {
+      "<1": 0.0,
+      "1-10": 0.0,
+      "10-100": 0.0,
+      ">=100": 1.0
+     },
+     "outside_frozen": -0.006402410811064059
+    },
+    "CNP": null,
+    "max_A3": {
+     "mu_meV": -210.0,
+     "triangles": 536,
+     "A3_A_per_eV": 0.09654738516012534,
+     "shares": {
+      "<1": 0.0,
+      "1-10": 0.0,
+      "10-100": 0.0,
+      ">=100": 1.0
+     },
+     "outside_frozen": -0.3361154939129317
+    }
+   }
+  },
+  "symmetry": {
+   "lattice_hexagonal": true,
+   "c3_band_floor_meV": 1026.0297798528354,
+   "M_c3_residual": 0.9029342352526358,
+   "sigma_dT_residual": 0.573323114149438,
+   "bcd_residual": 0.00903060270908258,
+   "K_c3_residual": 0.5487800034661662
+  },
+  "verdict": "indicative",
+  "verdict_reasons": [
+   "A3 error above max(5% A3, 1e-3 of its scale) at a headline point"
+  ],
+  "dft_check": null,
+  "parity": {
+   "k_points": 32,
+   "max_rel": 1.2740829411215285e-15,
+   "bands": [
+    0,
+    1
+   ]
+  },
+  "files": {
+   "response": "Out/qgeom_response.json",
+   "path": "Out/qgeom_path.json"
+  }
+ },
+ "warnings": [
+  "the Fermi-surface integrals at 60 K from vertex weights differ from the Theta convolution by 10.6%: the mesh is coarse against kT there"
+ ],
+ "outputs": [
+  {
+   "path": "Out/hopping_decay.png",
+   "title": "Hopping decay with distance",
+   "kind": "plot"
+  },
+  {
+   "path": "Out/qgeom_response.json",
+   "title": "Quantum geometry response curves (data)",
+   "kind": "data"
+  },
+  {
+   "path": "Out/qgeom_path.json",
+   "title": "Quantum geometry along the path (data)",
+   "kind": "data"
+  },
+  {
+   "path": "Out/qgeom_dipole.png",
+   "title": "BCP dipole amplitude and AHC",
+   "kind": "plot"
+  },
+  {
+   "path": "Out/qgeom_ahc_dos.png",
+   "title": "Density of states",
+   "kind": "plot"
+  },
+  {
+   "path": "Out/qgeom_path.png",
+   "title": "Bands and Fermi-sea curvature along the path",
+   "kind": "plot"
+  }
+ ]
+}

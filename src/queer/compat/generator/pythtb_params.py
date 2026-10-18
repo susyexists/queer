@@ -9,9 +9,16 @@ fields to the Generator's kinds and bounds; and refuses every other key with
 ``queer_bad_params``, so a misspelt or foreign setting fails before any
 calculation. A ``None`` value keeps the driver default ("auto").
 
-QUEER step names are ``QUEER_BANDS``, ``QUEER_TOPOLOGY``, ``QUEER_BERRY`` and
-``QUEER_SLAB``. The ``PYTHTB_*`` names of the counterparts are accepted as
-aliases, so a saved PythTB parameter file replays unchanged.
+QUEER step names are ``QUEER_BANDS``, ``QUEER_TOPOLOGY``, ``QUEER_BERRY``,
+``QUEER_SLAB`` and ``QUEER_QGEOM``. The ``PYTHTB_*`` names of the counterparts are
+accepted as aliases, so a saved PythTB parameter file replays unchanged.
+
+``QUEER_QGEOM`` also accepts the driver's API-only quantum-geometry keys
+(:data:`API_PARAM_KEYS`) and two QUEER-only replay controls
+(:data:`QUEER_PARAM_KEYS`): ``qgeom_time_stop`` (default true) false turns the time
+budget off, and ``qgeom_replay_vertices`` stops the integration as a time budget
+would once the mesh holds that many vertices, with no clock, so a run reproduces a
+reference that stopped on its time budget.
 """
 
 from __future__ import annotations
@@ -28,7 +35,8 @@ STEP_BANDS = "QUEER_BANDS"
 STEP_TOPOLOGY = "QUEER_TOPOLOGY"
 STEP_BERRY = "QUEER_BERRY"
 STEP_SLAB = "QUEER_SLAB"
-STEP_TYPES: tuple[str, ...] = (STEP_BANDS, STEP_TOPOLOGY, STEP_BERRY, STEP_SLAB)
+STEP_QGEOM = "QUEER_QGEOM"
+STEP_TYPES: tuple[str, ...] = (STEP_BANDS, STEP_TOPOLOGY, STEP_BERRY, STEP_SLAB, STEP_QGEOM)
 COUNTERPARTS: Mapping[str, str] = MappingProxyType(
     {step: step.replace("QUEER_", "PYTHTB_", 1) for step in STEP_TYPES}
 )
@@ -91,6 +99,28 @@ DEFAULT_PARAMS: Mapping[str, Any] = MappingProxyType(
         "slab_kpoints": 200,
         "slab_window_eV": 0.5,
         "edge_cells": 2,
+        # Quantum geometry.
+        "position_operator": "auto",
+        "mu_range_meV": (-100.0, 100.0),
+        "mu_step_meV": 0.1,
+        "temperatures_K": (2.0, 10.0, 30.0),
+        "qgeom_tolerance": 1e-3,
+        "qgeom_base_mesh": 64,
+        "qgeom_max_points": 1_000_000,
+        "qgeom_gap_ratio": 0.1,
+        "insulator_min_gap_meV": 0.1,
+        "degeneracy_tol_meV": 0.001,
+        "qgeom_band_window": 1,
+        # Quantum geometry, API-only.
+        "occupation_mesh": 241,
+        "edge_resolution_meV": 0.2,
+        "qgeom_gap_floor_meV": 0.05,
+        "path_log_points": 40,
+        "path_kpoints_frac": None,
+        "path_mu_meV": None,
+        # Quantum geometry, QUEER-only replay controls.
+        "qgeom_time_stop": True,
+        "qgeom_replay_vertices": None,
     }
 )
 
@@ -151,7 +181,39 @@ STEP_PARAM_KEYS: Mapping[str, tuple[str, ...]] = MappingProxyType(
             "kpath_points",
         ),
         STEP_SLAB: ("slab_axis", "slab_cells", "slab_kpoints", "slab_window_eV", "edge_cells"),
+        STEP_QGEOM: (
+            "position_operator",
+            "occupied_bands",
+            "mu_range_meV",
+            "mu_step_meV",
+            "temperatures_K",
+            "qgeom_tolerance",
+            "qgeom_base_mesh",
+            "qgeom_max_points",
+            "qgeom_gap_ratio",
+            "insulator_min_gap_meV",
+            "degeneracy_tol_meV",
+            "qgeom_band_window",
+            "kpath_points",
+        ),
     }
+)
+# Driver keys outside the wizard catalog that a step reads.
+API_PARAM_KEYS: Mapping[str, tuple[str, ...]] = MappingProxyType(
+    {
+        STEP_QGEOM: (
+            "occupation_mesh",
+            "edge_resolution_meV",
+            "qgeom_gap_floor_meV",
+            "path_log_points",
+            "path_kpoints_frac",
+            "path_mu_meV",
+        )
+    }
+)
+# QUEER's own run controls of a step; the driver has none of them.
+QUEER_PARAM_KEYS: Mapping[str, tuple[str, ...]] = MappingProxyType(
+    {STEP_QGEOM: ("qgeom_time_stop", "qgeom_replay_vertices")}
 )
 
 # The Generator catalog's kinds and bounds. ``ws_correction`` also accepts
@@ -210,6 +272,21 @@ STEP_FIELDS: Mapping[str, Mapping[str, Mapping[str, Any]]] = MappingProxyType(
             "slab_window_eV": {"kind": "number", "min_exclusive": 0, "unit": "eV"},
             "edge_cells": {"kind": "integer", "min": 1},
         },
+        STEP_QGEOM: {
+            "position_operator": {"kind": "select", "options": ("auto", "full", "diagonal")},
+            "occupied_bands": {"kind": "integer", "min": 1},
+            "mu_range_meV": {"kind": "float_vector", "shape": 2, "ordered": True, "unit": "meV"},
+            "mu_step_meV": {"kind": "number", "min_exclusive": 0, "unit": "meV"},
+            "temperatures_K": {"kind": "float_vector", "shape": 3, "ordered": True, "min": 0.5, "unit": "K"},
+            "qgeom_tolerance": {"kind": "number", "min_exclusive": 0},
+            "qgeom_base_mesh": {"kind": "integer", "min": 16, "max": 512},
+            "qgeom_max_points": {"kind": "integer", "min": 10000, "max": 5000000},
+            "qgeom_gap_ratio": {"kind": "number", "min_exclusive": 0},
+            "insulator_min_gap_meV": {"kind": "number", "min": 0, "unit": "meV"},
+            "degeneracy_tol_meV": {"kind": "number", "min_exclusive": 0, "unit": "meV"},
+            "qgeom_band_window": {"kind": "integer", "min": 1},
+            "kpath_points": {"kind": "integer", "min": 2},
+        },
     }
 )
 
@@ -253,8 +330,16 @@ def canonical_step(name: Any) -> str:
 
 
 def step_keys(step: str) -> tuple[str, ...]:
-    """The parameter keys a step accepts: shared, its own and the submitter context."""
-    return SHARED_PARAM_KEYS + STEP_PARAM_KEYS[canonical_step(step)] + CONTEXT_PARAM_KEYS
+    """The parameter keys a step accepts: shared, its own, its API-only keys, the submitter context and
+    QUEER's own run controls."""
+    resolved = canonical_step(step)
+    return (
+        SHARED_PARAM_KEYS
+        + STEP_PARAM_KEYS[resolved]
+        + API_PARAM_KEYS.get(resolved, ())
+        + CONTEXT_PARAM_KEYS
+        + QUEER_PARAM_KEYS.get(resolved, ())
+    )
 
 
 def _number(value: Any) -> float:
@@ -387,6 +472,25 @@ def _special(key: str, value: Any) -> Any:
         if not isinstance(value, Mapping):
             raise ValueError("expected {fixed_axis, value}")
         return _plane(value)
+    if key in ("occupation_mesh", "path_log_points"):
+        return _coerce({"kind": "integer", "min": 0}, value)
+    if key == "qgeom_replay_vertices":
+        return _coerce({"kind": "integer", "min": 1}, value)
+    if key in ("edge_resolution_meV", "qgeom_gap_floor_meV"):
+        return _coerce({"kind": "number", "min": 0}, value)
+    if key == "path_mu_meV":
+        return _number(value)
+    if key == "qgeom_time_stop":
+        return _coerce({"kind": "boolean"}, value)
+    if key == "path_kpoints_frac":
+        if not isinstance(value, (list, tuple)) or not value:
+            raise ValueError("expected a nonempty list of fractional k-points")
+        points = []
+        for point in value:
+            if not isinstance(point, (list, tuple)) or len(point) != 3:
+                raise ValueError("each k-point needs three fractional coordinates")
+            points.append([_number(x) for x in point])
+        return points
     raise ValueError("unsupported parameter")
 
 

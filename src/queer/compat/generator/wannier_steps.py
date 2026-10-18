@@ -198,6 +198,7 @@ class WannierStepContext:
     reference: dict[str, Any] | None
     ws_report: dict[str, Any]
     periodic: list[int]
+    hr_degeneracy: dict[tuple[int, ...], int]
     folded_axes: list[int]
     table_R: np.ndarray
     table_H: np.ndarray
@@ -280,6 +281,12 @@ class WannierStepContext:
             f"read {HR_FILENAME}: {self.n_orb} Wannier functions, {n_raw} R vectors "
             f"({time.time() - started:.1f}s)"
         )
+        # wannier90's own R set and degeneracies before any correction: a _tb.dat of the
+        # same run carries exactly these.
+        self.hr_degeneracy = {
+            tuple(int(x) for x in translation): int(degeneracy)
+            for translation, degeneracy in zip(raw.translations, raw.degeneracies)
+        }
         self.reference = self._read_reference()
         translations, hopping, report = self._ws_correct(raw)
         self.ws_report = report
@@ -451,6 +458,37 @@ class WannierStepContext:
         if report["mode"] != "off":
             report["hermiticity_error"] = table_hermiticity(translations, hopping)[0]
         return translations, hopping, report
+
+    def ws_apply(self, translations, stack) -> tuple[np.ndarray, np.ndarray]:
+        """The Wigner-Seitz correction and vacuum fold that built ``table_H``, applied to another table.
+
+        ``stack`` (nR, N, N, ...) lies on wannier90's R set ``translations`` with the
+        degeneracies already divided out; trailing axes (stacked position components)
+        unfold alike. The images depend only on (R, i, j), the centres and the lattice,
+        so a table stacked with the position matrices unfolds exactly as the Hamiltonian
+        did. Returns the folded translations and table.
+        """
+        vectors = np.asarray(translations, dtype=np.int64)
+        matrices = np.asarray(stack, dtype=complex)
+        leading = matrices.reshape(matrices.shape[:3] + (-1,))[..., 0]
+        data = WannierData(vectors, leading, np.ones(len(vectors), dtype=np.int64))
+        mode = (self.ws_report or {}).get("mode", "off")
+        if mode == "wsvec_file":
+            vectors, matrices = unfold_from_wsvec(
+                data, read_wsvec(self._path(WSVEC_FILENAME)), operators=matrices
+            )
+        elif mode == "recompute":
+            images = recompute_wsvec(
+                data,
+                self.centres,
+                self.lattice,
+                self.win.mp_grid,
+                search_size=int(self.win.ws_search_size or DEFAULT_WS_SEARCH_SIZE),
+                distance_tolerance=float(self.win.ws_distance_tol or DEFAULT_WS_DISTANCE_TOL),
+            )
+            stacked = WannierData(vectors, matrices, data.degeneracies)
+            vectors, matrices = normalized_hopping(stacked, "ws_distance", images)
+        return fold_vacuum_axes(vectors, matrices, self.periodic)
 
     # ------------------------------------------------------- validation
     def validate(self) -> None:

@@ -1,0 +1,719 @@
+{
+ "schema_version": 1,
+ "status": "ok",
+ "step_type": "PYTHTB_QGEOM",
+ "provenance": {
+  "core_sha256": "0efcc4b3079266a8d35644d3d06f648857e31d86b12be173c6f03298a5d505c0",
+  "params_sha256": "46525ad4b944158aed1d474ac1ea394e76af8df1e5a8f6b85040020c5a9c8daf",
+  "python": "3.12.12",
+  "numpy": "2.5.4",
+  "host": "golden",
+  "cpus": 16,
+  "memory_available_bytes": 18953916416,
+  "pythtb": "2.0.2",
+  "scipy": "1.18.1",
+  "matplotlib": "3.11.2",
+  "qgeom_sha256": "4fb51a38691931f2b687d731619a21ae2caa094b1dd4681d1d97073041f23ee3",
+  "inputs": {
+   "wannier90.win": {
+    "bytes": 939,
+    "sha256": "b5dbab23eb4478d46735557c623ed1871b2f40ee6450aae031003a1ae52aa56b"
+   },
+   "wannier90_hr.dat": {
+    "bytes": 13659,
+    "sha256": "b83f78d1385e623365f941554bb38d4ec6bd9447d8e13f1774466efcfa3d2075"
+   },
+   "wannier90_centres.xyz": {
+    "bytes": 171,
+    "sha256": "1bdb9c35ced287bbd3a172946bfea22390d264b9e7658742828b79f8091b4302"
+   },
+   "wannier90_band.kpt": {
+    "bytes": 820,
+    "sha256": "43ff6863c53bd8cf4e8c9a2157e6d83772f2b85ee2ff2609f86e8ba4e9ee371b"
+   },
+   "wannier90_band.dat": {
+    "bytes": 1275,
+    "sha256": "ddd212b2dba1ff9618804ac981c0a4cb6335b9dba7fa97bc85d81c26d3233966"
+   },
+   "wannier90_band.labelinfo.dat": {
+    "bytes": 120,
+    "sha256": "49614d6db2a4a0db0abc2d27169519baa00c1d0a37fd3fc9be9c20ebb107beda"
+   }
+  },
+  "parallel": [
+   {
+    "stage": "validation",
+    "k_points": 19,
+    "chunk": 256,
+    "tasks": 1,
+    "workers": 1,
+    "processes": 1
+   },
+   {
+    "stage": "quantum geometry",
+    "k_points": 10000000,
+    "chunk": 256,
+    "tasks": 39063,
+    "workers": 1,
+    "processes": 1
+   },
+   {
+    "stage": "quantum geometry path",
+    "k_points": 43,
+    "chunk": 256,
+    "tasks": 1,
+    "workers": 1,
+    "processes": 1
+   }
+  ],
+  "wall_seconds": 1.0,
+  "peak_rss_bytes": 222986240,
+  "peak_worker_rss_bytes": 0
+ },
+ "citation": "T. Cole, S. Coh and D. Vanderbilt, Python Tight Binding (PythTB), doi:10.5281/zenodo.12721315",
+ "approximation": "Tight-binding (diagonal position) approximation: the Wannier centres are the orbital positions and the off-diagonal position matrix elements are dropped. Band energies and integer invariants are unaffected; Berry-curvature, quantum-metric and Hall magnitudes are approximate.",
+ "model": {
+  "num_wann": 3,
+  "n_R": 25,
+  "n_R_after_ws": 25,
+  "n_R_model": 25,
+  "folded_axes": [
+   2
+  ],
+  "n_hops": 111,
+  "spinors": false,
+  "periodic_dirs": [
+   0,
+   1
+  ],
+  "dimension": 2,
+  "lattice": [
+   [
+    2.5,
+    0.0,
+    0.0
+   ],
+   [
+    -1.25,
+    2.1650635095,
+    0.0
+   ],
+   [
+    0.0,
+    0.0,
+    20.0
+   ]
+  ],
+  "fermi_energy": -0.35,
+  "fermi_source": "reference_band",
+  "ws_correction": {
+   "requested": "auto",
+   "mode": "off",
+   "selected_by": "band_dat",
+   "scores": {
+    "off": {
+     "in_window_max_meV": 4.89815832338536e-06,
+     "in_window_rms_meV": 2.517551041386232e-06,
+     "max_meV": 4.89815832338536e-06
+    },
+    "recompute": {
+     "in_window_max_meV": 337.7806753410275,
+     "in_window_rms_meV": 101.95045260149162,
+     "max_meV": 337.7806753410275
+    }
+   }
+  },
+  "cutoffs": {
+   "min_hopping_norm": null,
+   "max_distance": null
+  },
+  "species": [
+   "B",
+   "N",
+   "C"
+  ],
+  "orbital_species": [
+   "N",
+   "C",
+   "B"
+  ],
+  "mp_grid": [
+   4,
+   4,
+   1
+  ],
+  "win_scalars": {
+   "dis_froz_min": -1.0,
+   "dis_froz_max": 1.5,
+   "dis_win_min": -6.0,
+   "dis_win_max": 6.0
+  },
+  "approximation": "Tight-binding (diagonal position) approximation: the Wannier centres are the orbital positions and the off-diagonal position matrix elements are dropped. Band energies and integer invariants are unaffected; Berry-curvature, quantum-metric and Hall magnitudes are approximate.",
+  "pythtb_version": "2.0.2",
+  "source_wannier_job_id": "job-wannier",
+  "reference_band_job_id": "job-band"
+ },
+ "validation": {
+  "band_dat": {
+   "max_meV": 4.8981594336083845e-06,
+   "rms_meV": 2.5900201329892806e-06,
+   "window_eV": [
+    -0.65,
+    1.85
+   ],
+   "in_window_max_meV": 4.8981594336083845e-06,
+   "in_window_rms_meV": 2.517551021104413e-06,
+   "in_window_points": 49,
+   "available": true,
+   "n_k": 19
+  },
+  "fermi_in_frozen_window": true,
+  "hermiticity_error": 0.0,
+  "localization": {
+   "decay_length_A": 3.246597413455476,
+   "max_distance_A": 12.373365740134982
+  }
+ },
+ "qgeom": {
+  "approximation": "Tight-binding (diagonal position) approximation: the Wannier centres are the orbital positions and the off-diagonal position matrix elements are dropped. Band energies and integer invariants are unaffected; Berry-curvature, quantum-metric and Hall magnitudes are approximate.",
+  "approximation_level": "diagonal_position",
+  "conventions": {
+   "omega": "-2 Im Q",
+   "sigma_xy": "-(e^2/h)(1/2pi) sum int f Omega, charge -e",
+   "chi": "-(e^3/hbar)[c_out M_abc + c_in(M_bac + M_cab)]",
+   "chi_sets": {
+    "wpd_1_m05": [
+     1.0,
+     -0.5
+    ],
+    "lka_2_m05": [
+     2.0,
+     -0.5
+    ],
+    "qk_05_m1": [
+     0.5,
+     -1.0
+    ]
+   },
+   "k_units": "1/angstrom, 2 pi included",
+   "frame": {
+    "e1": [
+     1.0,
+     0.0,
+     0.0
+    ],
+    "e2": [
+     -0.0,
+     1.0,
+     0.0
+    ],
+    "normal": [
+     0.0,
+     -0.0,
+     1.0
+    ]
+   }
+  },
+  "position": {
+   "mode": "diagonal",
+   "source": "none"
+  },
+  "electron_count": {
+   "n_occ": 1,
+   "source": "count_at_EF",
+   "count_at_EF": 1.0148720999405116,
+   "gap_at_gamma_meV": 1010.1097041330424,
+   "min_direct_gap_meV": 666.4710564004525,
+   "global_gap_meV": 147.48171352870943,
+   "state_at_cnp": "insulator",
+   "mu_cnp_meV": {
+    "0K": -69.99999998692863,
+    "5K": -69.99999999220867,
+    "20K": -99.9440958357102,
+    "60K": -131.92519531485314
+   }
+  },
+  "window": {
+   "bands": [
+    0,
+    2
+   ],
+   "always_occupied": 0,
+   "degeneracy_tol_used_meV": 0.001,
+   "pt_pairs": {
+    "detected": false,
+    "median_split_meV": 1357.2749222264886
+   }
+  },
+  "grid": {
+   "mu_min_meV": -150.0,
+   "mu_max_meV": 150.0,
+   "mu_step_meV": 10.000000000000009,
+   "temperatures_K": [
+    0.0,
+    5.0,
+    20.0,
+    60.0
+   ],
+   "downsampled": 1
+  },
+  "integration": {
+   "base_mesh": 16,
+   "seeds": 3,
+   "mu_subset": 109,
+   "vertices": 10460,
+   "vertices_by_rule": {
+    "base": 512,
+    "seed": 588,
+    "gap": 3710,
+    "edge": 86,
+    "error": 5564
+   },
+   "gap_rule_capped": true,
+   "max_level": 7,
+   "finest_cell_invA": 0.0024543692605839495,
+   "tolerance": 0.01,
+   "converged": false,
+   "confirmed": false,
+   "stop": "budget",
+   "history": [
+    {
+     "phase": "error",
+     "target": 0.01,
+     "worst": 0.041138933380659805,
+     "vertices": 5494,
+     "leaves": 2617
+    },
+    {
+     "phase": "error",
+     "target": 0.01,
+     "worst": 0.03451803540200459,
+     "vertices": 5829,
+     "leaves": 2773
+    },
+    {
+     "phase": "error",
+     "target": 0.01,
+     "worst": 0.02854603880360094,
+     "vertices": 6177,
+     "leaves": 2938
+    },
+    {
+     "phase": "error",
+     "target": 0.01,
+     "worst": 0.023105547253462845,
+     "vertices": 6561,
+     "leaves": 3112
+    },
+    {
+     "phase": "error",
+     "target": 0.01,
+     "worst": 0.020266798681434908,
+     "vertices": 6963,
+     "leaves": 3298
+    },
+    {
+     "phase": "error",
+     "target": 0.01,
+     "worst": 0.017390157521324792,
+     "vertices": 7385,
+     "leaves": 3493
+    },
+    {
+     "phase": "error",
+     "target": 0.01,
+     "worst": 0.017200187430750403,
+     "vertices": 7814,
+     "leaves": 3700
+    },
+    {
+     "phase": "error",
+     "target": 0.01,
+     "worst": 0.016793468576455403,
+     "vertices": 8274,
+     "leaves": 3922
+    },
+    {
+     "phase": "error",
+     "target": 0.01,
+     "worst": 0.016793468576455403,
+     "vertices": 8773,
+     "leaves": 4156
+    },
+    {
+     "phase": "error",
+     "target": 0.01,
+     "worst": 0.01600573205687314,
+     "vertices": 9301,
+     "leaves": 4405
+    },
+    {
+     "phase": "error",
+     "target": 0.01,
+     "worst": 0.015105777053385422,
+     "vertices": 9866,
+     "leaves": 4669
+    },
+    {
+     "phase": "error",
+     "target": 0.01,
+     "worst": 0.013246918377643378,
+     "vertices": 10460,
+     "leaves": 4948
+    }
+   ],
+   "smeared_check_rel": 0.0029131800518160523,
+   "wall_seconds": 0.4,
+   "step_seconds": 0.6
+  },
+  "occupied": {
+   "applicable": true,
+   "n_occ": 1,
+   "chern": -3.621253341816913e-05,
+   "chern_integer_distance": 3.621253341816913e-05,
+   "chern_in": -3.621253341816913e-05,
+   "K_in": [
+    [
+     0.3852317143740626,
+     -0.14636953876744085
+    ],
+    [
+     -0.14636953876744085,
+     0.24625603488704204
+    ]
+   ],
+   "K_in_minus_abs_C": 0.6314515367276865,
+   "psd_in_min_rel": 2.6001155602895586e-05,
+   "verdict": "unconverged",
+   "reason": "not confirmed"
+  },
+  "headline": {
+   "0K": {
+    "E_F": {
+     "mu_meV": 0.0,
+     "A3_A_per_eV": 0.0029061701871867644,
+     "A3_err": 0.0,
+     "theta0_deg": 19.16067075065622,
+     "chi_mA_nm_per_V2": {
+      "wpd_1_m05": -2.142712280944189e-21,
+      "lka_2_m05": -7.074010004174577e-05,
+      "qk_05_m1": 0.00010611015006261863
+     },
+     "chi_err": {
+      "wpd_1_m05": 0.0,
+      "lka_2_m05": 0.0,
+      "qk_05_m1": 0.0
+     },
+     "sigma_xy_e2_h": 0.0017892045178191085,
+     "density_cm2": 24991074818974.55
+    },
+    "CNP": {
+     "mu_meV": -69.99999999999999,
+     "A3_A_per_eV": 0.0,
+     "A3_err": 0.0,
+     "theta0_deg": 0.0,
+     "chi_mA_nm_per_V2": {
+      "wpd_1_m05": 0.0,
+      "lka_2_m05": 0.0,
+      "qk_05_m1": 0.0
+     },
+     "chi_err": {
+      "wpd_1_m05": 0.0,
+      "lka_2_m05": 0.0,
+      "qk_05_m1": 0.0
+     },
+     "sigma_xy_e2_h": 3.621253341818756e-05,
+     "density_cm2": -201.21881549956052
+    },
+    "max_A3": {
+     "mu_meV": 150.0,
+     "A3_A_per_eV": 0.009395453270874156,
+     "A3_err": 0.0,
+     "theta0_deg": 45.70512773866732,
+     "chi_mA_nm_per_V2": {
+      "wpd_1_m05": 0.0,
+      "lka_2_m05": -0.00022869799822788992,
+      "qk_05_m1": 0.000343046997341835
+     },
+     "chi_err": {
+      "wpd_1_m05": 0.0,
+      "lka_2_m05": 0.0,
+      "qk_05_m1": 0.0
+     },
+     "sigma_xy_e2_h": -0.008819622353941518,
+     "density_cm2": 98145496306406.38
+    }
+   },
+   "5K": {
+    "E_F": {
+     "mu_meV": 0.0,
+     "A3_A_per_eV": 0.002906301944676652,
+     "A3_err": 0.0,
+     "theta0_deg": 19.161249457375956,
+     "chi_mA_nm_per_V2": {
+      "wpd_1_m05": -1.428502447513832e-21,
+      "lka_2_m05": -7.074330719666636e-05,
+      "qk_05_m1": 0.00010611496079499952
+     },
+     "chi_err": {
+      "wpd_1_m05": 0.0,
+      "lka_2_m05": 0.0,
+      "qk_05_m1": 0.0
+     },
+     "sigma_xy_e2_h": 0.0017888661095725226,
+     "density_cm2": 24991414540487.203
+    },
+    "CNP": {
+     "mu_meV": -69.99999999999999,
+     "A3_A_per_eV": 6.924902180465287e-15,
+     "A3_err": 0.0,
+     "theta0_deg": 12.214618729654042,
+     "chi_mA_nm_per_V2": {
+      "wpd_1_m05": 0.0,
+      "lka_2_m05": -1.6856145424147403e-16,
+      "qk_05_m1": 2.5284218136221106e-16
+     },
+     "chi_err": {
+      "wpd_1_m05": 0.0,
+      "lka_2_m05": 0.0,
+      "qk_05_m1": 0.0
+     },
+     "sigma_xy_e2_h": 3.6212533423949175e-05,
+     "density_cm2": -164.09281590178227
+    },
+    "max_A3": {
+     "mu_meV": 150.0,
+     "A3_A_per_eV": 0.009419405182889706,
+     "A3_err": 0.0,
+     "theta0_deg": 45.69693698551248,
+     "chi_mA_nm_per_V2": {
+      "wpd_1_m05": 0.0,
+      "lka_2_m05": -0.00022928102005491217,
+      "qk_05_m1": 0.0003439215300823682
+     },
+     "chi_err": {
+      "wpd_1_m05": 0.0,
+      "lka_2_m05": 0.0,
+      "qk_05_m1": 0.0
+     },
+     "sigma_xy_e2_h": -0.008819628950065713,
+     "density_cm2": 98145563997135.45
+    }
+   },
+   "20K": {
+    "E_F": {
+     "mu_meV": 0.0,
+     "A3_A_per_eV": 0.0029062392917097615,
+     "A3_err": 0.0,
+     "theta0_deg": 19.197117986586363,
+     "chi_mA_nm_per_V2": {
+      "wpd_1_m05": -4.346871996115597e-21,
+      "lka_2_m05": -7.074178213899243e-05,
+      "qk_05_m1": 0.00010611267320848863
+     },
+     "chi_err": {
+      "wpd_1_m05": 0.0,
+      "lka_2_m05": 0.0,
+      "qk_05_m1": 0.0
+     },
+     "sigma_xy_e2_h": 0.0017837571406334096,
+     "density_cm2": 24995417961447.617
+    },
+    "CNP": {
+     "mu_meV": -99.99999999999999,
+     "A3_A_per_eV": 1.3765938445665115e-14,
+     "A3_err": 0.0,
+     "theta0_deg": 12.404720915064702,
+     "chi_mA_nm_per_V2": {
+      "wpd_1_m05": 5.591014575669137e-33,
+      "lka_2_m05": -3.350814990492789e-16,
+      "qk_05_m1": 5.026222485739182e-16
+     },
+     "chi_err": {
+      "wpd_1_m05": 0.0,
+      "lka_2_m05": 0.0,
+      "qk_05_m1": 0.0
+     },
+     "sigma_xy_e2_h": 3.621253342962787e-05,
+     "density_cm2": -130.65890466179414
+    },
+    "max_A3": {
+     "mu_meV": 150.0,
+     "A3_A_per_eV": 0.009441958246003376,
+     "A3_err": 0.0,
+     "theta0_deg": 45.68829038785038,
+     "chi_mA_nm_per_V2": {
+      "wpd_1_m05": 0.0,
+      "lka_2_m05": -0.00022982999201393332,
+      "qk_05_m1": 0.0003447449880208999
+     },
+     "chi_err": {
+      "wpd_1_m05": 0.0,
+      "lka_2_m05": 0.0,
+      "qk_05_m1": 0.0
+     },
+     "sigma_xy_e2_h": -0.008820289631910132,
+     "density_cm2": 98148666317923.39
+    }
+   },
+   "60K": {
+    "E_F": {
+     "mu_meV": 0.0,
+     "A3_A_per_eV": 0.002881347805059354,
+     "A3_err": 0.0,
+     "theta0_deg": 19.40442259410587,
+     "chi_mA_nm_per_V2": {
+      "wpd_1_m05": 2.159971358218114e-21,
+      "lka_2_m05": -7.013588979875679e-05,
+      "qk_05_m1": 0.00010520383469813518
+     },
+     "chi_err": {
+      "wpd_1_m05": 0.0,
+      "lka_2_m05": 0.0,
+      "qk_05_m1": 0.0
+     },
+     "sigma_xy_e2_h": 0.0017402072125102205,
+     "density_cm2": 25024114170233.71
+    },
+    "CNP": {
+     "mu_meV": -130.0,
+     "A3_A_per_eV": 4.1380428113600146e-10,
+     "A3_err": 0.0,
+     "theta0_deg": 18.144462214817008,
+     "chi_mA_nm_per_V2": {
+      "wpd_1_m05": 0.0,
+      "lka_2_m05": -1.0072554034972018e-11,
+      "qk_05_m1": 1.510883105245803e-11
+     },
+     "chi_err": {
+      "wpd_1_m05": 0.0,
+      "lka_2_m05": 0.0,
+      "qk_05_m1": 0.0
+     },
+     "sigma_xy_e2_h": 3.621285464850448e-05,
+     "density_cm2": 1776468.4147206552
+    },
+    "max_A3": {
+     "mu_meV": 150.0,
+     "A3_A_per_eV": 0.009448704588552416,
+     "A3_err": 0.0,
+     "theta0_deg": 45.684856579776685,
+     "chi_mA_nm_per_V2": {
+      "wpd_1_m05": 0.0,
+      "lka_2_m05": -0.00022999420708603714,
+      "qk_05_m1": 0.0003449913106290557
+     },
+     "chi_err": {
+      "wpd_1_m05": 0.0,
+      "lka_2_m05": 0.0,
+      "qk_05_m1": 0.0
+     },
+     "sigma_xy_e2_h": -0.008829143660479152,
+     "density_cm2": 98178878624984.53
+    }
+   }
+  },
+  "dipole_sources": {
+   "level": "diagonal",
+   "T_K": 0.0,
+   "gap_bins_meV": [
+    1.0,
+    10.0,
+    100.0
+   ],
+   "frozen_window_meV": [
+    -650.0,
+    1850.0
+   ],
+   "points": {
+    "E_F": {
+     "mu_meV": 0.0,
+     "triangles": 436,
+     "A3_A_per_eV": 0.002906170187186763,
+     "shares": {
+      "<1": 0.0,
+      "1-10": 0.0,
+      "10-100": 0.0,
+      ">=100": 1.0
+     },
+     "outside_frozen": 1.0
+    },
+    "CNP": null,
+    "max_A3": {
+     "mu_meV": 150.0,
+     "triangles": 380,
+     "A3_A_per_eV": 0.009395453270873867,
+     "shares": {
+      "<1": 0.0,
+      "1-10": 0.0,
+      "10-100": 0.0,
+      ">=100": 1.0
+     },
+     "outside_frozen": 0.632885210978507
+    }
+   }
+  },
+  "symmetry": {
+   "lattice_hexagonal": true,
+   "c3_band_floor_meV": 1180.6451918778928,
+   "M_c3_residual": 0.6599415623910697,
+   "sigma_dT_residual": 0.8432227214970004,
+   "bcd_residual": 0.01791840687715925,
+   "K_c3_residual": 0.4565544846104994
+  },
+  "verdict": "indicative",
+  "verdict_reasons": [
+   "diagonal (tight-binding) position level",
+   "integration not converged and confirmed"
+  ],
+  "dft_check": {
+   "skipped": "the .win has no kpoints block or no frozen window"
+  },
+  "parity": {
+   "k_points": 32,
+   "max_rel": 8.545987631902359e-16,
+   "bands": [
+    0
+   ]
+  },
+  "files": {
+   "response": "Out/qgeom_response.json",
+   "path": "Out/qgeom_path.json"
+  }
+ },
+ "warnings": [
+  "the WANNIER job has no wannier90_tb.dat: the diagonal (tight-binding) level only; re-run the WANNIER step for the full position matrix"
+ ],
+ "outputs": [
+  {
+   "path": "Out/hopping_decay.png",
+   "title": "Hopping decay with distance",
+   "kind": "plot"
+  },
+  {
+   "path": "Out/qgeom_response.json",
+   "title": "Quantum geometry response curves (data)",
+   "kind": "data"
+  },
+  {
+   "path": "Out/qgeom_path.json",
+   "title": "Quantum geometry along the path (data)",
+   "kind": "data"
+  },
+  {
+   "path": "Out/qgeom_dipole.png",
+   "title": "BCP dipole amplitude and AHC",
+   "kind": "plot"
+  },
+  {
+   "path": "Out/qgeom_ahc_dos.png",
+   "title": "Density of states",
+   "kind": "plot"
+  },
+  {
+   "path": "Out/qgeom_path.png",
+   "title": "Bands and Fermi-sea curvature along the path",
+   "kind": "plot"
+  }
+ ]
+}

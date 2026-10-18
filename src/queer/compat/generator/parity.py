@@ -114,11 +114,19 @@ from .results import (
     WARN_BAND_DAT_DEVIATION,
     WARN_BAND_DAT_MISSING,
     WARN_CHERN_NOT_INTEGER,
+    WARN_DFT_FROZEN_MISMATCH,
+    WARN_DIPOLE_SOURCES,
     WARN_DOS_OUTSIDE_GRID,
     WARN_FERMI_OUTSIDE_FROZEN,
     WARN_METRIC_SKIPPED,
     WARN_PATH_CURVATURE_SKIPPED,
     WARN_PLOT_SKIPPED,
+    WARN_POSITION_ANTIHERMITIAN,
+    WARN_POSITION_DIAGONAL_ONLY,
+    WARN_QGEOM_NO_PATH,
+    WARN_QGEOM_PATH_DATA,
+    WARN_QGEOM_PROBE,
+    WARN_SMEARED_COARSE,
     WARN_WS_ASSUMED_DEFAULT,
     WARN_WS_NO_MP_GRID,
     WARN_Z2_FORCED,
@@ -129,7 +137,7 @@ from .results import (
 REPORT_SCHEMA = "queer-generator-parity/1"
 RESULT_FILENAMES = {"queer": "queer_results.json", "pythtb": "pythtb_results.json"}
 PARAMS_FILENAMES = {"queer": "queer_params.json", "pythtb": "pythtb_params.json"}
-FAMILIES: tuple[str, ...] = ("BANDS", "TOPOLOGY", "BERRY", "SLAB")
+FAMILIES: tuple[str, ...] = ("BANDS", "TOPOLOGY", "BERRY", "SLAB", "QGEOM")
 ENGINE_PREFIXES = {"QUEER_": "queer", "PYTHTB_": "pythtb"}
 
 AGREE = "agree"
@@ -194,7 +202,9 @@ DISTANCE_BLOCK = 1 << 20
 # What reading a document of an unexpected shape raises.
 MALFORMED = (KeyError, IndexError, TypeError, ValueError, AttributeError)
 # Parameters that change how a run executes, never its result.
-EXECUTION_PARAMS = frozenset({"workers", "chunk_size", "time_budget_s"})
+EXECUTION_PARAMS = frozenset(
+    {"workers", "chunk_size", "time_budget_s", "qgeom_time_stop", "qgeom_replay_vertices"}
+)
 # Model keys that name the producer or are recorded by one producer only.
 PRODUCER_MODEL_KEYS = frozenset(
     {"approximation", "pythtb_version", "queer_version", "hermiticity_weyl_bound"}
@@ -214,7 +224,7 @@ OCCUPATION_KPOINTS = {"vbm_k": "vbm_eV", "cbm_k": "cbm_eV", "direct_gap_k": "dir
 WARNING_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
     (code, re.compile(pattern))
     for code, pattern in (
-        (WARN_PLOT_SKIPPED, r"plot skipped: |\.png skipped: "),
+        (WARN_PLOT_SKIPPED, r"plot skipped: |\.png skipped: |^no plots: |^plotting failed: "),
         (WARN_WS_NO_MP_GRID, r"^The \.win has neither mp_grid nor a kpoints block"),
         (WARN_WS_ASSUMED_DEFAULT, r"^No wannier90_band\.dat to check the Wigner-Seitz correction"),
         (WARN_BAND_DAT_DEVIATION, r"^(PythTB|Model) bands differ from wannier90_band\.dat"),
@@ -225,6 +235,14 @@ WARNING_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
         (WARN_CHERN_NOT_INTEGER, r"^the Kubo Chern number .* from an integer"),
         (WARN_METRIC_SKIPPED, r"^quantum metric skipped"),
         (WARN_PATH_CURVATURE_SKIPPED, r"^path curvature skipped: "),
+        (WARN_POSITION_DIAGONAL_ONLY, r"^the WANNIER job has no wannier90_tb\.dat"),
+        (WARN_POSITION_ANTIHERMITIAN, r"^the position matrix is .* anti-Hermitian before symmetrising"),
+        (WARN_QGEOM_NO_PATH, r"^no k-path for the curves along k: "),
+        (WARN_QGEOM_PATH_DATA, r"^no path data: "),
+        (WARN_QGEOM_PROBE, r"^the diagonal level differs from (PythTB's own metric|QUEER's band geometry)"),
+        (WARN_DFT_FROZEN_MISMATCH, r"^the model misses frozen DFT states"),
+        (WARN_DIPOLE_SOURCES, r"^no dipole sources: "),
+        (WARN_SMEARED_COARSE, r"^the Fermi-surface integrals at .* from vertex weights differ"),
     )
 )
 ENVIRONMENT_WARNINGS = frozenset({WARN_PLOT_SKIPPED})
@@ -605,6 +623,10 @@ class _Comparison:
         self.berry_sign = 1.0
         self.weyl = 0.0
         self.eigenvalue_tol = EIGENVALUE_FLOOR_EV
+        # Warnings each producer raises about its own checks, and data files only QUEER writes:
+        # neither enters the warning and output comparisons.
+        self.producer_warning_codes: frozenset[str] = frozenset()
+        self.queer_only_outputs: frozenset[str] = frozenset()
 
     # ----------------------------------------------------------- records
     def precondition(self, name: str, ok: bool, detail: str) -> bool:
@@ -866,6 +888,17 @@ class _Comparison:
         elif self.family == "SLAB":
             slab = run.block("slab")
             decisions.update({key: slab.get(key) for key in ("kind", "cells", "finite_axis")})
+        elif self.family == "QGEOM":
+            qgeom = run.block("qgeom")
+            occupied = qgeom.get("occupied") or {}
+            counted = qgeom.get("electron_count") or {}
+            decisions.update(
+                position_level=(qgeom.get("position") or {}).get("mode"),
+                window=(qgeom.get("window") or {}).get("bands"),
+                n_occ=counted.get("n_occ"),
+                n_occ_source=counted.get("source"),
+                manifold_applicable=occupied.get("applicable"),
+            )
         return decisions
 
     def check_derived_decisions(self) -> bool:
@@ -954,12 +987,16 @@ class _Comparison:
 
         codes_a, messages_a = codes(self.reference)
         codes_b, messages_b = codes(self.candidate)
-        kept_a = {code for code in codes_a if code not in ENVIRONMENT_WARNINGS}
-        kept_b = {code for code in codes_b if code not in ENVIRONMENT_WARNINGS}
-        texts_a = {m for c, m in zip(codes_a, messages_a) if c not in ENVIRONMENT_WARNINGS}
-        texts_b = {m for c, m in zip(codes_b, messages_b) if c not in ENVIRONMENT_WARNINGS}
+        skipped = ENVIRONMENT_WARNINGS | self.producer_warning_codes
+        kept_a = {code for code in codes_a if code not in skipped}
+        kept_b = {code for code in codes_b if code not in skipped}
+        texts_a = {m for c, m in zip(codes_a, messages_a) if c not in skipped}
+        texts_b = {m for c, m in zip(codes_b, messages_b) if c not in skipped}
         ignored = sum(code in ENVIRONMENT_WARNINGS for code in codes_a + codes_b)
         note = f"; {ignored} plot warnings not compared" if ignored else ""
+        own = sorted({code for code in codes_a + codes_b if code in self.producer_warning_codes})
+        if own:
+            note += f"; warnings of each producer's own checks not compared: {', '.join(own)}"
         coded = all(
             isinstance(run.document.get("warning_codes"), list) for run in (self.reference, self.candidate)
         )
@@ -977,7 +1014,9 @@ class _Comparison:
             return {
                 str(entry.get("path"))
                 for entry in run.document.get("outputs") or []
-                if isinstance(entry, dict) and entry.get("kind") == "data"
+                if isinstance(entry, dict)
+                and entry.get("kind") == "data"
+                and str(entry.get("path")) not in self.queer_only_outputs
             }
 
         a, b = data(self.reference), data(self.candidate)
@@ -2120,17 +2159,13 @@ class _Comparison:
             self.check_parameters,
             self.check_fermi_energy,
             self.check_derived_decisions,
+            *self.step_preconditions(),
         ]
         results = [self.guarded(check) for check in checks]
         if not all(results):
             return
         self.set_tolerances()
-        step = {
-            "BANDS": self.compare_bands,
-            "TOPOLOGY": self.compare_topology,
-            "BERRY": self.compare_berry,
-            "SLAB": self.compare_slab,
-        }[self.family]
+        step = getattr(self, f"compare_{self.family.lower()}")
         for stage in (step, self.compare_common):
             try:
                 stage()
@@ -2138,6 +2173,10 @@ class _Comparison:
                 # A document of an unexpected shape is a difference, reported as such.
                 detail = f"the documents could not be compared: {type(error).__name__}: {error}"
                 self.quantity(stage.__name__, UNEXPLAINED, detail=_shorten(detail))
+
+    def step_preconditions(self) -> list[Callable[[], bool]]:
+        """The step family's own preconditions, after the common ones."""
+        return []
 
     def guarded(self, check: Callable[[], bool]) -> bool:
         """Run a precondition ``check_<name>``; a document of an unexpected shape fails it."""
@@ -2352,7 +2391,12 @@ def compare(
     if recompute_budget is not None:
         raise ValueError("a recompute budget applies to a SHIFT_CURRENT comparison only")
     family = step_family(step_type)
-    comparison = _Comparison(
+    kind: type[_Comparison] = _Comparison
+    if family == "QGEOM":
+        from .parity_qgeom import QgeomComparison
+
+        kind = QgeomComparison
+    comparison = kind(
         family, RunDirectory.load("reference", reference_dir), RunDirectory.load("candidate", candidate_dir)
     )
     comparison.run()

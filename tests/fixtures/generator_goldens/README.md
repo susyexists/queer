@@ -14,6 +14,10 @@ ones each document records in `provenance.inputs`.
 | `haldane_berry_fermi` | `PYTHTB_BERRY` | Haldane, E_F = 0.8 eV (fermi mode) | Fermi-sea curvature and its integral |
 | `haldane_slab` | `PYTHTB_SLAB` | Haldane ribbon, E_F = 0 | ragged levels, edge and half-ribbon weights, the bulk check (gap, mesh, Chern number, how far the gap's edges and the closest band pair can lie beyond the samples), edge crossings (weighted flow: status, checks, flows across the bulk gap) |
 | `kane_mele_topology` | `PYTHTB_TOPOLOGY` | Kane-Mele with Rashba coupling | Kramers check, Z2 |
+| `qgeom_full_metal` | `PYTHTB_QGEOM` | generic three-band layer, E_F = -0.35 eV (a metal), `_tb.dat`, `.eig` | the full position level, converged and confirmed integration with the gap rule capped, response curves, path data, dipole sources, the skipped `.eig` check |
+| `qgeom_full_insulator` | `PYTHTB_QGEOM` | the same layer, E_F = 0.55 eV (an insulator), `_tb.dat`, Omega_I | the occupied manifold (C, K_in, K_diag, K_upper_loose), mu_CNP inside the gap, both levels |
+| `qgeom_diagonal_budget` | `PYTHTB_QGEOM` | the same layer without `_tb.dat`, `.eig` | the diagonal level with its warning, an integration stopped on its vertex budget |
+| `qgeom_position_unavailable` | `PYTHTB_QGEOM` | the same layer, `position_operator = full` without `_tb.dat` | the failure document `pythtb_position_unavailable` |
 
 - **Producer.** The vendored driver `tests/oracles/generator_pythtb_core.py` with
   PythTB 2.0.2, SciPy and Matplotlib, run by
@@ -24,9 +28,15 @@ ones each document records in `provenance.inputs`.
   bulk Chern number; against d75fb8fc… only its bulk check, which now bounds how far
   the gap's edges can lie beyond the samples, and its note changed); the other cases
   are from 56fda912…, whose results for them the later cores left as they were
-  (regenerated with f4a73779… they differ only in provenance).
-- **Use.** `tests/numerical/test_generator_parity.py` runs QUEER on every case and
+  (regenerated with f4a73779… they differ only in provenance). The `qgeom_*` cases
+  are from the vendored core 0efcc4b3… with the vendored kernel
+  `tests/oracles/generator_pythtb_qgeom.py` (4fb51a38…), staged as `_pythtb_qgeom.py`;
+  their `Out/qgeom_vertices.json` is the golden script's record of the kernel's final
+  vertex count and the SHA-256 of its sorted vertex keys (the driver itself records
+  only counts).
+- **Use.** `tests/numerical/test_generator_goldens.py` runs QUEER on every case and
   requires `queer.compat.generator.parity.compare` to pass against these documents
-  with every input digest equal.
+  with every input digest equal (for the `qgeom_*` cases also the vertex sets, the
+  only documented difference being the `.eig` check the driver skips).
 - **Updating.** Regenerate them only after the vendored driver or a case changes,
   with the script above, and review the comparator's report on the new files.

@@ -3,8 +3,8 @@
 ``run --step STEP --params FILE [--workspace DIR]`` resolves the parameter file
 for STEP and runs it in the workspace, writing ``queer_results.json`` on success
 and on every failure. A Wannier step (``QUEER_BANDS``, ``QUEER_TOPOLOGY``,
-``QUEER_BERRY``, ``QUEER_SLAB`` or its ``PYTHTB_`` name) builds and validates its
-model from the staged ``wannier90`` files; an OpenMX step (``QUEER_AHC``,
+``QUEER_BERRY``, ``QUEER_SLAB``, ``QUEER_QGEOM`` or its ``PYTHTB_`` name) builds and
+validates its model from the staged ``wannier90`` files; an OpenMX step (``QUEER_AHC``,
 ``QUEER_CHERN_NUMBER``, ``QUEER_SHIFT_CURRENT`` or its ``PYATB_`` name) reads the staged scfout and the
 ``queer_params.json`` of :mod:`~queer.compat.generator.openmx_params`, recording
 the scfout's size and SHA-256 before it translates the parameters. The exit
@@ -47,7 +47,8 @@ from .berry import run_berry
 from .openmx_params import OPENMX_STEPS, is_openmx_step, staged_scfout, translate_openmx
 from .openmx_steps import APPROXIMATION_NOTE as OPENMX_APPROXIMATION_NOTE
 from .openmx_steps import openmx_step_body
-from .pythtb_params import STEP_BANDS, STEP_BERRY, STEP_SLAB, STEP_TOPOLOGY, WannierStepParameters
+from .pythtb_params import STEP_BANDS, STEP_BERRY, STEP_QGEOM, STEP_SLAB, STEP_TOPOLOGY, WannierStepParameters
+from .qgeom_step import run_qgeom
 from .results import (
     ERR_BAD_PARAMS,
     EXIT_FAILED,
@@ -64,7 +65,13 @@ from .topology import run_topology
 from .wannier_steps import WannierStepContext, model_stage
 
 STEP_RUNNERS: Mapping[str, Callable[[WannierStepContext], None]] = MappingProxyType(
-    {STEP_BANDS: run_bands, STEP_TOPOLOGY: run_topology, STEP_BERRY: run_berry, STEP_SLAB: run_slab}
+    {
+        STEP_BANDS: run_bands,
+        STEP_TOPOLOGY: run_topology,
+        STEP_BERRY: run_berry,
+        STEP_SLAB: run_slab,
+        STEP_QGEOM: run_qgeom,
+    }
 )
 USAGE = (
     "usage: python -m queer generator {run --step STEP --params FILE [--workspace DIR] | capabilities | "

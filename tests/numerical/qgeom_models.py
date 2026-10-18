@@ -32,7 +32,7 @@ def hermitian_table(rng, translations, onsite, scale=0.25, decay=1.0):
 
 def position_table(rng, translations, centres, scale=0.05, antihermitian=0.01):
     """Cartesian r(R) (nR, N, N, 3): the centres on the R = 0 diagonal, random Hermitian-paired
-    off-diagonal elements plus an anti-Hermitian part."""
+    off-diagonal elements plus an anti-Hermitian part off that diagonal."""
     n = len(centres)
     index = {tuple(r): i for i, r in enumerate(translations)}
     r = np.zeros((len(translations), n, n, 3), complex)
@@ -46,6 +46,8 @@ def position_table(rng, translations, centres, scale=0.05, antihermitian=0.01):
             block[np.arange(n), np.arange(n)] = centres
         r[i], r[j] = block, np.conj(np.swapaxes(block, 0, 1))
     noise = antihermitian * (rng.normal(size=r.shape) + 1j * rng.normal(size=r.shape))
+    home = index[(0, 0, 0)]
+    noise[home, np.arange(n), np.arange(n)] = 0.0
     return r + noise
 
 

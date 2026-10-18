@@ -1,0 +1,1 @@
+{"description":"Vertex keys x * unit + y of the final quadtree, x and y in units of 1/unit from -1/2","count":7571,"base":16,"unit":16777216,"sha256":"138e1e6873f0b63c0df6ccc2c63f4d831dd6572b9415cd7df547b984c54b0fc4","keys":null,"recorded_by":"scripts/validation/generate_generator_goldens.py"}

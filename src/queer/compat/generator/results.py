@@ -52,6 +52,8 @@ ERR_BAD_PARAMS = "queer_bad_params"
 ERR_MEMORY = "queer_oom"
 ERR_INTERNAL = "queer_internal_error"
 ERR_NUMERICAL = "queer_numerical_error"
+ERR_POSITION_UNAVAILABLE = "queer_position_unavailable"
+ERR_POSITION_MISMATCH = "queer_position_mismatch"
 ERROR_CODES: tuple[str, ...] = (
     ERR_ENV_MISSING,
     ERR_MISSING_INPUT,
@@ -61,6 +63,8 @@ ERROR_CODES: tuple[str, ...] = (
     ERR_MEMORY,
     ERR_INTERNAL,
     ERR_NUMERICAL,
+    ERR_POSITION_UNAVAILABLE,
+    ERR_POSITION_MISMATCH,
 )
 
 EXIT_OK = 0
@@ -80,6 +84,14 @@ WARN_CHERN_NOT_INTEGER = "chern_kubo_not_integer"
 WARN_METRIC_SKIPPED = "quantum_metric_skipped"
 WARN_PATH_CURVATURE_SKIPPED = "path_curvature_skipped"
 WARN_PLOT_SKIPPED = "plot_skipped"
+WARN_POSITION_DIAGONAL_ONLY = "position_diagonal_only"
+WARN_POSITION_ANTIHERMITIAN = "position_antihermitian"
+WARN_QGEOM_NO_PATH = "qgeom_path_unavailable"
+WARN_QGEOM_PATH_DATA = "qgeom_path_data_missing"
+WARN_QGEOM_PROBE = "qgeom_probe_deviation"
+WARN_DFT_FROZEN_MISMATCH = "dft_frozen_mismatch"
+WARN_DIPOLE_SOURCES = "dipole_sources_failed"
+WARN_SMEARED_COARSE = "qgeom_smeared_coarse"
 
 APPROXIMATION_NOTE = (
     "Tight-binding (diagonal position) approximation, as in the Generator's PythTB engine: the "
@@ -296,7 +308,8 @@ class RunRecord:
     ``results`` holds the numerical blocks (``model``, ``validation``, ...);
     ``warnings`` are ``(code, message)`` pairs in order; ``outputs`` the files
     written under ``Out``; ``inputs`` the size and SHA-256 of every model file
-    read; ``parallel`` the plan of every parallel stage.
+    read; ``parallel`` the plan of every parallel stage; ``provenance`` entries a
+    step adds to the document's provenance.
     """
 
     def __init__(self, workspace: str | Path):
@@ -306,6 +319,7 @@ class RunRecord:
         self.outputs: list[dict[str, str]] = []
         self.inputs: dict[str, dict[str, Any]] = {}
         self.parallel: list[dict[str, Any]] = []
+        self.provenance: dict[str, Any] = {}
 
     def warn(self, code: str, message: str) -> None:
         self.warnings.append((code, message))
@@ -373,6 +387,7 @@ def finish_document(document: dict[str, Any], record: RunRecord, started: float)
     document["warning_codes"] = record.warning_codes()
     document["outputs"] = list(record.outputs)
     identity = document.setdefault("provenance", {})
+    identity.update(record.provenance)
     identity["inputs"] = dict(record.inputs)
     identity["parallel"] = list(record.parallel)
     identity["wall_seconds"] = round(time.time() - started, 2)

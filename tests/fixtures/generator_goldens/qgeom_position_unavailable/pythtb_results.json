@@ -1,0 +1,173 @@
+{
+ "schema_version": 1,
+ "status": "failed",
+ "step_type": "PYTHTB_QGEOM",
+ "provenance": {
+  "core_sha256": "0efcc4b3079266a8d35644d3d06f648857e31d86b12be173c6f03298a5d505c0",
+  "params_sha256": "82fcb2868fa4320e9b06fb9a45280b49d8cb021ba6d152b1cf433eca47c821e9",
+  "python": "3.12.12",
+  "numpy": "2.5.4",
+  "host": "golden",
+  "cpus": 16,
+  "memory_available_bytes": 18996031488,
+  "pythtb": "2.0.2",
+  "scipy": "1.18.1",
+  "matplotlib": "3.11.2",
+  "qgeom_sha256": "4fb51a38691931f2b687d731619a21ae2caa094b1dd4681d1d97073041f23ee3",
+  "inputs": {
+   "wannier90.win": {
+    "bytes": 289,
+    "sha256": "ccdeea0841e3a874d424e1a183847bb63f6202a69e077f0718a76981e7d4b05b"
+   },
+   "wannier90_hr.dat": {
+    "bytes": 13659,
+    "sha256": "b83f78d1385e623365f941554bb38d4ec6bd9447d8e13f1774466efcfa3d2075"
+   },
+   "wannier90_centres.xyz": {
+    "bytes": 171,
+    "sha256": "1bdb9c35ced287bbd3a172946bfea22390d264b9e7658742828b79f8091b4302"
+   },
+   "wannier90_band.kpt": {
+    "bytes": 820,
+    "sha256": "43ff6863c53bd8cf4e8c9a2157e6d83772f2b85ee2ff2609f86e8ba4e9ee371b"
+   },
+   "wannier90_band.dat": {
+    "bytes": 1275,
+    "sha256": "ddd212b2dba1ff9618804ac981c0a4cb6335b9dba7fa97bc85d81c26d3233966"
+   },
+   "wannier90_band.labelinfo.dat": {
+    "bytes": 120,
+    "sha256": "49614d6db2a4a0db0abc2d27169519baa00c1d0a37fd3fc9be9c20ebb107beda"
+   }
+  },
+  "parallel": [
+   {
+    "stage": "validation",
+    "k_points": 19,
+    "chunk": 256,
+    "tasks": 1,
+    "workers": 1,
+    "processes": 1
+   }
+  ],
+  "wall_seconds": 0.35,
+  "peak_rss_bytes": 83578880,
+  "peak_worker_rss_bytes": 0
+ },
+ "citation": "T. Cole, S. Coh and D. Vanderbilt, Python Tight Binding (PythTB), doi:10.5281/zenodo.12721315",
+ "approximation": "Tight-binding (diagonal position) approximation: the Wannier centres are the orbital positions and the off-diagonal position matrix elements are dropped. Band energies and integer invariants are unaffected; Berry-curvature, quantum-metric and Hall magnitudes are approximate.",
+ "model": {
+  "num_wann": 3,
+  "n_R": 25,
+  "n_R_after_ws": 25,
+  "n_R_model": 25,
+  "folded_axes": [
+   2
+  ],
+  "n_hops": 111,
+  "spinors": false,
+  "periodic_dirs": [
+   0,
+   1
+  ],
+  "dimension": 2,
+  "lattice": [
+   [
+    2.5,
+    0.0,
+    0.0
+   ],
+   [
+    -1.25,
+    2.1650635095,
+    0.0
+   ],
+   [
+    0.0,
+    0.0,
+    20.0
+   ]
+  ],
+  "fermi_energy": -0.35,
+  "fermi_source": "reference_band",
+  "ws_correction": {
+   "requested": "auto",
+   "mode": "off",
+   "selected_by": "band_dat",
+   "scores": {
+    "off": {
+     "in_window_max_meV": 4.89815832338536e-06,
+     "in_window_rms_meV": 2.517551041386232e-06,
+     "max_meV": 4.89815832338536e-06
+    },
+    "recompute": {
+     "in_window_max_meV": 337.7806753410275,
+     "in_window_rms_meV": 101.95045260149162,
+     "max_meV": 337.7806753410275
+    }
+   }
+  },
+  "cutoffs": {
+   "min_hopping_norm": null,
+   "max_distance": null
+  },
+  "species": [
+   "B",
+   "N",
+   "C"
+  ],
+  "orbital_species": [
+   "N",
+   "C",
+   "B"
+  ],
+  "mp_grid": [
+   4,
+   4,
+   1
+  ],
+  "win_scalars": {
+   "dis_froz_min": -1.0,
+   "dis_froz_max": 1.5,
+   "dis_win_min": -6.0,
+   "dis_win_max": 6.0
+  },
+  "approximation": "Tight-binding (diagonal position) approximation: the Wannier centres are the orbital positions and the off-diagonal position matrix elements are dropped. Band energies and integer invariants are unaffected; Berry-curvature, quantum-metric and Hall magnitudes are approximate.",
+  "pythtb_version": "2.0.2",
+  "source_wannier_job_id": "job-wannier",
+  "reference_band_job_id": "job-band"
+ },
+ "validation": {
+  "band_dat": {
+   "max_meV": 4.8981594336083845e-06,
+   "rms_meV": 2.5900201329892806e-06,
+   "window_eV": [
+    -0.65,
+    1.85
+   ],
+   "in_window_max_meV": 4.8981594336083845e-06,
+   "in_window_rms_meV": 2.517551021104413e-06,
+   "in_window_points": 49,
+   "available": true,
+   "n_k": 19
+  },
+  "fermi_in_frozen_window": true,
+  "hermiticity_error": 0.0,
+  "localization": {
+   "decay_length_A": 3.246597413455476,
+   "max_distance_A": 12.373365740134982
+  }
+ },
+ "error": {
+  "code": "pythtb_position_unavailable",
+  "message": "no wannier90_tb.dat: re-run the WANNIER step (new runs write it by default) or choose position_operator = diagonal"
+ },
+ "warnings": [],
+ "outputs": [
+  {
+   "path": "Out/hopping_decay.png",
+   "title": "Hopping decay with distance",
+   "kind": "plot"
+  }
+ ]
+}

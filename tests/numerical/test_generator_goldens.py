@@ -28,6 +28,7 @@ from queer.compat.generator.parity import (  # noqa: E402
     PASS_DOCUMENTED,
     compare,
 )
+from queer.compat.generator.parity_qgeom import QGEOM_KERNEL_SHA256  # noqa: E402
 from queer.compat.generator.runner import run  # noqa: E402
 
 DRIVER_CORE_SHA256 = "56fda912ba570e2293b3a9b4bf20d11038c64efa5d2f192c8ac03c615034e215"
@@ -39,6 +40,10 @@ CASE_CORE_SHA256 = {"haldane_slab": "f4a73779a891de356cc53e55d8c077f0fdc6befce93
 # by rounding, which differs between BLAS kernels and machines. Only those picks
 # may differ from a golden, as documented ties; everything else must agree.
 TIE_BREAKS = ("edge_kpoints", "is_direct", "gap_midpoints")
+QGEOM_CASES = sorted(name for name, case in CASES.items() if case.step == "PYTHTB_QGEOM")
+WANNIER_CASES = sorted(set(CASES) - set(QGEOM_CASES))
+# The quantum-geometry goldens are the vendored core's (its quantum-geometry code is 56fda912's).
+QGEOM_CORE_SHA256 = "0efcc4b3079266a8d35644d3d06f648857e31d86b12be173c6f03298a5d505c0"
 
 
 def test_every_case_has_a_golden_and_nothing_else_is_stored():
@@ -48,7 +53,7 @@ def test_every_case_has_a_golden_and_nothing_else_is_stored():
     assert sum((GOLDENS / name).stat().st_size for name in stored) < 1 << 20
 
 
-@pytest.mark.parametrize("name", sorted(CASES))
+@pytest.mark.parametrize("name", WANNIER_CASES)
 def test_the_driver_golden_of_a_case_passes_against_queer(tmp_path, name):
     golden = GOLDENS / name
     reference = json.loads((golden / "pythtb_results.json").read_text())
@@ -79,3 +84,36 @@ def test_the_driver_golden_of_a_case_passes_against_queer(tmp_path, name):
         assert crossings["status"] == "resolved" and crossings["method"] == "half_ribbon_flow"
         bulk = json.loads((golden / "pythtb_results.json").read_text())["slab"]["bulk_at_fermi"]
         assert crossings["checks"] == {} and bulk["chern"] == crossings["left"]["net"]
+
+
+@pytest.mark.parametrize("name", QGEOM_CASES)
+def test_the_driver_golden_of_a_quantum_geometry_case_passes_against_queer(tmp_path, name):
+    case = CASES[name]
+    golden = GOLDENS / name
+    reference = json.loads((golden / "pythtb_results.json").read_text())
+    provenance = reference["provenance"]
+    assert reference["step_type"] == "PYTHTB_QGEOM" and provenance["pythtb"] == "2.0.2"
+    assert (
+        provenance["core_sha256"] == QGEOM_CORE_SHA256 and provenance["qgeom_sha256"] == QGEOM_KERNEL_SHA256
+    )
+    params = write_case(name, tmp_path)
+    code = run(None, params, tmp_path, log=lambda line: None)
+    report = compare("QUEER_QGEOM", golden, tmp_path)
+    if case.expect != "ok":
+        assert code == 2 and reference["error"]["code"] == case.expect
+        assert report["verdict"] == PASS and [item["class"] for item in report["quantities"]] == [AGREE]
+        return
+    assert code == 0 and reference["status"] == "ok"
+    assert report["verdict"] in (PASS, PASS_DOCUMENTED), report["summary"]
+    kinds = {item["name"]: item["class"] for item in report["quantities"]}
+    documented = sorted(name for name, kind in kinds.items() if kind == DOCUMENTED)
+    # The driver never reads the .win kpoints block, so only QUEER checks the .eig.
+    assert documented == (["qgeom.dft_check"] if case.eig else [])
+    assert set(kinds.values()) <= {AGREE, NOT_APPLICABLE, DOCUMENTED}
+    assert kinds["qgeom.mesh"] == kinds["qgeom.stop"] == AGREE
+    mesh = next(item for item in report["quantities"] if item["name"] == "qgeom.mesh")
+    assert mesh["detail"].startswith("identical vertex sets")
+    inputs = next(item for item in report["preconditions"] if item["name"] == "inputs")
+    assert inputs["ok"] and inputs["detail"].startswith(f"SHA-256 equal for {6 + case.tb} files")
+    stop = next(item for item in report["preconditions"] if item["name"] == "stop_rule")
+    assert stop["ok"] and stop["detail"].startswith("deterministic")

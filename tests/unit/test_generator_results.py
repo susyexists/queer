@@ -202,7 +202,7 @@ def test_a_successful_run_writes_the_schema_with_queer_provenance(tmp_path):
     ("params", "step_type", "fragment"),
     [
         ("missing.json", None, "cannot read"),
-        ({"step_type": "PYTHTB_QGEOM"}, "PYTHTB_QGEOM", "unknown step_type"),
+        ({"step_type": "PYTHTB_OPTICS"}, "PYTHTB_OPTICS", "unknown step_type"),
         ({"step_type": "PYTHTB_BANDS", "spin_mode": "collinear"}, "PYTHTB_BANDS", "spin_mode"),
     ],
 )

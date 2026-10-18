@@ -64,7 +64,8 @@ def run_case(name, directory, **overrides):
     directory.mkdir(parents=True)
     params = write_case(name, directory, **overrides)
     code = run(None, params, directory, log=lambda line: None)
-    assert code == 0, read(directory / QUEER_RESULTS).get("error")
+    expected = 0 if CASES[name].expect == "ok" else 2
+    assert code == expected, read(directory / QUEER_RESULTS).get("error")
     return directory
 
 
@@ -311,7 +312,7 @@ def test_missing_or_ambiguous_documents_are_not_comparable(runs, tmp_path):
     report = compare("QUEER_BANDS", reference, both)
     assert report["verdict"] == NOT_COMPARABLE and "holds both" in failed(report)["documents"]
     with pytest.raises(ValueError, match="unknown step"):
-        compare("QUEER_QGEOM", reference, candidate)
+        compare("QUEER_OPTICS", reference, candidate)
 
 
 def test_documents_of_an_unexpected_shape_are_reported_not_raised(runs, tmp_path):
@@ -769,7 +770,7 @@ def test_two_failed_runs_with_equivalent_codes_pass(runs, tmp_path):
 def test_step_names_and_warning_codes():
     assert {step_family(name) for name in ("QUEER_BANDS", "pythtb_bands", "BANDS")} == {"BANDS"}
     with pytest.raises(ValueError):
-        step_family("PYTHTB_QGEOM")
+        step_family("PYTHTB_OPTICS")
     assert (
         warning_code("PythTB bands differ from wannier90_band.dat by up to 6.0 meV") == "band_dat_deviation"
     )
@@ -830,7 +831,7 @@ def test_the_compare_command_prints_the_verdict_and_writes_reports(runs, tmp_pat
     )
     assert main(["compare", "--step", "TOPOLOGY", "--reference", str(reference)]) == 2
     assert "--candidate" in capsys.readouterr().err
-    assert main(["compare", "--step", "QGEOM", "--reference", "a", "--candidate", "b"]) == 2
+    assert main(["compare", "--step", "OPTICS", "--reference", "a", "--candidate", "b"]) == 2
     assert "unknown step" in capsys.readouterr().err
 
 

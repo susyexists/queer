@@ -90,7 +90,7 @@ def test_a_run_writes_the_document_and_exits_zero(tmp_path):
             "queer_bad_params",
             "slab_axis 2 is not a periodic direction of the model",
         ),
-        ({"step_type": "PYTHTB_QGEOM"}, True, "queer_bad_params", "unknown step_type"),
+        ({"step_type": "PYTHTB_OPTICS"}, True, "queer_bad_params", "unknown step_type"),
     ],
 )
 def test_coded_failures_exit_two_with_a_failure_document(tmp_path, settings, files, code, fragment):
@@ -114,7 +114,7 @@ def test_a_step_missing_from_the_build_is_a_bad_parameter_failure(tmp_path, monk
     assert document["error"]["code"] == "queer_bad_params"
     assert document["error"]["message"] == (
         "QUEER_SLAB (PYTHTB_SLAB) is not available in this build; it runs QUEER_BANDS, QUEER_BERRY, "
-        "QUEER_TOPOLOGY (or their PYTHTB_ names)"
+        "QUEER_QGEOM, QUEER_TOPOLOGY (or their PYTHTB_ names)"
     )
 
 
@@ -171,6 +171,7 @@ def test_capabilities_list_the_steps_of_this_build(capsys):
         "QUEER_BANDS",
         "QUEER_BERRY",
         "QUEER_CHERN_NUMBER",
+        "QUEER_QGEOM",
         "QUEER_SHIFT_CURRENT",
         "QUEER_SLAB",
         "QUEER_TOPOLOGY",
@@ -232,6 +233,7 @@ def test_the_module_entry_runs_a_step_in_its_workspace(tmp_path):
         "QUEER_BANDS",
         "QUEER_BERRY",
         "QUEER_CHERN_NUMBER",
+        "QUEER_QGEOM",
         "QUEER_SHIFT_CURRENT",
         "QUEER_SLAB",
         "QUEER_TOPOLOGY",

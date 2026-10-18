@@ -5,9 +5,11 @@ from types import MappingProxyType
 import pytest
 
 from queer.compat.generator.pythtb_params import (
+    API_PARAM_KEYS,
     CONTEXT_PARAM_KEYS,
     COUNTERPARTS,
     DEFAULT_PARAMS,
+    QUEER_PARAM_KEYS,
     SHARED_PARAM_KEYS,
     STEP_PARAM_KEYS,
     STEP_TYPES,
@@ -57,19 +59,29 @@ def bad_params(params, step=None):
 def test_defaults_and_key_sets_are_the_drivers(generator_core):
     core = generator_core
     for key, value in DEFAULT_PARAMS.items():
+        if key in QUEER_PARAM_KEYS["QUEER_QGEOM"]:
+            continue
         assert (list(value) if isinstance(value, tuple) else value) == core.DEFAULT_PARAMS[key], key
+    assert DEFAULT_PARAMS["qgeom_time_stop"] is True and DEFAULT_PARAMS["qgeom_replay_vertices"] is None
     assert SHARED_PARAM_KEYS == core.SHARED_PARAM_KEYS
     assert CONTEXT_PARAM_KEYS == core.CONTEXT_PARAM_KEYS
     for step, counterpart in COUNTERPARTS.items():
         assert STEP_PARAM_KEYS[step] == core.STEP_PARAM_KEYS[counterpart]
-        assert (
-            step_keys(step) == core.SHARED_PARAM_KEYS + core.STEP_PARAM_KEYS[counterpart] + CONTEXT_PARAM_KEYS
+        assert step_keys(step) == (
+            core.SHARED_PARAM_KEYS
+            + core.STEP_PARAM_KEYS[counterpart]
+            + API_PARAM_KEYS.get(step, ())
+            + CONTEXT_PARAM_KEYS
+            + QUEER_PARAM_KEYS.get(step, ())
         )
-    driver_keys = set(core.SHARED_PARAM_KEYS) | set(core.CONTEXT_PARAM_KEYS)
-    for counterpart in COUNTERPARTS.values():
-        driver_keys |= set(core.STEP_PARAM_KEYS[counterpart])
-    assert set(DEFAULT_PARAMS) == driver_keys
-    assert set(COUNTERPARTS.values()) == set(core.STEP_TYPES) - {core.STEP_QGEOM}
+    # Every driver default is QUEER's; QUEER adds only its own replay controls.
+    assert set(DEFAULT_PARAMS) == set(core.DEFAULT_PARAMS) | set(QUEER_PARAM_KEYS["QUEER_QGEOM"])
+    assert set(API_PARAM_KEYS["QUEER_QGEOM"]) == set(core.DEFAULT_PARAMS) - {
+        key
+        for keys in (core.SHARED_PARAM_KEYS, core.CONTEXT_PARAM_KEYS, *core.STEP_PARAM_KEYS.values())
+        for key in keys
+    }
+    assert set(COUNTERPARTS.values()) == set(core.STEP_TYPES)
 
 
 def test_a_generator_bands_file_resolves_with_the_driver_defaults():
@@ -104,7 +116,7 @@ def test_step_names_and_their_pythtb_aliases(name, step):
     assert step in STEP_TYPES
 
 
-@pytest.mark.parametrize("name", ["PYTHTB_QGEOM", "QUEER_QGEOM", "WANNIER", "", None])
+@pytest.mark.parametrize("name", ["PYTHTB_WANNIER", "QUEER_OPTICS", "WANNIER", "", None])
 def test_other_steps_are_refused(name):
     with pytest.raises(RunnerError) as caught:
         canonical_step(name)
