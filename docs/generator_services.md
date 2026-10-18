@@ -668,13 +668,21 @@ follows the driver:
   (the vertex count where the integration stopped) and `integration.vertex_set`
   (count and SHA-256 of the sorted integer vertex keys), and writes the keys to
   `Out/qgeom_vertices.json` (up to 250 000 of them; the digest always);
+- QUEER also writes `Out/qgeom_response_full.json`: the curves of
+  `Out/qgeom_response.json` (`mu_eV` and `per_T`, at its stride) unrounded, about
+  twice its size (some 5 MB for the production job's 2001 mu at four temperatures,
+  under 20 MB at the 10 MB budget). Two QUEER runs are compared on it;
 - the probe: where the driver compares its diagonal level with PythTB's own metric
   and curvature at 32 k-points, QUEER compares one band's metric and curvature with
   its own `band_pair_geometry(bands=...)` and `berry_curvature(bands=[b])`;
   `qgeom.parity` labels it `internal_consistency` and a deviation above 1e-8 warns;
 - the `.eig` check: QUEER reads the `.win`'s `kpoints` block, so it compares the
   model's eigenvalues with the frozen DFT states where the driver, whose `.win`
-  parser never stores that block, always reports it skipped.
+  parser never stores that block, always reports it skipped. The check is a
+  diagnostic run after the integration: a `.eig` QUEER cannot read (a repeated
+  band/k-point record, a short line, an index that is not one-based) skips it with
+  the reason in `dft_check.skipped` and the warning `dft_eig_unreadable`, and the
+  step's result stands.
 
 **Deterministic replay.** The integration stops at its vertex budget (`budget`), at
 the depth limit (`depth`) or past its time budget (`time`, from `time_budget_s`).
@@ -690,11 +698,19 @@ instead would not: the vertex budget also caps the gap rule at 30 % of it, and i
 reports `budget`. The production reference job-1cd360d9 stopped on its vertex budget
 (1 041 183 vertices of 1 000 000 allowed, the must-split phase overshooting), so it
 replays with its own parameters and `qgeom_time_stop: false`. Rounding can still
-steer a refinement decision that lies exactly at its threshold (a velocity that
+steer a decision that lies exactly at its threshold: a strict local extremum of the
+occupation pass whose neighbour ties it by symmetry (the seeds), a velocity that
 vanishes by symmetry in the band-edge rule, the error estimates of symmetry-related
-cells that tie in the refinement order, an A3 maximum that ties): the goldens use a
-layer without exact symmetries, and a symmetric model replays most safely with the
-reference's own NumPy and BLAS.
+cells that tie in the refinement order, an A3 maximum that ties. Another BLAS kernel
+breaks such ties another way: a Haldane metal (C3-symmetric bands) gives 127 band-edge
+vertices under OpenBLAS's Sandybridge kernel and 150 under SkylakeX, so 10 014 vs
+10 037 vertices, and the occupation pass finds 0 vs 2 seeds on a Haldane metal and
+3 vs 1 on Kane-Mele (Sandybridge vs SkylakeX; `OPENBLAS_CORETYPE=Haswell` and `Zen`
+crash in the development environment's OpenBLAS 0.3.34 on a Zen 4 host, so
+Sandybridge, SkylakeX, Prescott, Nehalem and Barcelona were used). The goldens use a
+layer without exact symmetries; a symmetric model replays
+reproducibly only with the reference's own NumPy and BLAS, and the comparator says so
+(below).
 
 **Comparator** (`queer.compat.generator.parity_qgeom`, through `compare` and the
 `compare` command). On top of the Wannier family's preconditions (inputs by SHA-256,
@@ -712,53 +728,115 @@ occupied count and its source, the occupied manifold's applicability):
   the record, the recorded mesh: vertex count, vertices per rule, levels, finest
   cell, seeds, controlled mu, the capped gap rule and the history), the same stop
   reason and convergence flags. A record must be its own run's mesh (its count that
-  run's vertex count, QUEER's digest its `vertex_set`'s), and a QUEER candidate
-  without one fails against a reference that has one;
+  run's vertex count, its keys, when written, hashing to its digest, a QUEER run's
+  digest its `vertex_set`'s), and a QUEER candidate without one fails against a
+  reference that has one;
+- *symmetric ties* (precondition `mesh_determined`): where both runs record bands
+  C3-symmetric to the eigenvalue tolerance (`symmetry.c3_band_floor_meV` on a
+  hexagonal lattice, which the driver writes too), symmetry-related k-points tie
+  exactly, so different vertex sets are `not_comparable`: "the reference's adaptive
+  mesh depends on rounding at exact symmetric ties: replay on the same BLAS kernel or
+  compare on a fixed uniform grid", never `fail`. A record that is not its run's
+  mesh still fails, and without that symmetry record a mesh difference fails. The
+  production model (job-1cd360d9, C3 floor 9.2 meV) is not exactly symmetric. Ties
+  of other symmetries (inversion or a mirror on another lattice) leave no record in
+  the driver's documents and still fail;
 - *quantities*, with δ(T) = 1e-8 max(max A3, max |M|) over both runs: C, C_in to
   1e-8 max(1, |C|); K_in, K_diag, K_upper_loose to 1e-8 of their largest element;
-  the headline A3 to δ, theta0 to asin(min(1, δ/A3))/3 on 3 theta0 modulo 360°, the
-  chi amplitudes to the bound δ propagates through their projection on M's trigonal
-  direction, sigma_xy to 1e-8 max(1, |sigma_xy|), the density to 1e-8 of the band
-  count; the 5-digit curves of the response and path files to half a unit in the 5th
-  digit of each run plus the quantity's 1e-8 tolerance; the dipole sources, symmetry
-  residuals, position checks, grid, window, electron count and verdict exactly or to
-  the bounds derived from these. mu_CNP agrees to the count tolerance over the
-  smallest density of states between the two values; where that bound exceeds the mu
-  range (inside a gap without states, where rounding picks the interpolated mu_CNP and
-  BLAS kernels pick differently) a difference is documented. A headline point that a
-  mu_CNP difference snaps to another grid mu, or a near-tie of the A3 maximum, is
-  documented, and its values are checked against the other run's curve at their own
-  mu;
+  the headline A3 to δ; theta0 to asin(δ/A3)/3 on 3 theta0 modulo 360° where
+  A3 > δ, and not judged where A3 <= δ (inside a gap A3 is rounding, 1e-14 against
+  δ = 4e-9 in the insulator golden, and M's tolerance turns the trigonal part to any
+  direction: Prescott and Nehalem kernels put theta0 37 to 40° away there). Such an
+  entry is recorded as undetermined (`not_applicable`, listed under
+  `flagged_sets.qgeom_undetermined`); a row would be `not_comparable` only if nothing
+  else in it were judged. The chi amplitudes: chi's trigonal part is exactly
+  -(c_out + 2 c_in) CHI_PER_M times M's, so each agrees to
+  |c_out + 2 c_in| CHI_PER_M sqrt(2) δ plus the rounding of building and projecting
+  chi (64 ulp of the M scale, weighted by |c_out| + 2 |c_in|); a turn of M's trigonal
+  direction does not change the amplitude, so no direction term enters (the wpd set,
+  c_out + 2 c_in = 0, is rounding only). sigma_xy to 1e-8 max(1, |sigma_xy|), the
+  density to the count tolerance per cell; the 5-digit curves of the response and
+  path files to half a unit in the 5th digit of each run plus the quantity's
+  tolerance; the dipole sources,
+  symmetry residuals, position checks, grid, window, electron count and verdict
+  exactly or to the bounds derived from these;
+- *mu_CNP* by the electron count: each run's count (n_occ plus its density curve times
+  the cell area, interpolated linearly in mu on the grid block's full-precision grid,
+  the rule that placed its mu_CNP) must be n_occ at its own mu_CNP and at the other
+  run's, within the count tolerance (1e-8 of the band count, at least one ulp of it
+  per vertex: the triangle rule's rounding) plus the print rounding. Two values in one
+  gap, where the count is n_occ over a range of mu and rounding picks the interpolated
+  value (another BLAS kernel picks another), are equal by this rule, and the detail
+  says so; a mu_CNP on a band fails, whatever the density of states between the two
+  values. Each run's CNP row must sit at the grid mu nearest its mu_CNP, and
+  mu - mu_CNP must differ between the runs by exactly the mu_CNP difference. On a
+  decimated file each run's counts at the two values are compared with each other. A
+  run without a mu_CNP fails unless its count misses n_occ at the edge of the range by
+  no more than the count tolerance (then rounding decides whether mu_CNP lies on the
+  grid: `not_comparable`). A headline point the runs place at different grid mu (two
+  mu_CNP that agree, or a near-tie of the A3 maximum) is documented, and its values
+  are checked against the other run's curve at their own mu;
+- *unrounded curves*: each `Out/qgeom_response_full.json` must round to its run's
+  5-digit file (`qgeom.response.full_precision`); where both runs wrote one, the
+  response curves, the count and the CNP checks use it without print rounding;
 - *no reported error enters a tolerance*: the stage differences (`A3_err`, `err`) and
   the smeared check are compared as values, never used as error bars, so a forged
   estimate fails instead of widening anything;
-- *producer gaps*: `dft_check` is documented (the driver's skipped `.eig` check);
-  `parity` (each producer's probe) is not compared, but the candidate's must pass;
-  their warnings are left out of the warning comparison, and the QUEER-only replay
-  record out of the output comparison.
+- *producer gaps*: `dft_check` is documented (the driver's skipped `.eig` check;
+  `not_applicable` when QUEER could not read the `.eig` either); `parity` (each
+  producer's probe) is not compared, but the candidate's must pass; their warnings
+  are left out of the warning comparison, and the QUEER-only replay and unrounded
+  records out of the output comparison.
 
 Negative controls fail (`tests/numerical/test_generator_qgeom.py`): theta0 shifted by
-1°, a doubled Chern number, a sign-flipped K_in, a dropped vertex (with or without
-the vertex keys), another stop reason, forged error estimates; an unknown producer, a
-clock-stopped reference without its vertex count or without a matching replay, and a
-candidate stopped on its own clock are `not_comparable`.
+1° where A3 is determined, a doubled Chern number, a sign-flipped K_in, a
+sign-flipped or zeroed chi at E_F and at a CNP with a determined A3, a dropped vertex
+(with or without the vertex keys), vertex keys that do not hash to their digest,
+another stop reason, forged error estimates, a mu_CNP moved onto a band (at 0, 5, 20
+and 60 K, with its row and curves moved consistently and with the gap's DOS zeroed),
+a CNP row off its mu_CNP, a missing mu_CNP whose count crosses n_occ, unrounded
+curves that are not the run's 5-digit file, an A3 move of 1e-6 that the 5 digits
+hide; an unknown producer, a clock-stopped reference without its vertex count or
+without a matching replay, a candidate stopped on its own clock and a symmetric
+model's mesh difference are `not_comparable`. Rerun under OpenBLAS kernels
+(`OPENBLAS_CORETYPE`, in a subprocess, skipped where a kernel cannot run): the
+insulator under Prescott, Nehalem and Sandybridge passes against its golden, under
+Prescott also against QUEER's own default-kernel run unrounded, and the Haldane metal
+under Sandybridge and SkylakeX is `not_comparable` (on this host their vertex sets
+differ), never `fail`.
 
 **Goldens.** `qgeom_full_metal`, `qgeom_full_insulator`, `qgeom_diagonal_budget` and
 `qgeom_position_unavailable` (a generic three-band layer without exact symmetries, so
 no refinement decision depends on rounding) are the vendored driver's results under
 PythTB 2.0.2; the golden script also records the kernel's final vertex keys. QUEER
 reproduces every vertex set, stop reason and quantity, also with OpenBLAS's
-Sandybridge and SkylakeX kernels forced (`OPENBLAS_CORETYPE`); the `.eig` check
-differs, as documented, and under another kernel the insulator's T = 0 mu_CNP inside
-its gap may too.
+Sandybridge, SkylakeX, Prescott, Nehalem and Barcelona kernels forced
+(`OPENBLAS_CORETYPE`); the `.eig` check differs, as documented, and under another
+kernel the insulator's mu_CNP inside its gap may too, which agrees by the count and
+moves its CNP row to another grid mu (documented).
 
 **Deviations from the plan.** A reference that cannot be replayed (stopped on its
 time budget with an unknown vertex count, or a candidate not replayed at it) is
 `not_comparable` with the reason, not compared under the plan's error-bar fallback
 |ΔX| ≤ err_ref + err_Q: that fallback puts both runs' own error estimates into the
 tolerance (pending the user's approval). The per-T curves are compared at the
-driver's 5-digit print precision plus 1e-8, since the driver writes nothing finer.
-The replay is a vertex-count stop reported as `time`, not `qgeom_max_points = N`.
+driver's 5-digit print precision plus 1e-8 against the driver, which writes nothing
+finer, and unrounded between two QUEER runs. The replay is a vertex-count stop
+reported as `time`, not `qgeom_max_points = N`.
+
+**QUEER-only records and the Generator.** `Out/qgeom_vertices.json` (the replay
+record) and `Out/qgeom_response_full.json` (the unrounded curves) are comparison
+records, not products. The backend picks them up with the job's `Out/**` like every
+data file, and its parity service already fetches every `Out/*.json` of
+both runs (within its 64 MiB budget per run), which is how a comparison finds them;
+deleting either only makes a later comparison fall back (to the recorded mesh, or to
+5-digit curves). The backend collector and the frontend should list them as data of
+kind `data`, apart from the user-facing products (the response and path files and the
+figures), or hide them. For the 1.04M-vertex production replay QUEER writes the
+digest without keys (cap 250 000), and the driver's reference records neither: two
+QUEER runs still compare their vertex sets exactly by digest, and against the driver
+the recorded mesh decides. Uncapped keys would only name which vertices differ, so
+they are not written.
 
 ### OpenMX steps of the PyATB counterpart
 
