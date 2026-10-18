@@ -504,7 +504,7 @@ the historical first nonnegative bin, nearest bin and linear interpolation.
 ### Parity comparator
 
 `queer.compat.generator.parity.compare(step, reference_dir, candidate_dir)` judges a
-candidate run of a Generator Wannier step (BANDS, TOPOLOGY, BERRY or SLAB) against a
+candidate run of a Generator Wannier step (BANDS, TOPOLOGY, BERRY, SLAB or QGEOM) against a
 reference run of the same step and returns a JSON-able report; `render_markdown`
 renders it. Each directory holds one results document (`queer_results.json` or the
 PythTB driver's `pythtb_results.json`), optionally its parameter file
@@ -595,6 +595,156 @@ and the tests require every golden to pass against a fresh QUEER run with all in
 digests equal. `scripts/validation/generate_generator_goldens.py` regenerates them
 with the vendored driver under `uv run --no-project --python 3.12 --with
 pythtb==2.0.2 --with scipy --with matplotlib`.
+
+### Quantum geometry of the PythTB engine
+
+`QUEER_QGEOM` (alias `PYTHTB_QGEOM`) runs the Generator's quantum-geometry step: the
+band and manifold geometry of a 2D Wannier model at two position levels, the
+Berry-connection-polarizability (BCP) dipole M_abc and the intrinsic nonlinear Hall
+response chi_abc, integrated over the zone on an adaptive mesh.
+
+```bash
+python -m queer generator run --step QUEER_QGEOM --params pythtb_params.json
+```
+
+**The port.** The Generator's `pythtb_qgeom` kernel is numpy code throughout (PythTB
+enters only its probe), so QUEER carries it operation for operation, and each
+function is tested against the vendored kernel (`tests/oracles/generator_pythtb_qgeom.py`)
+to 1e-12 on randomized and structured inputs, whole adaptive integrations included
+(`tests/numerical/test_qgeom_ports.py`):
+
+| Kernel (`pythtb_qgeom`) | QUEER |
+|---|---|
+| `layer_frame`, `a3_misalignment`, `cell_area`, `zone_area`, `reciprocal_in_plane`, `kcart`, `is_hexagonal`, `c3_rotate_frac` | `queer.physics.qgeom` (same names; `kcart` is `frame_k`) |
+| `degenerate_clusters`, `_rows`, `_rows_diag`, `_diag_sandwich`, `geometry` | `queer.physics.qgeom.degenerate_clusters`, `layer_geometry` |
+| `_fields`, `_blocks`, `dipole_tensor`, `symmetric_tensor`, the `X_*`/`B_*` columns | `integrand_fields`, `manifold_columns`, `dipole_tensor`, `symmetric_tensor` |
+| `fermi`, `minus_fprime`, `density_cm2`, `_is_uniform`, `thermal_grid`, `mu_subset`, `curves_at` | `fermi_function`, `minus_fermi_derivative`, `density_cm2`, `is_uniform_grid`, `thermal_grid`, `mu_subset`, `curves_from_integrals` |
+| `chi_from_dipole`, `chi_all_conventions`, `trigonal`, `trigonal_tensor`, `rotate_tensor`, `c3_residual_tensor`, `c3_residual_matrix`, `gap_bin_labels` | same names in `queer.physics.qgeom` |
+| `_sorted_triangles`, `_theta_one`, `_delta_one`, `triangle_theta`, `triangle_delta`, `_accumulate`, `_range_pairs`, `_piece_coefficients`, `_add_cubic_pieces`, `_grid_rule`, `_pair_values`, `theta_on_grid`, `delta_on_grid`, `_grouped` | `sorted_triangles`, `theta_triangles`, `delta_triangles`, `triangle_theta`, `triangle_delta`, `accumulate_rows`, `range_pairs`, `piece_coefficients`, `add_cubic_pieces`, `grid_rule`, `rule_at`, `theta_on_grid`, `delta_on_grid`, `grouped_rule` |
+| `hermitize`, `inplane_mismatch`, `dft_exactness` | `hermitize_translations`, `inplane_mismatch`, `dft_exactness` |
+| `Table`, `evaluate`, `evaluate_chunks`, `sum_rule_residual`, `uniform_grid`, `uniform_response`, `make_payload`, `_local_extrema`, `occupation_pass`, `AdaptiveMesh`, `_cell_block_integral`, `Integrator`, `source_fields`, `dipole_sources`, `adaptive_response` | `queer.observables.qgeom`: `QgeomTable` (also `QgeomTable.from_model` of a `WannierModel`), the same names, `local_extrema`, `cell_block_integral` |
+| `tb_layout`, `read_tb`, `parse_eig` | `queer.io.wannier.read_tb_layout`, `read_tb_records`, `read_eig` |
+| `compact`, `write_json_compact`, `decimate`, `units` | `queer.compat.generator.qgeom_step` |
+
+`queer.observables.qgeom.layer_band_geometry` and `nonlinear_hall_response` return
+`ObservableResult` arrays (dimensions, units, the integration record). The driver's
+step (`run_qgeom` and its helpers in `pythtb_core`) is
+`queer.compat.generator.qgeom_step.run_qgeom`; `WannierStepContext.ws_apply` applies
+the Hamiltonian's Wigner-Seitz images and vacuum fold to the stacked position table,
+as the driver's `Context.ws_apply` does. Analytic tests (`test_qgeom_physics.py`)
+check the triangle rules against exact polygon clipping, the diagonal level against
+QUEER's own Kubo curvature and finite-basis metric, the Haldane Chern number and
+Hall plateau, and the thermal integrals against a fine uniform grid.
+
+**Runner contract.** The step builds its model as every Wannier step does and then
+follows the driver:
+
+- refusals (`queer_bad_params`): a model periodic along anything but a1 and a2,
+  hopping cutoffs, a3 off the layer normal, a full level whose normal is not along z,
+  more than 4001 mu points; the catalog bounds of `translate_pythtb` (temperatures at
+  least 0.5 K, base mesh 16 to 512, 10 000 to 5 000 000 vertices, ...);
+- the position levels: the diagonal level is PythTB's tight-binding model, tau the
+  centres as PythTB places the orbitals; the full level comes from the WANNIER run's
+  `wannier90_tb.dat`, read with the driver's fixed-layout size check. `auto` takes it
+  when staged and otherwise warns (`position_diagonal_only`); `full` without it is
+  `queer_position_unavailable`; a file of another size, R set or degeneracies, H more
+  than 2e-6 eV off the model after the same Wigner-Seitz unfold, or r_ii(0) more than
+  2e-5 Å off the centres in-plane is `queer_position_mismatch`;
+- the table is the model stage's folded table with E_F on its R = 0 diagonal,
+  hermitized at k as the driver does, so a replay sees the driver's rounding;
+- `queer_results.json` holds the driver's `qgeom` block in the `pythtb_results.json`
+  schema (every key of the production job job-1cd360d9 is present, checked against
+  its key structure in `tests/fixtures/generator_schema/qgeom_keys.json`), with the
+  engine, counterpart and QUEER provenance, `provenance.queer_qgeom_sha256` (the
+  digest of QUEER's quantum-geometry sources) and the inputs it read, including the
+  `_tb.dat` and the `.eig`. `Out/qgeom_response.json` and `Out/qgeom_path.json` are
+  written as the driver writes them (5 significant digits, decimated to the driver's
+  10 MB budget) with the figures `qgeom_dipole.png`, `qgeom_ahc_dos.png` and
+  `qgeom_path.png`;
+- QUEER adds `integration.replay` (the stop controls), `integration.stop_vertices`
+  (the vertex count where the integration stopped) and `integration.vertex_set`
+  (count and SHA-256 of the sorted integer vertex keys), and writes the keys to
+  `Out/qgeom_vertices.json` (up to 250 000 of them; the digest always);
+- the probe: where the driver compares its diagonal level with PythTB's own metric
+  and curvature at 32 k-points, QUEER compares one band's metric and curvature with
+  its own `band_pair_geometry(bands=...)` and `berry_curvature(bands=[b])`;
+  `qgeom.parity` labels it `internal_consistency` and a deviation above 1e-8 warns;
+- the `.eig` check: QUEER reads the `.win`'s `kpoints` block, so it compares the
+  model's eigenvalues with the frozen DFT states where the driver, whose `.win`
+  parser never stores that block, always reports it skipped.
+
+**Deterministic replay.** The integration stops at its vertex budget (`budget`), at
+the depth limit (`depth`) or past its time budget (`time`, from `time_budget_s`).
+Only the time stop depends on the machine. Two QUEER-only parameters make a run
+reproduce a reference's sampling exactly: `qgeom_time_stop: false` turns the time
+budget off (a reference that never stopped on time then replays as it ran), and
+`qgeom_replay_vertices: N` stops the integration where the time budget would have,
+the first time the mesh holds at least N vertices at one of the driver's checks,
+reported as `time`, without a clock. A reference's final vertex count is the count
+at its stop (no vertex is added after a stop), so a reference stopped on time at N
+vertices replays with `qgeom_replay_vertices = N`. Setting `qgeom_max_points` to N
+instead would not: the vertex budget also caps the gap rule at 30 % of it, and it
+reports `budget`. The production reference job-1cd360d9 stopped on its vertex budget
+(1 041 183 vertices of 1 000 000 allowed, the must-split phase overshooting), so it
+replays with its own parameters and `qgeom_time_stop: false`.
+
+**Comparator** (`queer.compat.generator.parity_qgeom`, through `compare` and the
+`compare` command). On top of the Wannier family's preconditions (inputs by SHA-256,
+parameters, E_F; derived decisions: the position level, the band window, the
+occupied count and its source, the occupied manifold's applicability):
+
+- *producer*: a PythTB reference must come from the vendored kernel (4fb51a38…) and a
+  core whose quantum-geometry code is the vendored one (56fda912… to 0efcc4b3…);
+- *stop rule*: a reference stopped on its vertex budget, the depth limit or not at all
+  is deterministic and the candidate must not have stopped on its own time budget; a
+  reference stopped on its time budget needs a candidate replayed at its vertex
+  count; otherwise, or without the count, `not_comparable` with the reason;
+- *replay check*: equal vertex sets (equal SHA-256 of the sorted integer keys when
+  both runs recorded them, which are exact coordinates; against a reference without
+  the record, the recorded mesh: vertex count, vertices per rule, levels, finest
+  cell, seeds, controlled mu, the capped gap rule and the history), the same stop
+  reason and convergence flags;
+- *quantities*, with δ(T) = 1e-8 max(max A3, max |M|) over both runs: C, C_in to
+  1e-8 max(1, |C|); K_in, K_diag, K_upper_loose to 1e-8 of their largest element;
+  the headline A3 to δ, theta0 to asin(min(1, δ/A3))/3 on 3 theta0 modulo 360°, the
+  chi amplitudes to the bound δ propagates through their projection on M's trigonal
+  direction, sigma_xy to 1e-8 max(1, |sigma_xy|), the density to 1e-8 of the band
+  count; the 5-digit curves of the response and path files to half a unit in the 5th
+  digit of each run plus the quantity's 1e-8 tolerance; the dipole sources, symmetry
+  residuals, position checks, grid, window, electron count and verdict exactly or to
+  the bounds derived from these. mu_CNP agrees to the count tolerance over the
+  density of states at it; inside a gap without states its interpolation is
+  undetermined and a difference is documented, as is a near-tie of the A3 maximum,
+  and the headline values at such a point are checked against the other run's curve
+  at their own mu;
+- *no reported error enters a tolerance*: the stage differences (`A3_err`, `err`) and
+  the smeared check are compared as values, never used as error bars, so a forged
+  estimate fails instead of widening anything;
+- *producer gaps*: `dft_check` is documented (the driver's skipped `.eig` check);
+  `parity` (each producer's probe) is not compared, but the candidate's must pass;
+  their warnings are left out of the warning comparison, and the QUEER-only replay
+  record out of the output comparison.
+
+Negative controls fail (`tests/numerical/test_generator_qgeom.py`): theta0 shifted by
+1°, a doubled Chern number, a sign-flipped K_in, a dropped vertex (with or without
+the vertex keys), another stop reason, forged error estimates; an unknown producer, a
+clock-stopped reference without its vertex count or without a matching replay, and a
+candidate stopped on its own clock are `not_comparable`.
+
+**Goldens.** `qgeom_full_metal`, `qgeom_full_insulator`, `qgeom_diagonal_budget` and
+`qgeom_position_unavailable` (a generic three-band layer without exact symmetries, so
+no refinement decision depends on rounding) are the vendored driver's results under
+PythTB 2.0.2; the golden script also records the kernel's final vertex keys. QUEER
+reproduces every vertex set, stop reason and quantity; only the `.eig` check differs,
+as documented.
+
+**Deviations from the plan.** A reference that cannot be replayed (stopped on its
+time budget with an unknown vertex count, or a candidate not replayed at it) is
+`not_comparable` with the reason, not compared under the plan's error-bar fallback
+|ΔX| ≤ err_ref + err_Q: that fallback puts both runs' own error estimates into the
+tolerance (pending the user's approval). The per-T curves are compared at the
+driver's 5-digit print precision plus 1e-8, since the driver writes nothing finer.
+The replay is a vertex-count stop reported as `time`, not `qgeom_max_points = N`.
 
 ### OpenMX steps of the PyATB counterpart
 
