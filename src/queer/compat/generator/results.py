@@ -90,6 +90,7 @@ WARN_QGEOM_NO_PATH = "qgeom_path_unavailable"
 WARN_QGEOM_PATH_DATA = "qgeom_path_data_missing"
 WARN_QGEOM_PROBE = "qgeom_probe_deviation"
 WARN_DFT_FROZEN_MISMATCH = "dft_frozen_mismatch"
+WARN_DFT_EIG_UNREADABLE = "dft_eig_unreadable"
 WARN_DIPOLE_SOURCES = "dipole_sources_failed"
 WARN_SMEARED_COARSE = "qgeom_smeared_coarse"
 

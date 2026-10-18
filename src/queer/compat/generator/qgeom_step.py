@@ -64,6 +64,7 @@ from .results import (
     ERR_POSITION_MISMATCH,
     ERR_POSITION_UNAVAILABLE,
     OUT_DIR,
+    WARN_DFT_EIG_UNREADABLE,
     WARN_DFT_FROZEN_MISMATCH,
     WARN_DIPOLE_SOURCES,
     WARN_PLOT_SKIPPED,
@@ -81,6 +82,11 @@ from .wannier_steps import WannierStepContext
 TB_FILENAME = "wannier90_tb.dat"
 EIG_FILENAME = "wannier90.eig"
 VERTICES_FILE = f"{OUT_DIR}/qgeom_vertices.json"
+FULL_RESPONSE_FILE = f"{OUT_DIR}/qgeom_response_full.json"
+FULL_RESPONSE_NOTE = (
+    "The curves of qgeom_response.json (mu_eV and per_T, at its stride) unrounded: a comparison record, "
+    "QUEER-only; qgeom_response.json is these values to 5 significant digits"
+)
 FULL_POSITION_NOTE = (
     "full position matrix in Wannier space (wannier90 _tb.dat): curvature quantities "
     "complete to the finite-difference accuracy of r; the metric and K are in-W lower bounds"
@@ -111,16 +117,19 @@ PROBE_REFERENCE = "queer.observables.geometry band_pair_geometry and berry_curva
 
 
 # ------------------------------------------------------------------ output
-def _round_sig(value: float, digits: int) -> float | None:
+def _round_sig(value: float, digits: int | None) -> float | None:
     if not math.isfinite(value):
         return None
     if value == 0.0:
         return 0.0
+    if digits is None:
+        return value
     return float(f"{value:.{digits}g}")
 
 
-def compact(value: Any, digits: int = 5) -> Any:
-    """A JSON-ready copy with floats to ``digits`` significant digits and NaN or infinity as None."""
+def compact(value: Any, digits: int | None = 5) -> Any:
+    """A JSON-ready copy with floats to ``digits`` significant digits (None: unrounded) and NaN or infinity
+    as None."""
     if isinstance(value, dict):
         return {str(k): compact(v, digits) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
@@ -136,7 +145,7 @@ def compact(value: Any, digits: int = 5) -> Any:
     return value
 
 
-def write_json_compact(path: str | Path, payload: Any, digits: int = 5) -> int:
+def write_json_compact(path: str | Path, payload: Any, digits: int | None = 5) -> int:
     """Write ``payload`` without indentation and with ``digits`` significant digits; returns its size.
 
     Significant digits, not decimal places: these curves span decades. The file is
@@ -379,7 +388,13 @@ def dft_check(ctx: WannierStepContext, table: obs.QgeomTable) -> dict[str, Any] 
     froz = (ctx.win.dis_froz_min, ctx.win.dis_froz_max)
     if not len(kpts) or froz[0] is None or froz[1] is None:
         return {"skipped": "the .win has no kpoints block or no frozen window"}
-    E_dft = read_eig(path)
+    try:
+        E_dft = read_eig(path)
+    except (OSError, ValueError) as error:
+        # The check is a diagnostic: a file it cannot read skips it, and the step's result stands.
+        reason = f"the .eig cannot be read: {error}"
+        ctx.record.warn(WARN_DFT_EIG_UNREADABLE, f"no DFT eigenvalue check: {reason}")
+        return {"skipped": reason}
     ctx.record.record_input(EIG_FILENAME)
     if len(E_dft) != len(kpts):
         return {"skipped": f"{len(E_dft)} k-points in the .eig, {len(kpts)} in the .win"}
@@ -1008,6 +1023,12 @@ def qgeom_outputs(
     summary["grid"]["downsampled"] = stride
     files["response"] = f"{OUT_DIR}/qgeom_response.json"
     ctx.record.add_output(files["response"], "Quantum geometry response curves (data)", "data")
+    # The same curves unrounded, so that two QUEER runs compare beyond the 5 digits (about twice the size).
+    full = {"description": FULL_RESPONSE_NOTE, "mu_eV": payload["mu_eV"], "per_T": payload["per_T"]}
+    write_json_compact(ctx.workspace / FULL_RESPONSE_FILE, full, digits=None)
+    ctx.record.add_output(
+        FULL_RESPONSE_FILE, "Quantum geometry response curves, unrounded (comparison record)", "data"
+    )
     if path_out:
         write_json_compact(out_dir / "qgeom_path.json", path_out)
         files["path"] = f"{OUT_DIR}/qgeom_path.json"
