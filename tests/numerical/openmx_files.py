@@ -28,6 +28,7 @@ def write_scfout_model(
     spin=0,
     imaginary=None,
     overlap=None,
+    position=None,
     chemp_eV=0.0,
     electrons=1.0,
 ):
@@ -36,7 +37,8 @@ def write_scfout_model(
     ``hamiltonian`` holds ``spin + 1`` real components (OpenMX's ``Hks``), each of
     shape (NR, n, n) in eV; for ``spin == 3`` ``imaginary`` holds the three
     ``iHks`` components. ``overlap`` (NR, n, n) defaults to the identity at R = 0.
-    Position moments are zero (orbitals centred on the atom).
+    ``position`` (3, NR, n, n) holds the first position moments in Angstrom (the
+    atom sits at the origin); they default to zero.
     """
     lattice = np.asarray(lattice, float)
     translations = np.asarray(translations, int)
@@ -78,8 +80,9 @@ def write_scfout_model(
         for component in imaginary:
             matrices(component / HARTREE_EV)
     matrices(overlap)
-    for _ in range(3):
-        matrices(np.zeros((count, n, n)))
+    moments = np.zeros((3, count, n, n)) if position is None else np.asarray(position, float)
+    for axis in range(3):
+        matrices(moments[axis] / BOHR_ANGSTROM)
     for _ in range(3):
         matrices(np.zeros((count, n, n)))
     for _ in range(spin + 1):
@@ -166,6 +169,8 @@ def shift_spinor_scfout(
     exchange=0.2,
     lattice=None,
     chemp_eV=0.0,
+    overlap_hopping=None,
+    dipole=0.0,
 ):
     """A gapped 3D two-orbital spinor model without inversion or time reversal (SpinP_switch 3).
 
@@ -176,7 +181,11 @@ def shift_spinor_scfout(
     ``soc (sin kx sx + sin ky sy) + soc_z sin kz sz`` (half on the second orbital)
     and an exchange field ``exchange sz`` split every level, so with the defaults no
     two levels come closer than 0.28 eV anywhere and the two lower bands lie 1.06 eV
-    or more below the two upper ones.
+    or more below the two upper ones. ``overlap_hopping`` (one value per axis) makes the
+    basis nonorthogonal, ``S(+-a_i) = s_i [[1, 0.3], [0.3, 1]]``, with the position
+    moments it implies, ``r(R) = R/2 S(R)``, and ``dipole`` adds an on-site moment
+    ``dipole (a + 1)/3`` between the two orbitals along each axis ``a``: spin-independent
+    and real, so time reversal stays as the Hamiltonian has it.
     """
     n = 2
     lattice = np.diag([3.0, 3.2, 3.5]) if lattice is None else np.asarray(lattice, float)
@@ -194,6 +203,17 @@ def shift_spinor_scfout(
         blocks[1 + 2 * axis] = block
         blocks[2 + 2 * axis] = block.conj().T
     up, down, mixed = blocks[:, :n, :n], blocks[:, n:, n:], blocks[:, :n, n:]
+    overlap = position = None
+    if overlap_hopping is not None or dipole:
+        overlap = np.zeros((len(CUBIC_TRANSLATIONS), n, n))
+        overlap[0] = np.eye(n)
+        for axis, value in enumerate(overlap_hopping or (0.0, 0.0, 0.0)):
+            for cell in (1 + 2 * axis, 2 + 2 * axis):
+                overlap[cell] = value * np.array([[1.0, 0.3], [0.3, 1.0]])
+        vectors = np.asarray(CUBIC_TRANSLATIONS, float) @ lattice
+        position = vectors.T[:, :, None, None] / 2 * overlap[None]
+        for axis in range(3):
+            position[axis, 0] += dipole * (axis + 1) / 3 * np.array([[0.0, 1.0], [1.0, 0.0]])
     return write_scfout_model(
         path,
         lattice=lattice,
@@ -201,6 +221,8 @@ def shift_spinor_scfout(
         hamiltonian=np.stack((up.real, down.real, mixed.real, mixed.imag)),
         imaginary=np.stack((up.imag, down.imag, np.zeros_like(mixed.real))),
         spin=3,
+        overlap=overlap,
+        position=position,
         chemp_eV=chemp_eV,
         electrons=2.0,
     )

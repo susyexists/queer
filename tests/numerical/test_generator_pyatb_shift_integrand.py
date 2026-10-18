@@ -190,3 +190,129 @@ def test_a_nonorthogonal_scfout_with_position_moments_meets_queer():
         )
         absolute = np.max(np.abs(weights).sum(axis=0))
         assert np.max(np.abs(queer_weights(port["integrand"]) - weights)) <= 1e-10 * absolute
+
+
+def random_basis_inside_degenerate_levels(seed):
+    """Another eigenvector basis inside each degenerate level (a seeded random unitary)."""
+    from queer.compat.generator.pyatb_shift_integrand import clusters
+
+    generator = np.random.default_rng(seed)
+
+    def gauge(vectors, raw):
+        out = vectors.copy()
+        labels = clusters(raw, 1e-9)
+        for label in np.unique(labels):
+            members = np.flatnonzero(labels == label)
+            if len(members) > 1:
+                size = len(members)
+                unitary, _ = np.linalg.qr(
+                    generator.standard_normal((size, size)) + 1j * generator.standard_normal((size, size))
+                )
+                out[:, members] = out[:, members] @ unitary
+        return out
+
+    return gauge
+
+
+def test_the_covariant_treatment_of_an_exact_degeneracy_is_queers_and_basis_independent(tmp_path):
+    """Exact Kramers pairs at the TRIM points of a nonorthogonal spinor model with position moments and on-site dipoles:
+    the transcription's covariant treatment (parallel transport inside the degenerate levels, their velocity matrix)
+    meets QUEER's covariant estimator to rounding in any basis inside them; PyATB's own treatment (derivative zero
+    inside, the block's velocity eigenvalues) does not, and depends on that basis. Without degeneracies both are
+    QUEER's."""
+    shift_spinor_scfout(
+        tmp_path / "kramers.scfout", exchange=0.0, overlap_hopping=(0.06, 0.04, 0.03), dipole=0.6
+    )
+    model = OpenMXModel.from_scfout(tmp_path / "kramers.scfout")
+    assert model.position_blocks and np.abs(model.overlap([0.1, 0.2, 0.3]) - np.eye(4)).max() > 0.05
+    common = {"energy_scale": 1.0, "threshold_eV": 1e-9, "regularization_eV": None, "occupied": 2}
+    for k, degenerate in (([0.0, 0.0, 0.0], True), ([0.5, 0.0, 0.0], True), ([0.13, 0.27, 0.31], False)):
+        k = np.asarray(k)
+        energies, weights, pairs, point = queer_transitions(model, k, 2)
+        queer = spectrum(energies, weights)
+        peak = np.max(np.abs(queer))
+        covariant = [
+            shift_integrand(model, k, None, degenerate="covariant", gauge=gauge, **common)
+            for gauge in (
+                None,
+                random_basis_inside_degenerate_levels(1),
+                random_basis_inside_degenerate_levels(2),
+            )
+        ]
+        literal = [
+            shift_integrand(model, k, None, degenerate="pyatb", gauge=gauge, **common)
+            for gauge in (
+                None,
+                random_basis_inside_degenerate_levels(1),
+                random_basis_inside_degenerate_levels(2),
+            )
+        ]
+        assert (len(set(covariant[0]["clusters"])) < len(covariant[0]["clusters"])) is degenerate
+        for result in covariant:
+            transcribed = spectrum(result["energies_eV"], queer_weights(result["integrand"]))
+            assert np.max(np.abs(transcribed - queer)) <= 1e-12 * peak, k
+        spectra = [spectrum(item["energies_eV"], queer_weights(item["integrand"])) for item in literal]
+        if degenerate:
+            assert np.max(np.abs(spectra[0] - queer)) > 1e-5 * peak, k
+            assert max(np.max(np.abs(other - spectra[0])) for other in spectra[1:]) > 1e-6 * peak, k
+        else:
+            assert max(np.max(np.abs(other - queer)) for other in spectra) <= 1e-12 * peak, k
+    with pytest.raises(ValueError, match="no regularization"):
+        shift_integrand(
+            model, [0.0, 0.0, 0.0], None, degenerate="covariant", **{**common, "regularization_eV": 0.04}
+        )
+
+
+def test_the_magnitudes_bound_the_integrand_and_another_orbital_basis_changes_it_by_rounding(tmp_path):
+    """``magnitude`` bounds ``|I|`` per transition and ``magnitude_bound`` their sum in any basis inside degenerate
+    levels; the same evaluation in a random orthogonal change of the orbital basis gives the same transitions to
+    rounding (what measures it where everything cancels)."""
+    from queer.compat.generator.parity_shift import orthogonal_basis
+
+    shift_spinor_scfout(
+        tmp_path / "kramers.scfout", exchange=0.0, overlap_hopping=(0.06, 0.04, 0.03), dipole=0.2
+    )
+    model = OpenMXModel.from_scfout(tmp_path / "kramers.scfout")
+    common = {"energy_scale": 1.0, "threshold_eV": 1e-9, "regularization_eV": None, "occupied": 2}
+    for k in ([0.0, 0.0, 0.0], [0.13, 0.27, 0.31]):
+        for gauge in (None, random_basis_inside_degenerate_levels(4)):
+            result = shift_integrand(model, k, None, degenerate="covariant", gauge=gauge, **common)
+            assert np.all(np.abs(result["integrand"]) <= result["magnitude"] * (1 + 1e-12) + 1e-300)
+            assert np.all(result["magnitude"].sum(axis=0) <= result["magnitude_bound"] * (1 + 1e-12) + 1e-300)
+        first = shift_integrand(model, k, None, degenerate="covariant", **common)
+        rotated = shift_integrand(model, k, None, degenerate="covariant", basis=orthogonal_basis(4), **common)
+        first_spectrum = spectrum(first["energies_eV"], queer_weights(first["integrand"]))
+        rotated_spectrum = spectrum(rotated["energies_eV"], queer_weights(rotated["integrand"]))
+        difference = np.max(np.abs(first_spectrum - rotated_spectrum))
+        assert 0 < difference <= 1e-12 * np.max(np.abs(first_spectrum)), k
+
+
+@pytest.mark.skipif(
+    not CALIBRATION_SCFOUT.is_file(), reason=f"no OpenMX calibration scfout at {CALIBRATION_SCFOUT}"
+)
+def test_at_a_time_reversal_invariant_point_of_the_real_scfout_the_integrand_vanishes_to_rounding():
+    """The calibration scfout is centrosymmetric: at Gamma and M every transition's integrand, and even the product
+    moduli, vanish but for rounding (1e-9 of a generic k-point's), so a tolerance scaled by them is no tolerance;
+    the two orbital bases' difference still measures the rounding, which QUEER's estimator meets."""
+    from queer.compat.generator.parity_shift import orthogonal_basis
+
+    model = OpenMXModel.from_scfout(CALIBRATION_SCFOUT)
+    tolerance = float(model.degeneracy_tolerance)
+    common = {"energy_scale": 1.0, "threshold_eV": tolerance, "regularization_eV": None, "occupied": 3}
+    generic = shift_integrand(model, [0.086, 0.237, 0.0], None, degenerate="covariant", **common)
+    for k in ([0.0, 0.0, 0.0], [0.5, 0.0, 0.0], [0.5, 0.5, 0.0]):
+        energies, weights, pairs, point = queer_transitions(model, np.asarray(k), 3, tolerance=tolerance)
+        first = shift_integrand(model, k, pairs, degenerate="covariant", **common)
+        second = shift_integrand(
+            model, k, pairs, degenerate="covariant", basis=orthogonal_basis(model.nbnd), **common
+        )
+        assert np.max(first["magnitude"]) < 1e-6 * np.max(generic["magnitude"]), k
+        queer = spectrum(energies, weights)
+        spread = np.max(
+            np.abs(
+                spectrum(first["energies_eV"], queer_weights(first["integrand"]))
+                - spectrum(second["energies_eV"], queer_weights(second["integrand"]))
+            )
+        )
+        transcribed = spectrum(first["energies_eV"], queer_weights(first["integrand"]))
+        assert spread > 0 and np.max(np.abs(transcribed - queer)) <= 100 * spread, k

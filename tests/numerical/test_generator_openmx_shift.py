@@ -514,3 +514,69 @@ def test_pyatbs_band_pair_rule_names_one_pair_or_every_pair(tmp_path):
     assert code == EXIT_OK and document["shift_current"]["occupation"]["band_pair"] is None
     assert document["shift_current"]["occupation"]["n_occ"] == -1
     assert document["shift_current"]["diagnostics"]["transitions"]["count"] == 72
+
+
+def test_the_runner_records_what_a_comparison_recomputes(tmp_path):
+    """Per k-point, in the grid's C order: each k-point's rounding scale (its conditioning times its transitions'
+    product moduli, which bound their weights); the k-points with an exact degeneracy and its spacings; the
+    transitions PyATB's window drops within reach of a photon energy (their Gaussian is the window table) and those
+    it keeps at its ends; the moved transitions' k-points; and a collinear scfout's two channels."""
+    from queer.compat.generator.openmx_shift import WINDOW_REACH_ETA
+
+    code, document = execute(tmp_path / "window", shift_params(omega=[2.0, 4.0], domega=0.02))
+    assert code == EXIT_OK, document.get("error")
+    block = document["shift_current"]
+    diagnostics = block["diagnostics"]
+    rounding = diagnostics["rounding"]
+    assert rounding["recorded"] and len(rounding["kpoint_scale_uA_V2_eV"]) == 18
+    assert min(rounding["kpoint_scale_uA_V2_eV"]) > 0
+    window = diagnostics["pyatb_scheme"]["window_transitions"]
+    assert window["recorded"] and window["energy_eV"] and not any(window["kept"])
+    energies = np.asarray(window["energy_eV"])
+    omega = np.asarray(block["omega_eV"])
+    scale = PYATB_HARTREE_EV / HARTREE_EV
+    outside = (energies * scale < 2.0) | (energies * scale >= 2.0 + len(omega) * 0.02)
+    assert np.all(outside)
+    assert np.all(
+        (energies >= omega[0] - WINDOW_REACH_ETA * 0.1) & (energies <= omega[-1] + WINDOW_REACH_ETA * 0.1)
+    )
+    weights = np.asarray(window["weight_uA_V2_eV"])
+    record = gaussian_rows(omega, energies, weights, 0.1)
+    dropped = columns(diagnostics["pyatb_scheme"]["window_dropped_uA_V2"])
+    assert np.max(np.abs(record - dropped)) <= 1e-12 * np.max(np.abs(dropped))
+    assert set(window["k_index"]) <= set(range(18))
+    # Kramers pairs at the 8 TRIM points of a 4 x 4 x 4 grid: each recorded with its exact pairs.
+    code, document = execute(tmp_path / "kramers", shift_params(grid=[4, 4, 4]), exchange=0.0)
+    exact = document["shift_current"]["diagnostics"]["exact_degeneracies"]
+    assert (
+        exact["recorded"]
+        and len(exact["kpoints"]) == 8 == document["shift_current"]["diagnostics"]["exact_degenerate_kpoints"]
+    )
+    points = np.stack(np.meshgrid(*[np.arange(4) / 4] * 3, indexing="ij"), -1).reshape(-1, 3)
+    for item in exact["kpoints"]:
+        assert np.allclose(points[item["k_index"]], item["k"]) and np.all(np.asarray(item["k"]) * 2 % 1 == 0)
+        assert item["pairs"] and all(
+            spacing <= exact["degeneracy_tolerance_eV"] for _, _, spacing in item["pairs"]
+        )
+    # The bins' moved transitions name their k-points.
+    code, document = execute(tmp_path / "binned", shift_params(smearing_method=0, domega=0.05))
+    moved = document["shift_current"]["diagnostics"]["pyatb_scheme"]["moved_transitions"]
+    assert len(moved["k_index"]) == len(moved["energy_eV"])
+    # A collinear scfout: its physical value is its two channels' sum, the legacy one twice the spin-up channel.
+    code, document = execute(
+        tmp_path / "collinear",
+        shift_params(nspin=1, occ_band=1, omega=[0.2, 4.5], domega=0.04, grid=[6, 6, 1]),
+        scfout=shift_collinear_scfout,
+    )
+    block = document["shift_current"]
+    channels = block["diagnostics"]["spin_channels"]
+    up, down = columns(channels["up_uA_V2"]), columns(channels["down_uA_V2"])
+    assert np.max(np.abs(columns(block["sigma_uA_V2"]) - up - down)) <= 1e-12 * np.max(np.abs(up))
+    assert np.max(np.abs(columns(block["legacy_single_channel"]["sigma_uA_V2"]) - 2 * up)) <= 1e-12 * np.max(
+        np.abs(up)
+    )
+    assert np.max(np.abs(down)) > 1e-2 * np.max(np.abs(up))
+    assert (
+        channels["down_rounding"]["recorded"]
+        and len(channels["down_rounding"]["kpoint_scale_uA_V2_eV"]) == 36
+    )

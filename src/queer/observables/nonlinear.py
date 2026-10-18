@@ -491,9 +491,11 @@ def shift_current_point(model, k, settings):
     Returns ``energies`` (the scissored levels, eV), ``gap[n, m] = E_m - E_n``,
     ``factor[n, m]`` (``f_n - f_m`` on the selected occupied-to-empty pairs above
     the degeneracy tolerance, else zero), ``integrand[a, b, c, n, m]``
-    (``Im r^b_mn r^c_nm;a`` symmetrized in b, c; Angstrom^3) and the unscissored
-    geometry ``raw``. The conductivity at k is ``sum_nm factor * integrand *
-    delta(omega - gap)`` times the conversion of :func:`shift_current`.
+    (``Im r^b_mn r^c_nm;a`` symmetrized in b, c; Angstrom^3), ``magnitude`` (the same
+    with each product replaced by ``|r^b_mn| |r^c_nm;a|``, which bounds the integrand
+    and sets the scale of its rounding where it cancels) and the unscissored geometry
+    ``raw``. The conductivity at k is ``sum_nm factor * integrand * delta(omega - gap)``
+    times the conversion of :func:`shift_current`.
     """
     raw = band_geometry(model, k, settings.degeneracy_tol)
     if settings.method == "sternheimer":
@@ -525,7 +527,16 @@ def shift_current_point(model, k, settings):
     factor = (f[:, None] - f[None, :]) * (gap > raw["degeneracy_tol"]) * pair_mask
     integrand = np.einsum("bmn,acnm->abcnm", connection, generalized)
     integrand = 0.5 * (integrand + integrand.swapaxes(1, 2)).imag
-    return {"energies": energy, "gap": gap, "factor": factor, "integrand": integrand, "raw": raw}
+    magnitude = np.einsum("bmn,acnm->abcnm", np.abs(connection), np.abs(generalized))
+    magnitude = 0.5 * (magnitude + magnitude.swapaxes(1, 2))
+    return {
+        "energies": energy,
+        "gap": gap,
+        "factor": factor,
+        "integrand": integrand,
+        "magnitude": magnitude,
+        "raw": raw,
+    }
 
 
 def shift_current_widths(point, settings):
@@ -654,12 +665,12 @@ def shift_current(
     )
     bin_width = settings.bin_width
     options = (execution or getattr(model, "execution", None) or ExecutionOptions()).resolved()
-    frequency_batch = _frequency_batch(model, len(omega), options, 180, 2, 64)
+    frequency_batch = _frequency_batch(model, len(omega), options, 200, 2, 64)
 
     def point_response(k):
         return shift_current_spectrum(shift_current_point(model, k, settings), settings, frequency_batch)
 
-    bytes_per_point = 16 * (model.nbnd**2 * (180 + 2 * frequency_batch) + 27 * len(omega))
+    bytes_per_point = 16 * (model.nbnd**2 * (200 + 2 * frequency_batch) + 27 * len(omega))
     conversion = -np.pi * E_CHARGE**2 / HBAR * 1e6 * spin_degeneracy(model) / volume(model)
     if controls.get("method") in {"threshold", "cubature"}:
         if kpoints is not None or weights is not None:

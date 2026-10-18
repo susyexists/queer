@@ -66,9 +66,10 @@ from queer.compat.generator.pyatb_shift_integrand import queer_weights, shift_in
 from queer.compat.generator.results import package_source_sha256, package_sources
 from queer.compat.generator.runner import main, run
 from queer.models.evaluation import derivatives
+from queer.observables.nonlinear import shift_current_point, shift_current_settings
 
-SPINOR = {"occ_band": 2, "omega": [0.3, 6.5], "domega": 0.1, "eta": 0.1, "grid": [3, 3, 2]}
-COLLINEAR = {"occ_band": 1, "omega": [0.2, 4.5], "domega": 0.05, "eta": 0.1, "grid": [12, 12, 1]}
+SPINOR = {"occ_band": 2, "omega": [0.3, 6.5], "domega": 0.02, "eta": 0.1, "grid": [3, 3, 2]}
+COLLINEAR = {"occ_band": 1, "omega": [0.2, 4.5], "domega": 0.04, "eta": 0.1, "grid": [12, 12, 1]}
 RUNS = {
     "clean": (shift_spinor_scfout, {}, 4, SPINOR, None),
     "binned": (shift_spinor_scfout, {}, 4, {**SPINOR, "smearing_method": 0, "domega": 0.05}, None),
@@ -136,7 +137,39 @@ RUNS = {
         {**SPINOR, "grid": [4, 4, 4], "eta": 0.01, "domega": 0.002},
         None,
     ),
+    # PyATB's default broadening (eta 0.01) on its default step (domega 0.01), and on half of it: steps wider than
+    # 0.4 eta, where its table cannot be moved to QUEER's energy scale from its own curve.
+    "pyatb_default": (shift_spinor_scfout, {}, 4, {**SPINOR, "eta": 0.01, "domega": 0.01}, None),
+    "half_step": (shift_spinor_scfout, {}, 4, {**SPINOR, "eta": 0.01, "domega": 0.005}, None),
+    # A response that vanishes: no odd mixing and no spin-orbit coupling leave every transition's integrand zero.
+    "centro": (
+        shift_spinor_scfout,
+        {"mixing_odd": (0.0, 0.0, 0.0), "soc": 0.0, "soc_z": 0.0},
+        4,
+        SPINOR,
+        None,
+    ),
+    # Time reversal in a nonorthogonal basis with position moments: exact Kramers pairs at the 8 TRIM points;
+    # with on-site dipoles PyATB's own treatment of them depends on its eigensolver's basis inside them.
+    "kramers_nonorthogonal": (
+        shift_spinor_scfout,
+        {"exchange": 0.0, "overlap_hopping": (0.06, 0.04, 0.03)},
+        4,
+        {**SPINOR, "grid": [4, 4, 4]},
+        None,
+    ),
+    "kramers_dipole": (
+        shift_spinor_scfout,
+        {"exchange": 0.0, "overlap_hopping": (0.06, 0.04, 0.03), "dipole": 0.6},
+        4,
+        {**SPINOR, "grid": [2, 2, 2]},
+        None,
+    ),
 }
+CALIBRATION_SCFOUT = Path(
+    os.environ.get("QUEER_PYATB_CALIBRATION_SCFOUT")
+    or Path.home() / ".cache" / "queer-parity-data" / "pyatb-calib-60fc6b2a" / "test.scfout"
+)
 
 
 def read(path):
@@ -326,19 +359,21 @@ def test_pyatbs_scheme_explains_a_difference_only_as_documented_after_a_passed_c
 ):
     # PyATB's window drops the transitions outside it, which moves its table near the window's edges
     # away from QUEER's physical value: never an agreement.
-    report = judge(runs, tmp_path / "alone", "window")
+    report = judge(runs, tmp_path / "alone", "window", scfout=True)
     assert report["verdict"] == NOT_COMPARABLE and failed_preconditions(report) == ["clean_control"]
     assert NO_CLEAN_CONTROL in json.dumps(report["preconditions"])
-    report = judge(runs, tmp_path / "released", "window", clean_control=clean_report)
+    # What the window drops is QUEER's own per-transition record: documented only once it is recomputed from the
+    # scfout.
+    report = judge(runs, tmp_path / "unrecomputed", "window", clean_control=clean_report)
+    assert report["verdict"] == NOT_COMPARABLE and failed_preconditions(report) == ["regularisation"]
+    assert "window record is not recomputed" in json.dumps(report["preconditions"])
+    report = judge(runs, tmp_path / "released", "window", clean_control=clean_report, scfout=True)
     assert report["verdict"] == PASS_DOCUMENTED, render_markdown(report)
     assert DOCUMENTED in components(report) and components(report) <= {DOCUMENTED, AGREE}
-    assert classes(report)["emulation_consistency"] == AGREE
+    assert classes(report)["emulation_consistency"] == AGREE == classes(report)["window_recomputed"]
     documented = [item for item in report["quantities"] if item["class"] == DOCUMENTED]
     assert all("PyATB's scheme reproduces it" in item["detail"] for item in documented)
     assert all("transitions its window drops" in item["detail"] for item in documented)
-    # The rows the dropped transitions cannot reach carry enough of each component to check QUEER's value there.
-    scheme = report["tolerance_basis"]["scheme"]
-    assert scheme["rows_beyond_reach"] > 0 and min(scheme["informative_share"].values()) >= 0.1
     # The documented metric is the physical gap (to PyATB's print rounding), not the emulation's.
     physical = columns(read(runs["window"] / "queer_results.json")["shift_current"]["sigma_uA_V2"])
     gap = np.max(np.abs(scheme_table(runs["window"]) - physical), axis=0)
@@ -352,7 +387,7 @@ def test_pyatbs_scheme_explains_a_difference_only_as_documented_after_a_passed_c
         report["tolerance_basis"]["truncation_tail"] > 1e-6 and classes(report)["symmetry"] == NOT_APPLICABLE
     )
     # At PyATB's narrow eta its Hartree scale and its window act together: still reproduced exactly.
-    report = judge(runs, tmp_path / "window-sharp", "window_sharp", clean_control=clean_report)
+    report = judge(runs, tmp_path / "window-sharp", "window_sharp", clean_control=clean_report, scfout=True)
     assert report["verdict"] == PASS_DOCUMENTED, render_markdown(report)
     assert report["tolerance_basis"]["energy_scale"]["applied"]
 
@@ -604,8 +639,10 @@ def test_adaptive_smearing_is_an_unbounded_cause_without_an_emulation(runs, tmp_
 def test_pyatbs_spin_and_bin_conventions_are_required(runs, tmp_path, clean_report):
     collinear = read(runs["collinear"] / "queer_results.json")["shift_current"]
     # PyATB doubling the spin-up channel is the legacy value: the physical sum of both channels is not.
-    report = judge(runs, tmp_path / "physical", "collinear", sigma=columns(collinear["sigma_uA_V2"]))
-    assert report["verdict"] == FAIL
+    report = judge(
+        runs, tmp_path / "physical", "collinear", sigma=columns(collinear["sigma_uA_V2"]), scfout=True
+    )
+    assert report["verdict"] == FAIL and report["semantics"]["rules"]["clean_control"]["eligible"]
     binned = read(runs["binned"] / "queer_results.json")["shift_current"]
     # Without smearing PyATB prints bin weights: QUEER's histogram per eV is not what it prints.
     report = judge(
@@ -690,6 +727,7 @@ def test_the_release_clean_control_report_applies_to_every_comparison(runs, tmp_
         reference_from(tmp_path / "ref-2", runs["window"]),
         runs["window"],
         clean_control=path,
+        scfout=runs["window"] / "scf.scfout",
     )
     assert report["verdict"] == PASS_DOCUMENTED and classes(report)["clean_control_release"] == AGREE
     # A report of another build (another queer_version, the shift path's or the comparator's source, or a
@@ -733,7 +771,7 @@ def test_the_release_clean_control_report_applies_to_every_comparison(runs, tmp_
     # The command passes the report through.
     arguments = ["compare", "--reference", str(reference_from(tmp_path / "ref-4", runs["window"]))]
     arguments += ["--candidate", str(runs["window"]), "--clean-control", str(path)]
-    assert main(arguments) == 0
+    assert main([*arguments, "--scfout", str(runs["window"] / "scf.scfout")]) == 0
     arguments = ["compare", "--reference", str(reference_from(tmp_path / "ref-5", runs["window"]))]
     assert main([*arguments, "--candidate", str(runs["window"])]) == 2
 
@@ -854,11 +892,22 @@ def test_exact_kramers_pairs_are_no_cause_and_a_near_degenerate_pair_is_document
     physical = columns(read(runs["split"] / "queer_results.json")["shift_current"]["sigma_uA_V2"])
     shift = columns(split["regularisation"]["shift_uA_V2"])
     assert np.max(np.abs(shift)) > 1e-2 * np.max(np.abs(physical))
-    # A time-reversal-symmetric SOC model is a clean control: any symmetric error fails.
-    assert components(judge(runs, tmp_path / "kramers", "kramers")) == {AGREE}
+    # A time-reversal-symmetric SOC model is a clean control once its exact degeneracies are recomputed from the
+    # scfout (QUEER's tolerance and the spacings it treats as exact, by the comparator's own levels): any symmetric
+    # error fails. Without the scfout its exclusion of the Kramers pairs rests on QUEER's tolerance: no clean control.
+    report = judge(runs, tmp_path / "kramers", "kramers", scfout=True)
+    assert components(report) == {AGREE} and classes(report)["degeneracies_recomputed"] == AGREE
+    assert report["semantics"]["rules"]["clean_control"]["eligible"]
+    report = judge(runs, tmp_path / "kramers-alone", "kramers")
+    conditions = report["semantics"]["rules"]["clean_control"]["conditions"]
+    assert report["verdict"] == PASS and not conditions["exact_degeneracies_verified"]
     for factor in (2.0, 0.5, 1 / 8):
         report = judge(
-            runs, tmp_path / f"kramers-{factor}", "kramers", sigma=scheme_table(runs["kramers"]) * factor
+            runs,
+            tmp_path / f"kramers-{factor}",
+            "kramers",
+            sigma=scheme_table(runs["kramers"]) * factor,
+            scfout=True,
         )
         assert report["verdict"] == FAIL and classes(report)["clean_control"] == UNEXPLAINED, factor
     truth = pyatb_table(runs["split"])
@@ -929,7 +978,8 @@ def test_a_correct_candidate_is_a_clean_control_at_pyatbs_narrow_broadening(runs
     block = read(run / "queer_results.json")["shift_current"]
     physical = columns((block["legacy_single_channel"] or block)["sigma_uA_V2"])
     peak = np.max(np.abs(pyatb))
-    report = judge(runs, tmp_path / "same", name, sigma=pyatb)
+    # A collinear run is a clean control once its spin-down channel, which PyATB never reads, is recomputed.
+    report = judge(runs, tmp_path / "same", name, sigma=pyatb, scfout=collinear)
     assert report["verdict"] == PASS and report["semantics"]["rules"]["clean_control"]["eligible"], (
         render_markdown(report)
     )
@@ -947,7 +997,7 @@ def test_a_correct_candidate_is_a_clean_control_at_pyatbs_narrow_broadening(runs
     zeroed = pyatb.copy()
     zeroed[:, int(np.argmax(np.max(np.abs(pyatb), axis=0)))] = 0.0
     for label, wrong in (("doubled", 2 * pyatb), ("negated", -pyatb), ("zeroed", zeroed)):
-        report = judge(runs, tmp_path / label, name, sigma=wrong)
+        report = judge(runs, tmp_path / label, name, sigma=wrong, scfout=collinear)
         assert report["verdict"] == FAIL and classes(report)["clean_control"] == UNEXPLAINED, label
     # Nor does a physical value 1 % off beside a right emulation.
     copy = tampered(tmp_path / "off", run, lambda values: 1.01 * values, legacy=collinear)
@@ -1130,9 +1180,19 @@ def test_a_bug_over_every_kpoint_never_passes(runs, tmp_path, clean_report):
         for item in regularisation["flagged_records"]["kpoints"]:
             for part in ("physical", "cut"):
                 item[part]["weight_uA_V2_eV"] = (2 * np.asarray(item[part]["weight_uA_V2_eV"])).tolist()
-        if scheme.get("moved_transitions"):
-            record = scheme["moved_transitions"]
-            record["weight_uA_V2_eV"] = (2 * np.asarray(record["weight_uA_V2_eV"])).tolist()
+        for key in ("moved_transitions", "window_transitions"):
+            if scheme.get(key):
+                record = scheme[key]
+                record["weight_uA_V2_eV"] = (2 * np.asarray(record["weight_uA_V2_eV"])).tolist()
+        channels = diagnostics["spin_channels"] or {}
+        for key in ("up_uA_V2", "down_uA_V2", "binned_up_uA_V2", "binned_down_uA_V2"):
+            if channels.get(key) is not None:
+                channels[key] = as_columns(2 * columns(channels[key]))
+        for rounding in (
+            diagnostics["rounding"],
+            channels.get("down_rounding") or {"kpoint_scale_uA_V2_eV": []},
+        ):
+            rounding["kpoint_scale_uA_V2_eV"] = (2 * np.asarray(rounding["kpoint_scale_uA_V2_eV"])).tolist()
 
     for name in ("window", "split", "split_window", "clean", "sharp01", "binned", "split_binned"):
         copy = edited(tmp_path / name, runs[name], doubled)
@@ -1147,6 +1207,11 @@ def test_a_bug_over_every_kpoint_never_passes(runs, tmp_path, clean_report):
                 ]
             else:
                 assert report["verdict"] == FAIL, (name, render_markdown(report))
+            if scfout is not None:
+                # Recomputed from the scfout, the doubled records contradict it.
+                assert {"rounding_recomputed"} <= {
+                    item["name"] for item in report["quantities"] if item["class"] == UNEXPLAINED
+                }, name
     # With an unbounded cause and a converged candidate the plan documents it, as before.
     copy = edited(tmp_path / "scissors", runs["scissors"], doubled)
     reference = reference_from(tmp_path / "scissors-ref", copy, sigma=scheme_table(runs["scissors"]))
@@ -1321,3 +1386,515 @@ def test_the_literature_anchor_checks_peak_position_and_height(runs):
     assert literature_anchor(document, {**anchor, "eta_eV": 0.05})["status"] == "not_comparable"
     placeholder = literature_anchor(document, {**anchor, "peak_eV": None})
     assert placeholder["status"] == "placeholder" and placeholder["missing"] == ["peak_eV"]
+
+
+def kpoint_record(run_dir, k, *, cut=False):
+    """QUEER's own transitions at ``k`` of a run as its flagged-k-point record holds them (PyATB's conventions)."""
+    import dataclasses
+
+    from queer.compat.generator.openmx_shift import _transitions
+
+    block = read(run_dir / "queer_results.json")["shift_current"]
+    params = {**SHIFT_DEFAULTS, **read(run_dir / "queer_params.json")["parameters"]}
+    model = OpenMXModel.from_scfout(run_dir / "scf.scfout")
+    view = model if model.spin_mode == "soc" else single_channel_model(model)
+    occupied = int(params["occ_band"])
+    settings = shift_current_settings(
+        view,
+        np.asarray(block["omega_eV"]),
+        0.0,
+        eta=float(params["eta"]) / math.sqrt(2),
+        smearing="gaussian",
+        occupied_bands=occupied,
+        method="analytic",
+        scissors_occupied_bands=occupied,
+    )
+    if cut:
+        settings = dataclasses.replace(settings, degeneracy_tol=1e-4 * HARTREE_EV / PYATB_HARTREE_EV)
+    energies, weights = _transitions(shift_current_point(view, np.asarray(k, float), settings))
+    grid = [int(value) for value in params["grid"]]
+    factor = block["convention"]["export_sign"] * block["convention"]["pyatb_spin_factor"]
+    factor *= conversion(view) / int(np.prod(grid))
+    return {"energy_eV": energies.tolist(), "weight_uA_V2_eV": (factor * weights).tolist()}
+
+
+def test_a_response_that_vanishes_agrees_within_its_rounding_floor_once_recomputed(runs, tmp_path):
+    """A shift current that vanishes by symmetry: QUEER prints its zeros, PyATB its rounding noise. They agree within
+    the rounding floor (the sum of the k-points' rounding scales, each the conditioning times its transitions' product
+    moduli), recomputed from the scfout; the symmetry gate has no sign to compare; such a table is no clean control
+    (it vouches for no build); an inflated floor contradicts the scfout."""
+    run = runs["centro"]
+    block = read(run / "queer_results.json")["shift_current"]
+    assert np.max(np.abs(columns(block["sigma_uA_V2"]))) < 1e-12
+    port = pyatb_method_1_table(run)
+    assert np.max(np.abs(port)) < 1e-20
+    # PyATB's rounding noise (the port's own may vanish exactly): 1e-30 microA/V^2 of either sign.
+    noise = port + 1e-30 * np.random.default_rng(3).choice([-1.0, 1.0], size=port.shape)
+    for label, pyatb in (("noise", noise), ("zeros", np.zeros_like(noise))):
+        report = judge(runs, tmp_path / label, "centro", sigma=pyatb, scfout=True)
+        assert report["verdict"] == PASS and components(report) <= {AGREE}, render_markdown(report)
+        assert (
+            classes(report)["symmetry"] == NOT_APPLICABLE and classes(report)["rounding_recomputed"] == AGREE
+        )
+        clean = report["semantics"]["rules"]["clean_control"]
+        assert not clean["eligible"] and not clean["conditions"]["nontrivial_table"]
+        # Without the scfout the floor rests on the candidate's own scales: not judged (unless the two runs print
+        # the same zeros).
+        report = judge(runs, tmp_path / f"{label}-alone", "centro", sigma=pyatb)
+        if label == "noise":
+            assert report["verdict"] == NOT_COMPARABLE and "rounding" in failed_preconditions(report)
+        else:
+            assert report["verdict"] == PASS and not report["semantics"]["rules"]["clean_control"]["eligible"]
+    # A trivial table licenses nothing: as a release report it is no clean control.
+    trivial = judge(runs, tmp_path / "trivial", "centro", sigma=noise, scfout=True)
+    report = judge(runs, tmp_path / "licensed", "window", clean_control=trivial, scfout=True)
+    assert report["semantics"]["rules"]["clean_control"]["release"] == "not_a_clean_control"
+    assert report["verdict"] == NOT_COMPARABLE and NO_CLEAN_CONTROL in json.dumps(report["preconditions"])
+
+    def inflate(block):
+        rounding = block["diagnostics"]["rounding"]
+        rounding["kpoint_scale_uA_V2_eV"] = (1e6 * np.asarray(rounding["kpoint_scale_uA_V2_eV"])).tolist()
+
+    for name, sigma in (("centro", noise), ("clean", 1.01 * scheme_table(runs["clean"]))):
+        copy = edited(tmp_path / f"inflated-{name}", runs[name], inflate)
+        reference = reference_from(tmp_path / f"inflated-{name}-ref", copy, sigma=sigma)
+        report = compare("SHIFT_CURRENT", reference, copy, scfout=copy / "scf.scfout")
+        assert report["verdict"] == FAIL and classes(report)["rounding_recomputed"] == UNEXPLAINED, name
+
+
+@pytest.mark.skipif(
+    not CALIBRATION_SCFOUT.is_file(), reason=f"no OpenMX calibration scfout at {CALIBRATION_SCFOUT}"
+)
+def test_the_real_calibration_scfout_whose_shift_current_vanishes_is_compared_honestly(tmp_path_factory):
+    """The real OpenMX calibration scfout (honeycomb with inversion, spin-orbit coupling, a nonorthogonal basis with
+    position moments): its shift current vanishes (about 1e-9 microA/V^2 against k-point weights of order 1-10). An
+    honest run against its own PyATB scheme is no contradiction: with the scfout it agrees within the recomputed
+    rounding floor (the window's dropped tails lie below it), without it it is not judged."""
+    root = tmp_path_factory.mktemp("real")
+    for occupied in (3, 4):
+        directory = root / f"occ{occupied}"
+        directory.mkdir()
+        shutil.copy(CALIBRATION_SCFOUT, directory / "scf.scfout")
+        params = {
+            "step_type": "QUEER_SHIFT_CURRENT",
+            "counterpart_step_type": "PYATB_SHIFT_CURRENT",
+            "input_parameters": {"nspin": 4},
+            "parameters": {
+                "occ_band": occupied,
+                "omega": [0.0, 12.0],
+                "domega": 0.02,
+                "eta": 0.1,
+                "grid": [6, 6, 1],
+            },
+            "workers": 1,
+        }
+        write(directory / "queer_params.json", params)
+        run(None, directory / "queer_params.json", directory, log=lambda line: None)
+        reference = reference_from(root / f"ref{occupied}", directory)
+        report = compare("SHIFT_CURRENT", reference, directory, scfout=directory / "scf.scfout")
+        assert report["verdict"] == PASS and components(report) <= {AGREE, AFTER_CONVENTION}, render_markdown(
+            report
+        )
+        assert classes(report)["emulation_consistency"] == AGREE == classes(report)["rounding_recomputed"]
+        assert classes(report)["symmetry"] == NOT_APPLICABLE
+        report = compare("SHIFT_CURRENT", reference, directory)
+        assert report["verdict"] == NOT_COMPARABLE and "rounding" in failed_preconditions(report)
+        assert classes(report)["emulation_consistency"] == AGREE
+
+
+@pytest.mark.skipif(
+    not CALIBRATION_SCFOUT.is_file(), reason=f"no OpenMX calibration scfout at {CALIBRATION_SCFOUT}"
+)
+def test_a_flagged_record_at_a_time_reversal_invariant_point_of_the_real_scfout_meets_its_recomputation(
+    tmp_path,
+):
+    """Where the integrand vanishes by symmetry (Gamma and M of the centrosymmetric calibration scfout) its rounding
+    is that of the terms that cancel, measured by the transcription's two orbital bases: an honest record there meets
+    QUEER's estimator and the transcription; at K and generic k-points a 1e-6 error in the record does not."""
+    from queer.compat.generator.parity_pyatb import PyatbRun, QueerRun
+    from queer.compat.generator.parity_shift import _ShiftComparison
+
+    directory = tmp_path / "real"
+    directory.mkdir()
+    shutil.copy(CALIBRATION_SCFOUT, directory / "scf.scfout")
+    params = {
+        "step_type": "QUEER_SHIFT_CURRENT",
+        "counterpart_step_type": "PYATB_SHIFT_CURRENT",
+        "input_parameters": {"nspin": 4},
+        "parameters": {"occ_band": 3, "omega": [0.0, 12.0], "domega": 0.02, "eta": 0.1, "grid": [6, 6, 1]},
+        "workers": 1,
+    }
+    write(directory / "queer_params.json", params)
+    run(None, directory / "queer_params.json", directory, log=lambda line: None)
+    comparison = _ShiftComparison(
+        PyatbRun.load(reference_from(tmp_path / "ref", directory)),
+        QueerRun.load(directory),
+        directory / "scf.scfout",
+    )
+    assert comparison.check_documents() and comparison.check_family()
+    assert comparison.guarded(comparison.check_inputs) and comparison.guarded(comparison.check_parameters)
+    assert comparison.check_spin() and comparison.check_sign()
+    recompute = comparison.recomputation()
+    assert recompute is not None
+    points = {"Gamma": [0, 0, 0], "M": [0.5, 0, 0], "M'": [0.5, 0.5, 0], "K": [1 / 3, 1 / 3, 0]}
+    points.update({"generic": [0.086, 0.237, 0.0], "near Gamma": [0.005, 0.0, 0.0]})
+    for name, k in points.items():
+        item = {
+            "k": k,
+            "pair_gap_eV": 5e-5,
+            "physical": kpoint_record(directory, k),
+            "cut": kpoint_record(directory, k, cut=True),
+        }
+        ratios = comparison.recompute_items([item], recompute)["kpoints"][0]["ratios"]
+        assert max(ratios.values()) < 0.05, (name, ratios)
+        if name in ("K", "generic"):
+            item["physical"]["weight_uA_V2_eV"] = (
+                (1 + 1e-6) * np.asarray(item["physical"]["weight_uA_V2_eV"])
+            ).tolist()
+            ratios = comparison.recompute_items([item], recompute)["kpoints"][0]["ratios"]
+            assert ratios["transcription"] > 1 and ratios["queer"] > 1, (name, ratios)
+
+
+@pytest.mark.parametrize("name", ["pyatb_default", "half_step"])
+def test_a_step_wider_than_0_4_eta_is_no_clean_control(runs, tmp_path, clean_report, name):
+    """PyATB's default eta 0.01 with domega 0.01 or 0.005: its Hartree constant moves a correct table beyond 1e-4 of
+    its peak, and on such a step its table cannot be moved back from its own curve. Such a run is no clean control: a
+    correct candidate is not comparable (never failed), a wrong one beyond the Hartree scale's reach fails."""
+    truth = pyatb_method_1_table(runs[name])
+    for supplied in (None, clean_report):
+        report = judge(
+            runs,
+            tmp_path / f"truth-{supplied is None}",
+            name,
+            clean_control=supplied,
+            sigma=truth,
+            scfout=True,
+        )
+        conditions = report["semantics"]["rules"]["clean_control"]["conditions"]
+        assert (
+            not conditions["step_at_most_0.4_eta"]
+            and not report["semantics"]["rules"]["clean_control"]["eligible"]
+        )
+        assert report["verdict"] == NOT_COMPARABLE, render_markdown(report)
+        assert "pyatb_scheme_resolution" in failed_preconditions(
+            report
+        ) or "clean_control" in failed_preconditions(report)
+        assert DOCUMENTED not in components(report)
+    for factor in (1.1, -1.0):
+        report = judge(
+            runs,
+            tmp_path / f"wrong-{factor}",
+            name,
+            clean_control=clean_report,
+            sigma=truth * factor,
+            scfout=True,
+        )
+        assert report["verdict"] == FAIL, (factor, render_markdown(report))
+
+
+def test_a_degeneracy_tolerance_bug_contradicts_the_scfout(tmp_path, monkeypatch, clean_report):
+    """QUEER's degeneracy tolerance too large (5e-5 eV for split Kramers pairs 4e-5 eV apart): it counts them exact
+    and flags nothing, so its diagnostics agree with its value. The comparator measures the scfout's own tolerance
+    and levels: a contradiction; without the scfout such a run is no clean control."""
+    original = OpenMXModel.from_scfout.__func__
+
+    def patched(cls, path, *args, **kwargs):
+        model = original(cls, path, *args, **kwargs)
+        model.degeneracy_tolerance = 5e-5
+        model.metadata["degeneracy_tolerance_eV"] = 5e-5
+        return model
+
+    monkeypatch.setattr(OpenMXModel, "from_scfout", classmethod(patched))
+    bugged = candidate(
+        tmp_path / "bugged", shift_spinor_scfout, {"exchange": 2e-5}, 4, {**SPINOR, "grid": [4, 4, 4]}
+    )
+    monkeypatch.undo()
+    diagnostics = read(bugged / "queer_results.json")["shift_current"]["diagnostics"]
+    assert (
+        diagnostics["exact_degenerate_kpoints"] == 8 and diagnostics["regularisation"]["flagged_kpoints"] == 0
+    )
+    truth = pyatb_table(bugged)
+    for supplied in (None, clean_report):
+        reference = reference_from(tmp_path / f"ref-{supplied is None}", bugged, sigma=truth)
+        report = compare(
+            "SHIFT_CURRENT", reference, bugged, clean_control=supplied, scfout=bugged / "scf.scfout"
+        )
+        assert report["verdict"] == FAIL and classes(report)["degeneracies_recomputed"] == UNEXPLAINED
+        report = compare("SHIFT_CURRENT", reference, bugged, clean_control=supplied)
+        clean = report["semantics"]["rules"]["clean_control"]
+        assert not clean["eligible"] and not clean["conditions"]["exact_degeneracies_verified"]
+    # A record of the exact degeneracies that names spacings the scfout does not have contradicts it too.
+
+    def forge(block):
+        for item in block["diagnostics"]["exact_degeneracies"]["kpoints"]:
+            item["pairs"] = [[0, 2, 0.0]]
+
+    kramers = candidate(
+        tmp_path / "kramers", shift_spinor_scfout, {"exchange": 0.0}, 4, {**SPINOR, "grid": [4, 4, 4]}
+    )
+    copy = edited(tmp_path / "forged", kramers, forge)
+    report = compare(
+        "SHIFT_CURRENT", reference_from(tmp_path / "forged-ref", copy), copy, scfout=copy / "scf.scfout"
+    )
+    assert report["verdict"] == FAIL and classes(report)["degeneracies_recomputed"] == UNEXPLAINED
+
+
+def test_a_collinear_spin_down_bug_never_passes_as_a_clean_control(runs, tmp_path):
+    """PyATB reads only the spin-up channel of a collinear scfout. QUEER's physical value must be its two channels'
+    sum (channel_sum), and its spin-down channel is recomputed from the scfout (spin_down_recomputed): a bug there
+    fails, and without the scfout the run is no clean control."""
+    run_dir = runs["collinear"]
+
+    def physical_only(block):
+        channels = block["diagnostics"]["spin_channels"]
+        up, down = columns(channels["up_uA_V2"]), columns(channels["down_uA_V2"])
+        block["sigma_uA_V2"] = as_columns(up + 3 * down)
+
+    def consistent(block):
+        physical_only(block)
+        channels = block["diagnostics"]["spin_channels"]
+        channels["down_uA_V2"] = as_columns(3 * columns(channels["down_uA_V2"]))
+
+    copy = edited(tmp_path / "physical-only", run_dir, physical_only)
+    report = compare("SHIFT_CURRENT", reference_from(tmp_path / "physical-only-ref", copy), copy)
+    assert report["verdict"] == FAIL and classes(report)["channel_sum"] == UNEXPLAINED
+    copy = edited(tmp_path / "consistent", run_dir, consistent)
+    reference = reference_from(tmp_path / "consistent-ref", copy)
+    report = compare("SHIFT_CURRENT", reference, copy, scfout=copy / "scf.scfout")
+    assert report["verdict"] == FAIL and classes(report)["spin_down_recomputed"] == UNEXPLAINED
+    report = compare("SHIFT_CURRENT", reference, copy)
+    clean = report["semantics"]["rules"]["clean_control"]
+    assert not clean["eligible"] and not clean["conditions"]["spin_down_recomputed"]
+    # The honest run is a clean control with the scfout.
+    report = judge(runs, tmp_path / "honest", "collinear", scfout=True)
+    assert report["verdict"] == PASS and classes(report)["spin_down_recomputed"] == AGREE
+    assert report["semantics"]["rules"]["clean_control"]["eligible"]
+
+
+def test_the_window_and_bin_records_are_recomputed_from_the_scfout(runs, tmp_path, clean_report):
+    """What PyATB's window drops and its bins move is QUEER's own per-transition record. A record forged to carry a
+    value error (consistently with the window table, the emulation's transitions or the moves) contradicts the
+    scfout; without it nothing rests on the record: not comparable, never documented."""
+    run_dir = runs["window"]
+
+    def outside(block):
+        # A bug in the weights of the transitions outside PyATB's window, carried by every table and record.
+        scheme = block["diagnostics"]["pyatb_scheme"]
+        dropped = columns(scheme["window_dropped_uA_V2"])
+        block["sigma_uA_V2"] = as_columns(columns(block["sigma_uA_V2"]) + 2 * dropped)
+        regularisation = block["diagnostics"]["regularisation"]
+        regularisation["sigma_unflagged_uA_V2"] = as_columns(
+            columns(regularisation["sigma_unflagged_uA_V2"]) + 2 * dropped
+        )
+        scheme["window_dropped_uA_V2"] = as_columns(3 * dropped)
+        scheme["transitions_uA_V2"] = as_columns(columns(scheme["transitions_uA_V2"]) + 2 * dropped)
+        record = scheme["window_transitions"]
+        record["weight_uA_V2_eV"] = (3 * np.asarray(record["weight_uA_V2_eV"])).tolist()
+
+    copy = edited(tmp_path / "outside", run_dir, outside)
+    reference = reference_from(tmp_path / "outside-ref", copy, sigma=scheme_table(run_dir))
+    report = compare("SHIFT_CURRENT", reference, copy, clean_control=clean_report, scfout=copy / "scf.scfout")
+    assert report["verdict"] == FAIL and classes(report)["window_recomputed"] == UNEXPLAINED
+    report = compare("SHIFT_CURRENT", reference, copy, clean_control=clean_report)
+    assert report["verdict"] == NOT_COMPARABLE and DOCUMENTED not in components(report)
+    # A forged window table alone contradicts the record it must be the Gaussian of.
+
+    def table_only(block):
+        scheme = block["diagnostics"]["pyatb_scheme"]
+        scheme["window_dropped_uA_V2"] = as_columns(10 * columns(scheme["window_dropped_uA_V2"]))
+
+    copy = edited(tmp_path / "table-only", run_dir, table_only)
+    report = compare(
+        "SHIFT_CURRENT", reference_from(tmp_path / "table-only-ref", copy), copy, clean_control=clean_report
+    )
+    assert report["verdict"] == FAIL and classes(report)["emulation_consistency"] == UNEXPLAINED
+    # Bins: a chain of moves just above PyATB's bin edges that carries an error in the histogram away (each entry's
+    # rows follow from its energy), and an entry claimed to lie at an edge that does not.
+    binned = runs["binned"]
+    document = read(binned / "queer_results.json")["shift_current"]
+    histogram = columns(document["binned_uA_V2"])
+    params = read(binned / "queer_params.json")["parameters"]
+    start, domega = float(params["omega"][0]), float(params["domega"])
+    bump = len(histogram) // 2
+    error = 3 * np.max(np.abs(histogram))
+    scale = PYATB_HARTREE_EV / HARTREE_EV
+
+    def chain(block):
+        values = columns(block["binned_uA_V2"])
+        values[bump] += error
+        block["binned_uA_V2"] = as_columns(values)
+        regularisation = block["diagnostics"]["regularisation"]
+        unflagged = columns(regularisation["binned_unflagged_uA_V2"])
+        unflagged[bump] += error
+        regularisation["binned_unflagged_uA_V2"] = as_columns(unflagged)
+        record = block["diagnostics"]["pyatb_scheme"]["moved_transitions"]
+        for row in range(bump, -1, -1):
+            # Just above QUEER's edge start + row domega, below PyATB's: QUEER's row, PyATB's one lower.
+            edge = start + row * domega
+            energy = edge * (1 + 0.5 * (1 - scale))
+            assert energy > edge > energy * scale
+            record["energy_eV"].append(energy)
+            record["weight_uA_V2_eV"].append([error] * len(SHIFT_COMPONENTS))
+            record["queer_row"].append(row)
+            record["pyatb_row"].append(row - 1)
+            record["ambiguous"].append(False)
+            record["k_index"].append(0)
+
+    copy = edited(tmp_path / "chain", binned, chain)
+    reference = reference_from(tmp_path / "chain-ref", copy, sigma=scheme_table(binned))
+    report = compare("SHIFT_CURRENT", reference, copy, clean_control=clean_report, scfout=copy / "scf.scfout")
+    assert report["verdict"] == FAIL, render_markdown(report)
+    report = compare("SHIFT_CURRENT", reference, copy, clean_control=clean_report)
+    assert report["verdict"] != PASS and DOCUMENTED not in components(report), render_markdown(report)
+
+    def stray(block):
+        record = block["diagnostics"]["pyatb_scheme"]["moved_transitions"]
+        record["energy_eV"].append(start + 10.5 * domega)
+        record["weight_uA_V2_eV"].append([1.0] * len(SHIFT_COMPONENTS))
+        record["queer_row"].append(10)
+        record["pyatb_row"].append(-1)
+        record["ambiguous"].append(True)
+        record["k_index"].append(0)
+
+    copy = edited(tmp_path / "stray", binned, stray)
+    report = compare(
+        "SHIFT_CURRENT", reference_from(tmp_path / "stray-ref", copy), copy, clean_control=clean_report
+    )
+    assert report["verdict"] == FAIL and classes(report)["emulation_consistency"] == UNEXPLAINED
+    assert "lie at none" in json.dumps(report["quantities"])
+
+
+def test_a_transition_at_an_edge_is_placed_on_either_side(tmp_path, clean_report):
+    """A transition within 1e-9 eV of PyATB's window end (its Gaussian), or of one of its bin edges (its bins), may
+    fall on either side in PyATB's arithmetic: either PyATB table is reproduced, each placement tried."""
+    from queer.compat.generator.openmx_shift import _transitions
+
+    probe = shift_spinor_scfout(tmp_path / "probe.scfout")
+    model = OpenMXModel.from_scfout(probe)
+    settings = shift_current_settings(
+        model, np.array([1.0]), 0.0, eta=0.07, smearing="gaussian", occupied_bands=2, method="analytic"
+    )
+    energies, weights = _transitions(shift_current_point(model, np.zeros(3), settings))
+    level = float(np.sort(energies)[1])
+    members = np.flatnonzero(np.abs(energies - level) < 1e-12)
+    scale = PYATB_HARTREE_EV / HARTREE_EV
+    conversion_k = pyatb_shift_constant_ratio() * conversion(model) / 18
+    # The Gaussian: PyATB's window [start, start + 40 domega) ends at s E.
+    domega = 0.02
+    start = scale * level - 40 * domega
+    window = candidate(
+        tmp_path / "window",
+        shift_spinor_scfout,
+        {},
+        4,
+        {**SPINOR, "omega": [start, start + 39.5 * domega], "domega": domega},
+    )
+    truth = pyatb_table(window)
+    contribution, _ = pyatb_scheme_spectrum(
+        PyatbShiftScheme(start, domega, 40, 0.1, 1, True), energies[members], weights[members]
+    )
+    kept = start + 40 * domega > scale * level
+    other = truth - conversion_k * contribution if kept else truth + conversion_k * contribution
+    assert np.max(np.abs(other - truth)) > 1e-2 * np.max(np.abs(truth))
+    for label, table in (("pyatb", truth), ("other", other)):
+        reference = reference_from(tmp_path / f"window-{label}", window, sigma=table)
+        report = compare(
+            "SHIFT_CURRENT", reference, window, clean_control=clean_report, scfout=window / "scf.scfout"
+        )
+        assert report["verdict"] == PASS_DOCUMENTED, (label, render_markdown(report))
+        assert report["tolerance_basis"]["scheme"]["edge_transitions"] == len(members)
+    # The bins: PyATB's bin edge start + 60 domega at s E.
+    domega = 0.05
+    start = scale * level - 60 * domega
+    binned = candidate(
+        tmp_path / "binned",
+        shift_spinor_scfout,
+        {},
+        4,
+        {**SPINOR, "smearing_method": 0, "omega": [start, start + 100.5 * domega], "domega": domega},
+    )
+    record = read(binned / "queer_results.json")["shift_current"]["diagnostics"]["pyatb_scheme"][
+        "moved_transitions"
+    ]
+    assert sum(record["ambiguous"]) == len(members)
+    truth = pyatb_table(binned)
+    weight = conversion_k * weights[members].sum(axis=0)
+    rows = (60, 59) if np.trunc((scale * level - start) / domega) == 60 else (59, 60)
+    other = truth.copy()
+    other[rows[0]] -= weight
+    other[rows[1]] += weight
+    impossible = truth.copy()
+    impossible[rows[1]] -= weight
+    impossible[rows[0]] += weight
+    for label, table, verdict in (
+        ("pyatb", truth, PASS_DOCUMENTED),
+        ("other", other, PASS_DOCUMENTED),
+        ("impossible", impossible, FAIL),
+    ):
+        reference = reference_from(tmp_path / f"bins-{label}", binned, sigma=table)
+        report = compare(
+            "SHIFT_CURRENT", reference, binned, clean_control=clean_report, scfout=binned / "scf.scfout"
+        )
+        assert report["verdict"] == verdict, (label, render_markdown(report))
+
+
+def test_pyatbs_own_value_at_an_exact_degeneracy_depends_on_its_eigensolver_in_a_nonorthogonal_basis(
+    runs, tmp_path
+):
+    """Exact Kramers pairs in a nonorthogonal basis: PyATB zeroes its derivative inside the degenerate levels and
+    takes the block's velocity eigenvalues, which is the physical value only where the parallel transport inside them
+    is zero. Without on-site dipoles it is: a clean control. With them PyATB's value there depends on its
+    eigensolver's basis, beyond a tenth of the tolerance on this grid: no clean control, and a difference from PyATB
+    is not comparable rather than failed or documented."""
+    report = judge(
+        runs,
+        tmp_path / "plain",
+        "kramers_nonorthogonal",
+        sigma=pyatb_table(runs["kramers_nonorthogonal"]),
+        scfout=True,
+    )
+    assert report["verdict"] == PASS and report["semantics"]["rules"]["clean_control"]["eligible"], (
+        render_markdown(report)
+    )
+    assert not report["semantics"]["rules"]["recomputed"]["exact_degeneracy_differs"]
+    report = judge(
+        runs, tmp_path / "dipole", "kramers_dipole", sigma=pyatb_table(runs["kramers_dipole"]), scfout=True
+    )
+    rules = report["semantics"]["rules"]
+    assert rules["recomputed"]["exact_degeneracy_differs"] and rules["causes"]["exact_degeneracy"]["active"]
+    assert not rules["clean_control"]["eligible"]
+    assert report["verdict"] == NOT_COMPARABLE and DOCUMENTED not in components(report), render_markdown(
+        report
+    )
+
+
+def test_an_inflated_rounding_floor_hides_no_value_error(runs, tmp_path, clean_report):
+    """A value 1 % off beside honest records and rounding scales inflated a millionfold: the records then meet the
+    value only within that floor, which rests on the candidate until the scfout recomputes it. Without the scfout no
+    difference is judged on such records (never documented, even through an unbounded cause); with it the floor
+    contradicts the scfout."""
+
+    def value_and_scales(block):
+        for holder in (block, block["legacy_single_channel"] or {}):
+            for key in ("sigma_uA_V2", "binned_uA_V2"):
+                if holder.get(key) is not None:
+                    holder[key] = as_columns(1.01 * columns(holder[key]))
+        for rounding in (
+            block["diagnostics"]["rounding"],
+            (block["diagnostics"]["spin_channels"] or {}).get("down_rounding")
+            or {"kpoint_scale_uA_V2_eV": []},
+        ):
+            rounding["kpoint_scale_uA_V2_eV"] = (1e6 * np.asarray(rounding["kpoint_scale_uA_V2_eV"])).tolist()
+
+    for name in ("clean", "window", "scissors", "binned"):
+        copy = edited(tmp_path / name, runs[name], value_and_scales)
+        reference = reference_from(tmp_path / f"{name}-ref", copy, sigma=scheme_table(runs[name]))
+        report = compare("SHIFT_CURRENT", reference, copy, clean_control=clean_report)
+        assert report["verdict"] != PASS and DOCUMENTED not in components(report), (
+            name,
+            render_markdown(report),
+        )
+        report = compare(
+            "SHIFT_CURRENT", reference, copy, clean_control=clean_report, scfout=copy / "scf.scfout"
+        )
+        assert report["verdict"] == FAIL and classes(report)["rounding_recomputed"] == UNEXPLAINED, name
