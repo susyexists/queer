@@ -19,15 +19,16 @@ default action and ends the process at once.
 the ones this build runs.
 
 ``compare [--step STEP] --reference DIR --candidate DIR [--scfout FILE]
-[--clean-control FILE] [--report FILE] [--markdown FILE]`` compares two run directories of a step
+[--workers N] [--recompute-budget N] [--report FILE] [--markdown FILE]`` compares two run directories of a step
 (:func:`~queer.compat.generator.parity.compare`), prints the verdict and the
 failed checks, and writes the JSON report and its Markdown page when asked. A
 reference holding PyATB's ``Input`` and ``Out/`` is recognised as a PyATB run and
 compared with :mod:`~queer.compat.generator.parity_pyatb`; its step may then be
 left out, and ``--scfout`` names the scfout to hash when the reference has no
-``inputs.sha256``; ``--clean-control`` names the JSON report of this QUEER
-build's shift-current clean-control comparison, which a shift-current
-comparison needs before it documents a difference. It exits 0 for ``pass`` and ``pass_with_documented_differences``,
+``inputs.sha256``. A shift-current comparison needs ``--scfout``: it recomputes
+both spectra from it on ``--workers`` processes (default: every CPU) and refuses
+more than ``--recompute-budget`` k-points x bands^3 (default 4e9; run a larger
+comparison as a separate job). It exits 0 for ``pass`` and ``pass_with_documented_differences``,
 2 otherwise (``fail``, ``not_comparable`` or unusable arguments).
 """
 
@@ -67,8 +68,8 @@ STEP_RUNNERS: Mapping[str, Callable[[WannierStepContext], None]] = MappingProxyT
 )
 USAGE = (
     "usage: python -m queer generator {run --step STEP --params FILE [--workspace DIR] | capabilities | "
-    "compare [--step STEP] --reference DIR --candidate DIR [--scfout FILE] [--clean-control FILE] "
-    "[--report FILE] [--markdown FILE]}"
+    "compare [--step STEP] --reference DIR --candidate DIR [--scfout FILE] [--workers N] "
+    "[--recompute-budget N] [--report FILE] [--markdown FILE]}"
 )
 
 
@@ -171,7 +172,8 @@ def compare_command(arguments: Sequence[str]) -> int:
     parser.add_argument("--reference", required=True)
     parser.add_argument("--candidate", required=True)
     parser.add_argument("--scfout")
-    parser.add_argument("--clean-control")
+    parser.add_argument("--workers", type=int)
+    parser.add_argument("--recompute-budget", type=float)
     parser.add_argument("--report")
     parser.add_argument("--markdown")
     try:
@@ -186,7 +188,8 @@ def compare_command(arguments: Sequence[str]) -> int:
             options.reference,
             options.candidate,
             scfout=options.scfout,
-            clean_control=options.clean_control,
+            workers=options.workers,
+            recompute_budget=options.recompute_budget,
         )
     except (_UsageError, ValueError, OSError) as error:
         print(f"queer generator compare: {error}", file=sys.stderr)

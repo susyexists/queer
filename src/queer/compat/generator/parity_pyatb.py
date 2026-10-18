@@ -1351,15 +1351,17 @@ def compare(
     candidate_dir: str | Path,
     *,
     scfout: str | Path | None = None,
-    clean_control: Any = None,
+    workers: int | None = None,
+    recompute_budget: float | None = None,
 ) -> dict[str, Any]:
     """Compare a QUEER run of an OpenMX step with the PyATB run of its counterpart.
 
     ``step_type`` names the family (``QUEER_AHC``, ``PYATB_AHC`` or ``AHC``; likewise
     CHERN_NUMBER and SHIFT_CURRENT); an unknown step raises ``ValueError``.
     ``scfout`` names the scfout to hash when the reference holds no
-    ``inputs.sha256``. ``clean_control`` (a shift current only) is the report, or
-    the path of the JSON report, of this QUEER build's clean-control comparison
+    ``inputs.sha256``; a shift current requires it, recomputes its spectrum from it
+    on ``workers`` (None: every CPU) and refuses a recomputation larger than
+    ``recompute_budget`` k-points x bands^3
     (:mod:`~queer.compat.generator.parity_shift`). Returns the report of
     :func:`~queer.compat.generator.parity.compare`'s schema.
     """
@@ -1376,10 +1378,11 @@ def compare(
             PyatbRun.load(reference_dir),
             QueerRun.load(candidate_dir),
             scfout=scfout,
-            clean_control=clean_control,
+            workers=workers,
+            recompute_budget=recompute_budget,
         )
-    if clean_control is not None:
-        raise ValueError("a clean-control report applies to a SHIFT_CURRENT comparison only")
+    if recompute_budget is not None:
+        raise ValueError("a recompute budget applies to a SHIFT_CURRENT comparison only")
     comparison = _PyatbComparison(family, PyatbRun.load(reference_dir), QueerRun.load(candidate_dir), scfout)
     comparison.run()
     return comparison.report()

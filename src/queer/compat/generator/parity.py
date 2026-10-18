@@ -2321,7 +2321,8 @@ def compare(
     candidate_dir: str | Path,
     *,
     scfout: str | Path | None = None,
-    clean_control: Any = None,
+    workers: int | None = None,
+    recompute_budget: float | None = None,
 ) -> dict[str, Any]:
     """Compare a candidate run of a Generator step with a reference run of the same step.
 
@@ -2331,8 +2332,8 @@ def compare(
     ``SHIFT_CURRENT``, with a ``QUEER_`` or ``PYATB_`` prefix) compare a QUEER run
     with a PyATB run directory in
     :func:`~queer.compat.generator.parity_pyatb.compare`, which hashes ``scfout``
-    when the reference recorded no input digests and takes a shift current's
-    ``clean_control`` report. Returns the report:
+    when the reference recorded no input digests; a shift current recomputes its
+    spectrum from ``scfout`` on ``workers`` within ``recompute_budget``. Returns the report:
     ``verdict``, ``preconditions``, ``semantics``, ``quantities`` (``name``,
     ``class``, ``metric``, ``tolerance``, ``detail``), ``flagged_sets`` and
     ``inputs_verified_by_fingerprint``.
@@ -2341,10 +2342,15 @@ def compare(
 
     if parity_pyatb.openmx_family(step_type) is not None:
         return parity_pyatb.compare(
-            step_type, reference_dir, candidate_dir, scfout=scfout, clean_control=clean_control
+            step_type,
+            reference_dir,
+            candidate_dir,
+            scfout=scfout,
+            workers=workers,
+            recompute_budget=recompute_budget,
         )
-    if clean_control is not None:
-        raise ValueError("a clean-control report applies to a SHIFT_CURRENT comparison only")
+    if recompute_budget is not None:
+        raise ValueError("a recompute budget applies to a SHIFT_CURRENT comparison only")
     family = step_family(step_type)
     comparison = _Comparison(
         family, RunDirectory.load("reference", reference_dir), RunDirectory.load("candidate", candidate_dir)

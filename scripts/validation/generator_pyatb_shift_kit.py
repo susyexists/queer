@@ -14,20 +14,21 @@ possible. It writes, under ``--output``:
 - ``shift-kit-job.sh``: the Slurm job that runs PyATB on every case (8 MPI ranks),
   after writing each case's ``inputs.sha256`` (``sha256sum ../<model>.scfout Input``);
 - ``queer-side/<case>/``: QUEER's own run of each case (``queer_params.json``,
-  ``queer_results.json``, its ``shift_current.dat``) and ``queer-side/summary.json``;
-  ``diagnostics.pyatb_scheme.sigma_uA_V2`` of each results file is the table PyATB
-  should print from QUEER's transitions;
+  ``queer_results.json``, its ``shift_current.dat``) and ``queer-side/summary.json``
+  with each case's prediction: the comparison of QUEER's run against the table of
+  ``tests/numerical/pyatb_shift_port.py`` (a loop-by-loop port of PyATB's method 1)
+  standing in for PyATB's;
 - ``README.md``: the SHA-256 of every file, how to run the kit and the expected
-  classes.
+  verdicts.
 
 Run it with the repository's environment::
 
     python scripts/validation/generator_pyatb_shift_kit.py \\
       --output ~/.cache/queer-parity-data/pyatb-shift-kit --workers 8
 
-``--no-queer`` writes the PyATB side only. Every case is compared with its scfout:
-the rounding floor of the vanishing case, the window's and the bins' per-transition
-records and the collinear spin-down channel are recomputed from it. The opt-in test
+``--no-queer`` writes the PyATB side only. Every comparison recomputes QUEER's
+physical spectrum and PyATB's table from the scfout
+(:mod:`queer.compat.generator.parity_shift`). The opt-in test
 ``tests/integration/test_generator_pyatb_shift_calibration.py`` judges PyATB's
 outputs, copied back into the case directories, against fresh QUEER runs.
 """
@@ -40,6 +41,7 @@ import json
 import shutil
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import numpy as np
@@ -75,7 +77,8 @@ SPINOR = {
     "scissors": 0.0,
 }
 COLLINEAR = {**SPINOR, "occ_band": 1, "omega": [0.2, 4.5], "grid": [48, 48, 1]}
-# Case: (model, nspin, SHIFT_CURRENT block, self_convergence, expected verdict, expected classes, purpose).
+# Case: (model, nspin, SHIFT_CURRENT block, self_convergence, expected verdict, expected classes, the step of the
+# recomputation's attribution that explains the documented components (None without one), purpose).
 CASES = {
     "a_clean_control": (
         "soc.scfout",
@@ -84,27 +87,30 @@ CASES = {
         False,
         "pass",
         ["agree"],
-        "the clean control: scissors 0, Gaussian, method 1, levels 0.28 eV apart, 5 eta of margin; every "
-        "component must meet QUEER's physical value directly",
+        None,
+        "scissors 0, Gaussian, method 1, levels 0.28 eV apart, 5 eta of margin: every component meets QUEER's "
+        "physical value directly (PyATB's Hartree constant moves it by less than 1e-4 of the peak)",
     ),
     "b_method0": (
         "soc.scfout",
         4,
         {**SPINOR, "method": 0},
         True,
-        "pass_with_documented_differences",
-        ["agree", "agree_after_convention", "differs_documented"],
-        "method 0: PyATB regularizes every energy denominator with 0.04 eV (unbounded cause)",
+        "not_comparable",
+        [],
+        None,
+        "method 0 (every energy denominator regularized with 0.04 eV) is not transcribed: the comparison does not "
+        "recompute it",
     ),
     "c_no_smearing": (
         "soc.scfout",
         4,
         {**SPINOR, "smearing_method": 0},
         False,
-        "pass_with_documented_differences",
-        ["agree_after_convention", "differs_documented"],
-        "smearing 0: PyATB's integer bins without 1/domega (x domega, half a bin); its Hartree scale moves a "
-        "few transitions across bin edges (QUEER records each, checked from its energy: documented)",
+        "pass",
+        ["agree_after_convention"],
+        None,
+        "smearing 0: PyATB's integer bins (no 1/domega) against QUEER's binned_uA_V2, the weight in (w, w + domega]",
     ),
     "d_scissors": (
         "soc.scfout",
@@ -112,8 +118,10 @@ CASES = {
         {**SPINOR, "scissors": 0.4},
         True,
         "pass_with_documented_differences",
-        ["agree", "agree_after_convention", "differs_documented"],
-        "scissors 0.4 eV: PyATB shifts eigenvalues inside its derivative kernels (unbounded cause)",
+        ["differs_documented"],
+        "scissors",
+        "scissors 0.4 eV: PyATB feeds the scissored levels to its derivative kernels, QUEER moves the transition "
+        "energies only",
     ),
     "e_collinear": (
         "collinear.scfout",
@@ -122,7 +130,9 @@ CASES = {
         False,
         "pass",
         ["agree_after_convention"],
-        "a collinear scfout: PyATB doubles its spin-up channel (legacy_single_channel)",
+        None,
+        "a collinear scfout: PyATB doubles its spin-up channel (legacy_single_channel); QUEER's physical value adds "
+        "the spin-down channel, which the comparison recomputes too",
     ),
     "f_band_pair": (
         "soc.scfout",
@@ -131,7 +141,8 @@ CASES = {
         False,
         "pass",
         ["agree"],
-        "one band pair, part of it below the first photon energy (PyATB keeps it, C's int() bins)",
+        None,
+        "one band pair, part of it below the first photon energy (PyATB keeps it, C's int() rows)",
     ),
     "g_left_handed": (
         "soc_left.scfout",
@@ -140,6 +151,7 @@ CASES = {
         False,
         "pass",
         ["agree_after_convention"],
+        None,
         "a left-handed lattice: PyATB's signed cell volume flips every component",
     ),
     "h_real_zero": (
@@ -148,21 +160,22 @@ CASES = {
         {**SPINOR, "occ_band": 3, "omega": [0.0, 12.0], "grid": [12, 12, 1]},
         False,
         "pass",
-        ["agree", "agree_after_convention"],
-        "the real calibration scfout, whose shift current vanishes by inversion (1e-9 microA/V^2 against k-point "
-        "weights of 1-10): both codes print rounding, which agrees within the rounding floor recomputed from the "
-        "scfout; the symmetry gate is not applicable and the case is no clean control",
+        ["agree"],
+        None,
+        "the real calibration scfout, whose shift current vanishes by inversion (1e-12 microA/V^2 against "
+        "broadened magnitudes of order 10): both codes print rounding, which the recomputation reproduces; PyATB's "
+        "own reader and Bloch sums of a nonorthogonal basis with position moments are checked here",
     ),
     "i_pyatb_default": (
         "soc.scfout",
         4,
         {**SPINOR, "eta": 0.01, "domega": 0.01},
         False,
-        "not_comparable",
-        ["agree", "agree_after_convention", "differs_unexplained"],
-        "PyATB's default eta 0.01 on its default step domega 0.01: its Hartree constant moves the table beyond 1e-4 "
-        "of its peak and on a step above 0.4 eta it cannot be moved back from its own curve (no clean control; "
-        "not comparable where the difference lies within the Hartree scale's reach, a failure beyond it)",
+        "pass",
+        ["agree", "agree_after_convention"],
+        None,
+        "PyATB's default eta 0.01 on its default step domega 0.01: its Hartree constant moves narrow peaks by more "
+        "than 1e-4 of the peak (agree_after_convention, recomputed)",
     ),
 }
 JOB = """#!/bin/bash -l
@@ -232,8 +245,81 @@ def input_text(model: str, nspin: int, block: dict, scfout: Path) -> str:
     )
 
 
-def queer_side(output: Path, case: str, model: str, self_convergence: bool, workers: int) -> dict:
+def stand_in_reference(
+    directory: Path, case_input: Path, model: str, scfout: Path, table: np.ndarray
+) -> Path:
+    """A PyATB run directory printing ``table`` (the port's) for a case: its ``Input``, ``inputs.sha256``,
+    ``Out/input.json``, ``Out/running.log`` and ``Out/Shift_Current/shift_current.dat``."""
+    from queer.compat.generator.openmx_params import SHIFT_DEFAULTS
+    from queer.compat.generator.pyatb_files import shift_current_text
+
+    blocks = read_input(case_input)
+    block = {**SHIFT_DEFAULTS, **blocks["SHIFT_CURRENT"]}
+    shutil.copy(case_input, directory / "Input")
+    (directory / "inputs.sha256").write_text(f"{sha256(scfout)}  ../{model}\n{sha256(case_input)}  Input\n")
+    out = directory / "Out"
+    (out / "Shift_Current").mkdir(parents=True)
+    (out / "input.json").write_text(
+        json.dumps({"INPUT_PARAMETERS": blocks["INPUT_PARAMETERS"], "SHIFT_CURRENT": block}, indent=1)
+    )
+    (out / "running.log").write_text("|                  Shift Current                     |\n")
+    start, end = (float(value) for value in block["omega"])
+    domega = float(block["domega"])
+    omega = start + np.arange(int((end - start) / domega) + 1) * domega
+    (out / "Shift_Current" / "shift_current.dat").write_text(shift_current_text(omega, table))
+    return directory
+
+
+def predict(output: Path, case: str, model: str, nspin: int, workspace: Path, workers: int) -> dict:
+    """The comparison of QUEER's run against the loop port's table standing in for PyATB's."""
+    from pyatb_shift_port import pyatb_shift
+
+    from queer import OpenMXModel
+    from queer.compat.generator.openmx_params import SHIFT_DEFAULTS
+    from queer.compat.generator.parity import compare
+
+    block = {**SHIFT_DEFAULTS, **read_input(output / case / "Input")["SHIFT_CURRENT"]}
+    scfout = output / model
+    started = time.perf_counter()
+    if int(block.get("method", 1)) == 1:
+        _, table = pyatb_shift(OpenMXModel.from_scfout(scfout), block, nspin=nspin)
+    else:
+        start, end = (float(value) for value in block["omega"])
+        table = np.zeros((int((end - start) / float(block["domega"])) + 1, len(SHIFT_COMPONENTS)))
+    port_seconds = time.perf_counter() - started
+    with tempfile.TemporaryDirectory() as scratch:
+        reference = stand_in_reference(Path(scratch), output / case / "Input", model, scfout, table)
+        started = time.perf_counter()
+        report = compare("SHIFT_CURRENT", reference, workspace, scfout=scfout, workers=workers)
+        seconds = time.perf_counter() - started
+    classes = sorted({item["class"] for item in report["quantities"] if item["name"].startswith("sigma_")})
+    attribution = (report["semantics"] or {}).get("rules", {}).get("attribution") or {}
+    causes = sorted(
+        {
+            max(values["steps_uA_V2"], key=values["steps_uA_V2"].get)
+            for values in attribution.values()
+            if values["class"] == "differs_documented"
+        }
+    )
+    recomputation = (report.get("tolerance_basis") or {}).get("recomputation") or {}
+    return {
+        "verdict": report["verdict"],
+        "classes": classes,
+        "documented_causes": causes,
+        "failed_preconditions": [item["name"] for item in report["preconditions"] if not item["ok"]],
+        "comparison_seconds": round(seconds, 2),
+        "port_seconds": round(port_seconds, 2),
+        "recompute_seconds": None if not recomputation else round(recomputation.get("seconds", 0.0), 2),
+        "recompute_work": recomputation.get("work"),
+        "flagged_kpoints": recomputation.get("flagged_kpoints"),
+    }
+
+
+def queer_side(
+    output: Path, case: str, model: str, nspin: int, self_convergence: bool, workers: int, prediction: bool
+) -> dict:
     target = output / "queer-side" / case
+    predicted = None
     with tempfile.TemporaryDirectory() as scratch:
         workspace = Path(scratch)
         shutil.copy(output / model, workspace / "scf.scfout")
@@ -241,8 +327,12 @@ def queer_side(output: Path, case: str, model: str, self_convergence: bool, work
             read_input(output / case / "Input"), workers=workers, self_convergence=self_convergence or None
         )
         (workspace / "queer_params.json").write_text(json.dumps(params, indent=1))
+        started = time.perf_counter()
         code = run(None, workspace / "queer_params.json", workspace, log=lambda line: None)
+        seconds = time.perf_counter() - started
         document = json.loads((workspace / "queer_results.json").read_text())
+        if code == 0 and prediction:
+            predicted = predict(output, case, model, nspin, workspace, workers)
         if target.exists():
             shutil.rmtree(target)
         (target / "Out" / "Shift_Current").mkdir(parents=True)
@@ -253,38 +343,26 @@ def queer_side(output: Path, case: str, model: str, self_convergence: bool, work
         return {"status": document.get("status"), "error": document.get("error")}
     block = document["shift_current"]
     physical = np.column_stack([block["sigma_uA_V2"][name] for name in SHIFT_COMPONENTS])
-    variant = block["legacy_single_channel"] or block
-    matched = variant["binned_uA_V2"] if block["binned_uA_V2"] is not None else variant["sigma_uA_V2"]
-    convention = block["convention"]["export_sign"] * np.column_stack(
-        [matched[name] for name in SHIFT_COMPONENTS]
-    )
-    scheme = block["diagnostics"]["pyatb_scheme"].get("sigma_uA_V2")
-    printed = None if scheme is None else np.column_stack([scheme[name] for name in SHIFT_COMPONENTS])
     peak = int(np.argmax(np.max(np.abs(physical), axis=1)))
-    convergence = block["diagnostics"].get("self_convergence") or {}
+    diagnostics = block["diagnostics"]
+    convergence = diagnostics.get("self_convergence") or {}
     compared = convergence.get("legacy_single_channel") or convergence.get("physical") or {}
     return {
         "status": "ok",
         "max_abs_sigma_uA_V2": float(np.max(np.abs(physical))),
         "peak_omega_eV": block["omega_eV"][peak],
-        "pyatb_scheme_max_abs_uA_V2": None if printed is None else float(np.max(np.abs(printed))),
-        "pyatb_scheme_minus_convention_uA_V2": None
-        if printed is None
-        else float(np.max(np.abs(printed - convention))),
-        "convention_table": ("legacy_single_channel." if block["legacy_single_channel"] else "")
+        "file_table": ("legacy_single_channel." if block["legacy_single_channel"] else "")
         + ("binned_uA_V2" if block["binned_uA_V2"] is not None else "sigma_uA_V2"),
-        "min_pair_gap_eV": block["diagnostics"]["min_pair_gap_eV"],
-        "exact_degenerate_kpoints": block["diagnostics"]["exact_degenerate_kpoints"],
-        "regularised_kpoints": block["diagnostics"]["regularisation"]["flagged_kpoints"],
-        "moved_transitions": None
-        if not (block["diagnostics"]["pyatb_scheme"].get("moved_transitions") or {}).get("recorded")
-        else len(block["diagnostics"]["pyatb_scheme"]["moved_transitions"]["energy_eV"]),
-        "transitions": block["diagnostics"]["transitions"]["count"],
-        "clean_control_eligible": block["diagnostics"]["clean_control"]["eligible"],
+        "min_pair_gap_eV": diagnostics["min_pair_gap_eV"],
+        "exact_degenerate_kpoints": diagnostics["exact_degenerate_kpoints"],
+        "kpoints_at_pyatb_threshold": diagnostics["kpoints_at_pyatb_threshold"],
+        "transitions": diagnostics["transitions"]["count"],
+        "queer_seconds": round(seconds, 2),
         "queer_source_sha256": block["build"]["queer_source_sha256"],
         "self_convergence_ratio": compared.get("ratio"),
         "scfout_sha256": document["model"]["scfout_sha256"],
         "queer_version": document["provenance"]["queer_version"],
+        "prediction": predicted,
     }
 
 
@@ -292,14 +370,13 @@ def readme(output: Path, summary: dict) -> str:
     lines = [
         "# PyATB shift-current calibration kit",
         "",
-        "Written by `scripts/validation/generator_pyatb_shift_kit.py` of the QUEER checkout. The scfouts are the",
-        "synthetic models of `tests/numerical/openmx_files.py` (one atom, two orbitals, identity overlap, no",
-        "position moments). PyATB 60fc6b2a's own reader (`pyatb/io/openmx_read_scfout.py`, loaded from its source",
-        "with its multiXR container stubbed) parses them: nspin 4 (SpinP_switch 3) for `soc*.scfout`, nspin 1",
-        "(SpinP_switch 1) for `collinear.scfout`, a negative det(tv) for `soc_left.scfout`, and its eigenvalues",
-        "equal QUEER's times 27.211324570273 / HARTREE_EV (its Hartree constant) to 1e-12 eV. `test.scfout` is the",
-        "real OpenMX calibration scfout of `pyatb-calib-60fc6b2a` (honeycomb with inversion, spin-orbit coupling, a",
-        "nonorthogonal basis with position moments, 30 spinor bands), whose shift current vanishes.",
+        "Written by `scripts/validation/generator_pyatb_shift_kit.py` of the QUEER checkout. The synthetic scfouts are",
+        "the models of `tests/numerical/openmx_files.py` (one atom, two orbitals, identity overlap, no position",
+        "moments). PyATB 60fc6b2a's own reader (`pyatb/io/openmx_read_scfout.py`, loaded from its source with its",
+        "multiXR container stubbed) parses them: nspin 4 (SpinP_switch 3) for `soc*.scfout`, nspin 1 (SpinP_switch 1)",
+        "for `collinear.scfout`, a negative det(tv) for `soc_left.scfout`. `test.scfout` is the real OpenMX",
+        "calibration scfout of `pyatb-calib-60fc6b2a` (honeycomb with inversion, spin-orbit coupling, a nonorthogonal",
+        "basis with position moments, 30 spinor bands), whose shift current vanishes.",
         "",
         "## Files (SHA-256)",
         "",
@@ -327,28 +404,29 @@ def readme(output: Path, summary: dict) -> str:
         "",
         "## Cases and the expected comparison",
         "",
-        "| Case | scfout | Expected verdict | Expected classes | QUEER max abs sigma (uA/V^2) | Purpose |",
-        "|---|---|---|---|---|---|",
+        "The expected verdict is what the comparison gives with the loop port of PyATB's method 1",
+        "(`tests/numerical/pyatb_shift_port.py`) standing in for PyATB (`prediction` in `queer-side/summary.json`).",
+        "",
+        "| Case | scfout | Expected verdict | Expected classes | Documented by | QUEER max abs sigma (uA/V^2) | Purpose |",
+        "|---|---|---|---|---|---|---|",
     ]
-    for case, (model, _, _, _, verdict, kinds, purpose) in CASES.items():
+    for case, (model, _, _, _, verdict, kinds, cause, purpose) in CASES.items():
         facts = summary.get(case, {})
         value = facts.get("max_abs_sigma_uA_V2")
         shown = "" if value is None else f"{value:.6g}"
-        lines.append(f"| `{case}` | `{model}` | `{verdict}` | {', '.join(kinds)} | {shown} | {purpose} |")
+        lines.append(
+            f"| `{case}` | `{model}` | `{verdict}` | {', '.join(kinds) or '-'} | {cause or '-'} | {shown} | {purpose} |"
+        )
     lines += [
         "",
-        "`queer-side/<case>/queer_results.json` holds QUEER's run of each case: `shift_current.sigma_uA_V2` is",
-        "QUEER's physical value, the estimator judged, and `shift_current.diagnostics.pyatb_scheme.sigma_uA_V2`",
-        "the table PyATB should print (its Hartree scale, window rule, int() bins, Gaussian truncation,",
-        "constants, spin factor and signed volume applied to QUEER's transitions), a diagnostic only. Without",
-        "smearing `pyatb_scheme.moved_transitions` lists the transitions PyATB's bins place in another row than",
-        "QUEER's histogram (`moved_transitions` in the summary counts them) and with a Gaussian",
-        "`pyatb_scheme.window_transitions` those its window drops within reach of a photon energy; the",
-        "comparison recomputes both from the scfout, as it recomputes the largest k-point rounding scales (the",
-        "rounding floor that the vanishing `h_real_zero` agrees within) and the collinear scfout's spin-down",
-        "channel, which PyATB never reads. No case has a k-point PyATB's method 1 regularizes.",
-        "`queer-side/summary.json` lists the headline numbers and the build (`queer_source_sha256`) the runs",
-        "come from.",
+        "`queer-side/<case>/queer_results.json` holds QUEER's run of each case: `shift_current.sigma_uA_V2` is QUEER's",
+        "physical value, the value judged, and its diagnostics are plain facts of the run. A comparison reads none of",
+        "them: it recomputes QUEER's physical spectrum and the table PyATB prints from the scfout, each in two orbital",
+        "bases (`queer.compat.generator.pyatb_shift_integrand`), checks QUEER's tables against the first (a mismatch",
+        "fails) and PyATB's printed table against the second (a mismatch is `not_comparable`), and classes each",
+        "component, documenting a difference with the recomputation's own attribution (PyATB's SI constants, Hartree",
+        "constant, window, rows and truncation, scissored kernels, method-1 integrand). `queer-side/summary.json` lists",
+        "the headline numbers, the prediction and the build (`queer_source_sha256`) the runs come from.",
         "",
         "## Running PyATB (Explorer)",
         "",
@@ -364,15 +442,11 @@ def readme(output: Path, summary: dict) -> str:
         "```",
         "",
         "`QUEER_PYATB_SHIFT_CALIBRATION_DIR` overrides the default data directory",
-        "`~/.cache/queer-parity-data/pyatb-shift-kit` and `QUEER_PARITY_REPORT_DIR` receives every report. The",
-        "clean control (`a_clean_control`) is judged first: every component must meet QUEER's physical value",
-        "directly (to 1e-4 of the peak, PyATB's table moved to QUEER's Hartree constant from its own curve; no",
-        "number of QUEER's run widens that, and a clean control needs a step of at most 0.4 eta and a table above",
-        "its rounding floor), and the emulation must reproduce PyATB's table to its print precision (1e-6 of each",
-        "value). Every case is compared with its scfout (`scfout=`). Its report, for the same",
-        "build (queer_version, RECORD, build_sha, and the digest of every .py file of the queer package that ran",
-        "the case and that compares it), is applied to every other case: a difference is documented only after",
-        "it passed.",
+        "`~/.cache/queer-parity-data/pyatb-shift-kit` and `QUEER_PARITY_REPORT_DIR` receives every report. Each case",
+        "is run by QUEER afresh and compared with its scfout (`scfout=`): it must meet its expected verdict and classes,",
+        "and wherever the comparison recomputes PyATB's table (every case but `b_method0`), PyATB's printed table must",
+        "equal the recomputation's PyATB-literal table to its print precision and rounding: the check of the",
+        "transcription, PyATB's reader included, against PyATB itself.",
         "",
     ]
     return "\n".join(lines)
@@ -383,6 +457,9 @@ def main(argv=None) -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--no-queer", action="store_true")
+    parser.add_argument(
+        "--no-prediction", action="store_true", help="skip the comparisons against the loop port"
+    )
     parser.add_argument("--calibration-scfout", type=Path, default=CALIBRATION_SOURCE)
     options = parser.parse_args(argv)
     output = options.output.expanduser()
@@ -392,15 +469,18 @@ def main(argv=None) -> int:
     source = options.calibration_scfout.expanduser()
     if not source.is_file():
         parser.error(f"no calibration scfout at {source} (--calibration-scfout)")
-    shutil.copy(source, output / CALIBRATION)
+    if not (output / CALIBRATION).is_file() or sha256(output / CALIBRATION) != sha256(source):
+        shutil.copy(source, output / CALIBRATION)
     for case, (model, nspin, block, *_) in CASES.items():
         (output / case).mkdir(exist_ok=True)
         (output / case / "Input").write_text(input_text(model, nspin, block, output / model))
     (output / "shift-kit-job.sh").write_text(JOB)
     summary: dict = {}
     if not options.no_queer:
-        for case, (model, _, _, self_convergence, *_) in CASES.items():
-            summary[case] = queer_side(output, case, model, self_convergence, options.workers)
+        for case, (model, nspin, _, self_convergence, *_) in CASES.items():
+            summary[case] = queer_side(
+                output, case, model, nspin, self_convergence, options.workers, not options.no_prediction
+            )
             print(case, json.dumps(summary[case]), flush=True)
         (output / "queer-side" / "summary.json").write_text(json.dumps(summary, indent=1) + "\n")
     elif (output / "queer-side" / "summary.json").exists():

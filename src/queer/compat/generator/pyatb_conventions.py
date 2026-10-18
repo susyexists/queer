@@ -56,13 +56,10 @@ PYATB_E_CHARGE = 1.60217662e-19
 PYATB_HBAR = 1.054571628e-34
 PYATB_E2_H = 3.874046e-5
 PYATB_DEGENERATE_EV = 1e-4
-# PyATB's shift-current prefactor (eV*s, C, J*s) and the width (eV) with which its
-# shift-current method 0 regularizes every energy denominator of its eigenvector
-# derivatives, d / (d^2 + w^2).
+# PyATB's shift-current prefactor (eV*s, C, J*s).
 PYATB_SHIFT_EV_SECONDS = 6.582119e-16
 PYATB_SHIFT_E_CHARGE = 1.602176565e-19
 PYATB_SHIFT_HBAR = 1.054571726e-34
-PYATB_SHIFT_REGULARIZATION_EV = 0.04
 # PyATB's Rydberg -> eV for an explicit ``fermi_energy_unit Ry``.
 PYATB_RYDBERG_EV = 13.605698066
 # QUEER's Hartree -> eV (CODATA), the scale of every QUEER energy.

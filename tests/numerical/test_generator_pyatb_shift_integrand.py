@@ -1,12 +1,10 @@
-"""The independent transcription of PyATB's method-1 shift-current integrand, against QUEER's estimator.
+"""The independent recomputation of a Generator shift current from its scfout (``pyatb_shift_integrand``).
 
-A comparison recomputes the k-points PyATB's method 1 regularizes with
-:mod:`queer.compat.generator.pyatb_shift_integrand`: its own Bloch sums of the
-model's blocks, its own generalized eigenproblem and PyATB's sum-over-states route.
-With an exact threshold it is the physical integrand, which QUEER's covariant
-estimator must meet transition by transition on the analytic models; with PyATB's
-1e-4 eV threshold and 0.04 eV regularization it is PyATB's cut, which differs from
-QUEER's degeneracy tolerance at 1e-4 eV only by PyATB's leftover dE/(dE^2 + eta^2).
+Its physical mode is QUEER's shift current written from the equations (its own Bloch sums, generalized
+eigenproblem and covariant treatment of exact degeneracies, no code of QUEER's observables): it must meet QUEER's
+estimator transition by transition and table by table. Its PyATB-literal mode is what PyATB 60fc6b2a prints: it
+must meet ``pyatb_shift_port``, a loop-by-loop port of PyATB's method 1 that shares no code with it. The two
+orbital bases measure each table's rounding, and a transition on a bin edge is priced both ways.
 """
 
 import math
@@ -16,143 +14,99 @@ from pathlib import Path
 import numpy as np
 import pytest
 from openmx_files import shift_collinear_scfout, shift_spinor_scfout
+from pyatb_shift_port import pyatb_shift
 
-from queer import OpenMXModel
+from queer import ExecutionOptions, OpenMXModel
+from queer.compat.generator.openmx_params import SHIFT_DEFAULTS
 from queer.compat.generator.openmx_shift import component_table
 from queer.compat.generator.openmx_steps import single_channel_model
-from queer.compat.generator.pyatb_conventions import HARTREE_EV, PYATB_HARTREE_EV
-from queer.compat.generator.pyatb_shift_integrand import bloch_operators, queer_weights, shift_integrand
+from queer.compat.generator.pyatb_conventions import pyatb_shift_constant_ratio
+from queer.compat.generator.pyatb_shift_integrand import (
+    PATH_STEPS,
+    PYATB_REGULARIZATION,
+    PYATB_THRESHOLD,
+    ShiftRun,
+    bloch_operators,
+    channels,
+    cluster_labels,
+    exactness_bound,
+    kpoint_grid,
+    orthogonal_basis,
+    point_integrand,
+    pyatb_velocities,
+    recompute,
+    work,
+)
 from queer.models.evaluation import derivatives
-from queer.observables.nonlinear import shift_current_point, shift_current_settings
+from queer.observables.nonlinear import shift_current, shift_current_point, shift_current_settings
 
-SCALE = PYATB_HARTREE_EV / HARTREE_EV
+SERIAL = ExecutionOptions(workers=1)
 CALIBRATION_SCFOUT = Path(
     os.environ.get("QUEER_PYATB_CALIBRATION_SCFOUT")
     or Path.home() / ".cache" / "queer-parity-data" / "pyatb-calib-60fc6b2a" / "test.scfout"
 )
+SPINOR = {"occ_band": 2, "omega": [0.3, 6.5], "domega": 0.02, "eta": 0.1, "grid": [3, 3, 2]}
+COLLINEAR = {"occ_band": 1, "omega": [0.2, 4.5], "domega": 0.04, "eta": 0.1, "grid": [6, 6, 1]}
 
 
-def queer_transitions(model, k, occupied, tolerance=None, pairs=None):
+def queer_transitions(model, k, occupied):
+    """QUEER's transitions at ``k``: their energies, weights ``(f_n - f_m) Im[r^b r^c_;a]_sym`` and (occupied, empty)
+    pairs."""
     settings = shift_current_settings(
-        model,
-        np.array([1.0]),
-        model.fermi_energy,
-        eta=0.05,
-        smearing="gaussian",
-        occupied_bands=occupied,
-        band_pairs=pairs,
-        degeneracy_tol=tolerance,
+        model, np.array([1.0]), model.fermi_energy, eta=0.05, smearing="gaussian", occupied_bands=occupied
     )
     point = shift_current_point(model, k, settings)
     source, target = np.nonzero(point["factor"])
     weights = component_table(
         np.moveaxis(point["factor"][source, target] * point["integrand"][..., source, target], -1, 0)
     )
-    return point["gap"][source, target], weights, list(zip(source.tolist(), target.tolist())), point
+    return point["gap"][source, target], weights, source, target
+
+
+def transcribed(model, k, occupied, **options):
+    """The transcription's physical transitions at ``k`` in QUEER's weights (``-I / 2``)."""
+    result = point_integrand(
+        channels(model)[0].reconciled,
+        k,
+        occupied,
+        treatment="covariant",
+        threshold=exactness_bound(model),
+        **options,
+    )
+    return result["energies"], -0.5 * result["integrand"], result
 
 
 def spectrum(energies, weights, eta=0.01):
     omega = np.linspace(0.0, 8.0, 1601)
-    kernel = np.exp(-(((omega[:, None] - np.asarray(energies)[None, :]) / eta) ** 2)) / (
-        eta * math.sqrt(math.pi)
-    )
-    return kernel @ np.asarray(weights)
+    energies = np.asarray(energies).reshape(-1)
+    kernel = np.exp(-(((omega[:, None] - energies[None, :]) / eta) ** 2)) / (eta * math.sqrt(math.pi))
+    return kernel @ np.asarray(weights).reshape(len(energies), -1)
 
 
-def test_its_bloch_sums_are_the_models(tmp_path):
-    shift_spinor_scfout(tmp_path / "soc.scfout")
+def recomputed(path, block):
+    model = OpenMXModel.from_scfout(path)
+    full = {**SHIFT_DEFAULTS, **block}
+    sign = 1 if np.linalg.det(np.asarray(model.lattice, float)) > 0 else -1
+    return model, full, recompute(model, ShiftRun.from_block(full), handedness=sign, workers=1)
+
+
+def test_its_bloch_sums_are_the_models_and_pyatbs_upper_triangles(tmp_path):
+    shift_spinor_scfout(tmp_path / "soc.scfout", overlap_hopping=(0.06, 0.04, 0.03), dipole=0.3)
     model = OpenMXModel.from_scfout(tmp_path / "soc.scfout")
     k = np.array([0.13, 0.41, 0.77])
-    operators = bloch_operators(model, k)
+    channel = channels(model)[0]
+    operators = bloch_operators(channel.reconciled, k)
     first, second = derivatives(model, k), derivatives(model, k, order=2)
-    assert np.allclose(operators.hamiltonian, model.hamiltonian(k), rtol=0, atol=1e-13)
-    assert np.allclose(operators.overlap, model.overlap(k), rtol=0, atol=1e-13)
-    assert np.allclose(operators.d_hamiltonian, first["H"], rtol=0, atol=1e-12)
-    assert np.allclose(operators.d2_hamiltonian, second["H"], rtol=0, atol=1e-11)
-    assert not np.any(operators.position) and not np.any(operators.d_position)
-
-
-@pytest.mark.parametrize(("label", "exchange"), [("generic", None), ("split", 2e-5)])
-def test_the_physical_integrand_meets_queers_estimator(tmp_path, label, exchange):
-    """With an exact threshold the transcription is QUEER's physical integrand: at generic k-points and where an
-    exchange of 2e-5 eV splits Kramers pairs by 4e-5 eV (PyATB's flagged k-points), to rounding."""
-    model_args = {} if exchange is None else {"exchange": exchange}
-    shift_spinor_scfout(tmp_path / "soc.scfout", **model_args)
-    model = OpenMXModel.from_scfout(tmp_path / "soc.scfout")
-    rng = np.random.default_rng(3)
-    points = (
-        rng.random((3, 3)) if exchange is None else [np.array([0.5, 0.5, 0.0]), np.array([0.0, 0.0, 0.5])]
-    )
-    for k in points:
-        energies, weights, pairs, point = queer_transitions(model, k, 2)
-        tolerance = float(point["raw"]["degeneracy_tol"])
-        port = shift_integrand(
-            model, k, pairs, energy_scale=1.0, threshold_eV=tolerance, regularization_eV=None, occupied=2
-        )
-        assert port["pairs"] == pairs
-        assert np.max(np.abs(port["energies_eV"] - energies)) <= 1e-12
-        absolute = np.max(np.abs(weights).sum(axis=0))
-        assert np.max(np.abs(queer_weights(port["integrand"]) - weights)) <= 1e-9 * absolute, k
-        if exchange is not None:
-            assert port["min_spacing_eV"] == pytest.approx(4e-5, rel=1e-6)
-        # QUEER's own selection when no pair is named: every occupied-empty pair above the threshold.
-        selected = shift_integrand(
-            model, k, None, energy_scale=1.0, threshold_eV=tolerance, regularization_eV=None, occupied=2
-        )
-        assert sorted(selected["pairs"]) == sorted(pairs)
-
-
-def test_pyatbs_cut_differs_from_queers_tolerance_only_by_its_leftover(tmp_path):
-    shift_spinor_scfout(tmp_path / "split.scfout", exchange=2e-5)
-    model = OpenMXModel.from_scfout(tmp_path / "split.scfout")
-    for k in (np.array([0.5, 0.5, 0.0]), np.array([0.0, 0.0, 0.5]), np.array([0.5, 0.5, 0.5])):
-        energies, weights, pairs, _ = queer_transitions(model, k, 2)
-        cut_energies, cut_weights, _, _ = queer_transitions(model, k, 2, tolerance=1e-4 / SCALE)
-        common = {"energy_scale": SCALE, "threshold_eV": 1e-4, "occupied": 2}
-        regularized = shift_integrand(model, k, pairs, regularization_eV=0.04, **common)
-        zeroed = shift_integrand(model, k, pairs, regularization_eV=None, **common)
-        physical = spectrum(energies, weights)
-        queer_cut = spectrum(cut_energies, cut_weights)
-        pyatb_cut = spectrum(regularized["energies_eV"], queer_weights(regularized["integrand"]))
-        dropped = spectrum(zeroed["energies_eV"], queer_weights(zeroed["integrand"]))
-        scale = np.max(np.abs(physical))
-        # The cut removes a sizeable part of the k-point's spectrum; PyATB's regularized leftover is tiny, and
-        # QUEER's tolerance at 1e-4 eV is PyATB's cut with that leftover set to zero.
-        assert np.max(np.abs(physical - queer_cut)) > 1e-3 * scale
-        assert 0 < np.max(np.abs(pyatb_cut - dropped)) <= 1e-5 * scale
-        assert np.max(np.abs(queer_cut - dropped)) <= 1e-6 * scale
-
-
-def test_pyatbs_window_selects_its_pairs_on_its_scale(tmp_path):
-    shift_collinear_scfout(tmp_path / "col.scfout")
-    model = single_channel_model(OpenMXModel.from_scfout(tmp_path / "col.scfout"))
-    k = np.array([0.2, 0.3, 0.0])
-    everything = shift_integrand(
-        model, k, None, energy_scale=SCALE, threshold_eV=1e-4, regularization_eV=0.04, occupied=1
-    )
-    gap = float(everything["energies_eV"][0]) * SCALE
-    inside = shift_integrand(
-        model,
-        k,
-        None,
-        energy_scale=SCALE,
-        threshold_eV=1e-4,
-        regularization_eV=0.04,
-        occupied=1,
-        window=(0.0, gap + 1e-9),
-    )
-    outside = shift_integrand(
-        model,
-        k,
-        None,
-        energy_scale=SCALE,
-        threshold_eV=1e-4,
-        regularization_eV=0.04,
-        occupied=1,
-        window=(0.0, gap),
-    )
-    assert inside["pairs"] == everything["pairs"] and outside["pairs"] == []
-    assert not outside["integrand"].size
+    assert np.allclose(operators.h[0], model.hamiltonian(k), rtol=0, atol=1e-13)
+    assert np.allclose(operators.s[0], model.overlap(k), rtol=0, atol=1e-13)
+    assert np.allclose(operators.dh[0], first["H"], rtol=0, atol=1e-12)
+    assert np.allclose(operators.d2h[0], second["H"], rtol=0, atol=1e-11)
+    assert np.abs(operators.r).max() > 0.01
+    # PyATB's sums of the records' upper triangles, completed Hermitian and the position operator's lower triangle
+    # from (r + i dS)^dagger, are the same operators for records that hold their translation identities exactly.
+    literal = bloch_operators(channel.recorded, k, construction="pyatb")
+    for name in ("h", "s", "dh", "ds", "d2h", "d2s", "r", "dr"):
+        assert np.allclose(getattr(literal, name), getattr(operators, name), rtol=0, atol=1e-12), name
 
 
 def test_a_nonorthogonal_model_needs_its_position_blocks():
@@ -165,154 +119,222 @@ def test_a_nonorthogonal_model_needs_its_position_blocks():
     overlap[1] = overlap[2] = 0.05 * np.eye(2)
     model = OpenMXModel(translations, hopping, overlap, lattice=np.diag([3.0, 10.0, 10.0]))
     with pytest.raises(ValueError, match="position blocks"):
-        bloch_operators(model, [0.1, 0.0, 0.0])
+        bloch_operators(channels(model)[0].reconciled, [0.1, 0.0, 0.0])
 
 
-@pytest.mark.skipif(
-    not CALIBRATION_SCFOUT.is_file(), reason=f"no OpenMX calibration scfout at {CALIBRATION_SCFOUT}"
+def test_pyatbs_grid_degenerate_velocities_and_levels():
+    assert kpoint_grid([2, 1, 3]).tolist() == [[i / 2, 0.0, j / 3] for i in range(2) for j in range(3)]
+    energies = np.array([[0.0, 5e-5, 1.0, 1.0 + 2e-4, 3.0]])
+    assert cluster_labels(energies, 1e-4).tolist() == [[0, 0, 1, 2, 3]]
+    # PyATB's band velocities: the diagonal, or inside levels within 1e-4 eV the block's eigenvalues in order.
+    rng = np.random.default_rng(2)
+    hbar = rng.normal(size=(1, 3, 5, 5)) + 1j * rng.normal(size=(1, 3, 5, 5))
+    hbar = hbar + np.swapaxes(hbar.conj(), -1, -2)
+    velocities = pyatb_velocities(hbar, np.zeros_like(hbar), energies, 1e-4)
+    block = np.linalg.eigvalsh(hbar[0, :, :2, :2], UPLO="L")
+    assert np.allclose(velocities[0, :, :2], block)
+    assert np.allclose(velocities[0, :, 2:], np.diagonal(hbar[0], axis1=-2, axis2=-1)[:, 2:].real)
+
+
+@pytest.mark.parametrize(
+    ("label", "model_args", "points"),
+    [
+        ("generic", {}, np.random.default_rng(3).random((3, 3))),
+        ("split", {"exchange": 2e-5}, [[0.5, 0.5, 0.0], [0.0, 0.0, 0.5]]),
+        ("nonorthogonal", {"overlap_hopping": (0.06, 0.04, 0.03), "dipole": 0.4}, [[0.13, 0.27, 0.31]]),
+    ],
 )
-def test_a_nonorthogonal_scfout_with_position_moments_meets_queer():
-    """A real OpenMX scfout (overlap and position moments, spin-orbit coupling): the transcription's physical
-    integrand meets QUEER's estimator, so its position and overlap terms follow the same conventions."""
-    model = OpenMXModel.from_scfout(CALIBRATION_SCFOUT)
-    assert model.position_blocks and np.abs(model.overlap([0.1, 0.2, 0.0]) - np.eye(model.nbnd)).max() > 0.1
-    rng = np.random.default_rng(5)
-    for k in rng.random((2, 3)) * [1, 1, 0]:
-        energies, weights, pairs, point = queer_transitions(model, k, 3)
-        port = shift_integrand(
-            model,
-            k,
-            pairs,
-            energy_scale=1.0,
-            threshold_eV=float(point["raw"]["degeneracy_tol"]),
-            regularization_eV=None,
-            occupied=3,
-        )
+def test_the_physical_mode_meets_queers_estimator_transition_by_transition(
+    tmp_path, label, model_args, points
+):
+    """At generic k-points, where Kramers pairs are split by 4e-5 eV (PyATB's method 1 regularizes them) and in a
+    nonorthogonal basis with position moments: the same energies and weights to rounding."""
+    shift_spinor_scfout(tmp_path / "soc.scfout", **model_args)
+    model = OpenMXModel.from_scfout(tmp_path / "soc.scfout")
+    for k in points:
+        energies, weights, source, target = queer_transitions(model, np.asarray(k), 2)
+        mine_energies, mine, _ = transcribed(model, k, 2)
+        assert np.max(np.abs(mine_energies[source, target - 2] - energies)) <= 1e-12
         absolute = np.max(np.abs(weights).sum(axis=0))
-        assert np.max(np.abs(queer_weights(port["integrand"]) - weights)) <= 1e-10 * absolute
+        assert np.max(np.abs(mine[source, target - 2] - weights)) <= 1e-9 * absolute, (label, k)
 
 
-def random_basis_inside_degenerate_levels(seed):
-    """Another eigenvector basis inside each degenerate level (a seeded random unitary)."""
-    from queer.compat.generator.pyatb_shift_integrand import clusters
-
-    generator = np.random.default_rng(seed)
-
-    def gauge(vectors, raw):
-        out = vectors.copy()
-        labels = clusters(raw, 1e-9)
-        for label in np.unique(labels):
-            members = np.flatnonzero(labels == label)
-            if len(members) > 1:
-                size = len(members)
-                unitary, _ = np.linalg.qr(
-                    generator.standard_normal((size, size)) + 1j * generator.standard_normal((size, size))
-                )
-                out[:, members] = out[:, members] @ unitary
-        return out
-
-    return gauge
-
-
-def test_the_covariant_treatment_of_an_exact_degeneracy_is_queers_and_basis_independent(tmp_path):
-    """Exact Kramers pairs at the TRIM points of a nonorthogonal spinor model with position moments and on-site dipoles:
-    the transcription's covariant treatment (parallel transport inside the degenerate levels, their velocity matrix)
-    meets QUEER's covariant estimator to rounding in any basis inside them; PyATB's own treatment (derivative zero
-    inside, the block's velocity eigenvalues) does not, and depends on that basis. Without degeneracies both are
-    QUEER's."""
+def test_the_covariant_treatment_of_an_exact_degeneracy_is_queers_in_any_basis(tmp_path):
+    """Exact Kramers pairs at the TRIM points of a nonorthogonal spinor model with position moments and on-site
+    dipoles: the physical mode (parallel transport and the velocity matrix inside the degenerate levels) meets QUEER's
+    covariant estimator in any orbital basis, so in any eigenvector basis inside the levels. PyATB's literal treatment
+    (no derivative inside them, the block's velocity eigenvalues) does not, and its value depends on that basis: what
+    the two orbital bases of a comparison measure."""
     shift_spinor_scfout(
         tmp_path / "kramers.scfout", exchange=0.0, overlap_hopping=(0.06, 0.04, 0.03), dipole=0.6
     )
     model = OpenMXModel.from_scfout(tmp_path / "kramers.scfout")
-    assert model.position_blocks and np.abs(model.overlap([0.1, 0.2, 0.3]) - np.eye(4)).max() > 0.05
-    common = {"energy_scale": 1.0, "threshold_eV": 1e-9, "regularization_eV": None, "occupied": 2}
+    blocks = channels(model)[0].reconciled
     for k, degenerate in (([0.0, 0.0, 0.0], True), ([0.5, 0.0, 0.0], True), ([0.13, 0.27, 0.31], False)):
-        k = np.asarray(k)
-        energies, weights, pairs, point = queer_transitions(model, k, 2)
+        energies, weights, _, _ = queer_transitions(model, np.asarray(k), 2)
         queer = spectrum(energies, weights)
         peak = np.max(np.abs(queer))
-        covariant = [
-            shift_integrand(model, k, None, degenerate="covariant", gauge=gauge, **common)
-            for gauge in (
-                None,
-                random_basis_inside_degenerate_levels(1),
-                random_basis_inside_degenerate_levels(2),
+        bases = (None, orthogonal_basis(4), orthogonal_basis(4, seed=7))
+        for basis in bases:
+            mine_energies, mine, _ = transcribed(model, k, 2, basis=basis)
+            assert np.max(np.abs(spectrum(mine_energies, mine) - queer)) <= 1e-12 * peak, k
+        literal = []
+        for basis in bases:
+            result = point_integrand(
+                blocks,
+                k,
+                2,
+                treatment="pyatb",
+                threshold=PYATB_THRESHOLD,
+                regularization=PYATB_REGULARIZATION,
+                basis=basis,
             )
-        ]
-        literal = [
-            shift_integrand(model, k, None, degenerate="pyatb", gauge=gauge, **common)
-            for gauge in (
-                None,
-                random_basis_inside_degenerate_levels(1),
-                random_basis_inside_degenerate_levels(2),
-            )
-        ]
-        assert (len(set(covariant[0]["clusters"])) < len(covariant[0]["clusters"])) is degenerate
-        for result in covariant:
-            transcribed = spectrum(result["energies_eV"], queer_weights(result["integrand"]))
-            assert np.max(np.abs(transcribed - queer)) <= 1e-12 * peak, k
-        spectra = [spectrum(item["energies_eV"], queer_weights(item["integrand"])) for item in literal]
+            literal.append(spectrum(result["energies"], -0.5 * result["integrand"]))
         if degenerate:
-            assert np.max(np.abs(spectra[0] - queer)) > 1e-5 * peak, k
-            assert max(np.max(np.abs(other - spectra[0])) for other in spectra[1:]) > 1e-6 * peak, k
+            assert np.max(np.abs(literal[0] - queer)) > 1e-5 * peak, k
+            assert max(np.max(np.abs(other - literal[0])) for other in literal[1:]) > 1e-6 * peak, k
         else:
-            assert max(np.max(np.abs(other - queer)) for other in spectra) <= 1e-12 * peak, k
-    with pytest.raises(ValueError, match="no regularization"):
-        shift_integrand(
-            model, [0.0, 0.0, 0.0], None, degenerate="covariant", **{**common, "regularization_eV": 0.04}
+            assert max(np.max(np.abs(other - queer)) for other in literal) <= 1e-12 * peak, k
+
+
+@pytest.mark.parametrize(
+    ("label", "writer", "model_args", "nspin", "block"),
+    [
+        ("spinor", shift_spinor_scfout, {}, 4, SPINOR),
+        ("narrow", shift_spinor_scfout, {}, 4, {**SPINOR, "eta": 0.01, "domega": 0.015}),
+        ("binned", shift_spinor_scfout, {}, 4, {**SPINOR, "smearing_method": 0, "domega": 0.05}),
+        ("window", shift_spinor_scfout, {}, 4, {**SPINOR, "omega": [2.0, 4.0]}),
+        ("pair", shift_spinor_scfout, {}, 4, {**SPINOR, "omega": [1.5, 6.5], "n_occ": 2, "m_unocc": 3}),
+        ("left", shift_spinor_scfout, {"lattice": np.diag([3.0, 3.2, -3.5])}, 4, SPINOR),
+        ("split", shift_spinor_scfout, {"exchange": 2e-5}, 4, {**SPINOR, "grid": [4, 4, 4]}),
+        (
+            "nonorthogonal",
+            shift_spinor_scfout,
+            {"overlap_hopping": (0.06, 0.04, 0.03), "dipole": 0.3},
+            4,
+            SPINOR,
+        ),
+        ("collinear", shift_collinear_scfout, {}, 1, COLLINEAR),
+        ("nonmagnetic", shift_collinear_scfout, {"spin": 0}, 1, COLLINEAR),
+        ("scissors", shift_collinear_scfout, {}, 1, {**COLLINEAR, "scissors": 0.3}),
+    ],
+)
+def test_the_literal_mode_is_pyatbs_table(tmp_path, label, writer, model_args, nspin, block):
+    """The PyATB-literal table equals the loop-by-loop port of PyATB's method 1 within its own rounding tolerance,
+    which is far below PyATB's print precision."""
+    writer(tmp_path / "model.scfout", **model_args)
+    model, full, recomputation = recomputed(tmp_path / "model.scfout", block)
+    _, port = pyatb_shift(model, full, nspin=nspin)
+    literal = recomputation.literal
+    peak = np.max(np.abs(port))
+    assert peak > 0
+    assert np.all(np.abs(literal.value - port) <= literal.rounding + 1e-15 * peak), label
+    assert np.max(literal.rounding) <= 1e-9 * peak
+    # The steps from QUEER's value in PyATB's layout to PyATB's table, one ingredient at a time.
+    path = dict(recomputation.path)
+    assert [name for name, _ in recomputation.path] == ["queer", *(name for name, _ in PATH_STEPS)]
+    assert np.allclose(path["constants"], pyatb_shift_constant_ratio() * path["queer"], rtol=1e-15, atol=0)
+    assert np.array_equal(path["cut"], literal.value)
+
+
+def test_the_physical_tables_are_queers_shift_current(tmp_path):
+    """The physical mode's tables against QUEER's observable: a collinear scfout's two channels, its legacy channel
+    (PyATB's spin factor times the spin-up one), and the binned table without smearing."""
+    shift_collinear_scfout(tmp_path / "collinear.scfout")
+    block = {**COLLINEAR, "smearing_method": 0}
+    model, full, recomputation = recomputed(tmp_path / "collinear.scfout", block)
+    run = ShiftRun.from_block(full)
+    common = {
+        "occupied_bands": 1,
+        "grid": (6, 6, 1),
+        "execution": SERIAL,
+        "smearing": "none",
+        "bin_width": 0.04,
+    }
+    channel = [
+        component_table(
+            shift_current(single_channel_model(model, index), run.omega, **common)["shift_current"]
         )
+        for index in (0, 1)
+    ]
+    binned = [
+        0.04
+        * component_table(
+            shift_current(single_channel_model(model, index), run.omega + 0.02, **common)["shift_current"]
+        )
+        for index in (0, 1)
+    ]
+    physical = recomputation.physical
+    for name, expected in (
+        ("sigma", channel[0] + channel[1]),
+        ("legacy", 2 * channel[0]),
+        ("binned", binned[0] + binned[1]),
+        ("legacy_binned", 2 * binned[0]),
+    ):
+        table = physical[name]
+        assert np.all(np.abs(table.value - expected) <= table.rounding), name
+        # Two transitions lie exactly on the bin edge at 1.64 eV: either placement is the binned value.
+        assert bool(np.max(table.edge) > 0) == name.endswith("binned"), name
 
 
-def test_the_magnitudes_bound_the_integrand_and_another_orbital_basis_changes_it_by_rounding(tmp_path):
-    """``magnitude`` bounds ``|I|`` per transition and ``magnitude_bound`` their sum in any basis inside degenerate
-    levels; the same evaluation in a random orthogonal change of the orbital basis gives the same transitions to
-    rounding (what measures it where everything cancels)."""
-    from queer.compat.generator.parity_shift import orthogonal_basis
-
-    shift_spinor_scfout(
-        tmp_path / "kramers.scfout", exchange=0.0, overlap_hopping=(0.06, 0.04, 0.03), dipole=0.2
+def test_a_transition_on_a_bin_edge_is_priced_both_ways(tmp_path):
+    """The collinear model's two transitions at exactly 1.64 eV lie on the edge between rows 35 and 36 of the bins
+    (w, w + domega]: the edge term holds their weight in both rows, and in the sum over the rows only in row 35."""
+    shift_collinear_scfout(tmp_path / "collinear.scfout")
+    _, _, recomputation = recomputed(tmp_path / "collinear.scfout", {**COLLINEAR, "smearing_method": 0})
+    table = recomputation.physical["binned"]
+    rows = np.flatnonzero(np.max(table.edge, axis=1))
+    assert rows.tolist() == [35, 36]
+    assert np.allclose(table.edge[35], table.edge[36]) and np.max(table.edge[35]) > 0.1 * np.max(
+        np.abs(table.value)
     )
-    model = OpenMXModel.from_scfout(tmp_path / "kramers.scfout")
-    common = {"energy_scale": 1.0, "threshold_eV": 1e-9, "regularization_eV": None, "occupied": 2}
-    for k in ([0.0, 0.0, 0.0], [0.13, 0.27, 0.31]):
-        for gauge in (None, random_basis_inside_degenerate_levels(4)):
-            result = shift_integrand(model, k, None, degenerate="covariant", gauge=gauge, **common)
-            assert np.all(np.abs(result["integrand"]) <= result["magnitude"] * (1 + 1e-12) + 1e-300)
-            assert np.all(result["magnitude"].sum(axis=0) <= result["magnitude_bound"] * (1 + 1e-12) + 1e-300)
-        first = shift_integrand(model, k, None, degenerate="covariant", **common)
-        rotated = shift_integrand(model, k, None, degenerate="covariant", basis=orthogonal_basis(4), **common)
-        first_spectrum = spectrum(first["energies_eV"], queer_weights(first["integrand"]))
-        rotated_spectrum = spectrum(rotated["energies_eV"], queer_weights(rotated["integrand"]))
-        difference = np.max(np.abs(first_spectrum - rotated_spectrum))
-        assert 0 < difference <= 1e-12 * np.max(np.abs(first_spectrum)), k
+    assert np.flatnonzero(np.max(table.edge_cumulative, axis=1)).tolist() == [35]
+    assert np.allclose(table.edge_cumulative[35], table.edge[35])
+    assert np.all(table.smooth <= 1e-9 * np.max(np.abs(table.value)))
+
+
+def test_its_workers_give_the_same_tables(tmp_path, monkeypatch):
+    """The recomputation split over worker processes sums the same k-points (in another order)."""
+    from queer.compat.generator import pyatb_shift_integrand
+
+    monkeypatch.setattr(pyatb_shift_integrand, "SERIAL_WORK", 0.0)
+    shift_spinor_scfout(tmp_path / "soc.scfout")
+    model = OpenMXModel.from_scfout(tmp_path / "soc.scfout")
+    run = ShiftRun.from_block({**SHIFT_DEFAULTS, **SPINOR, "grid": [4, 4, 3]})
+    assert work(model, run) == 48 * 4**3
+    serial = recompute(model, run, handedness=1, workers=1)
+    parallel = recompute(model, run, handedness=1, workers=2, memory_bytes=4e9)
+    assert serial.facts["workers"] == 1 and parallel.facts["workers"] == 2
+    for name in ("sigma",):
+        first, second = serial.physical[name], parallel.physical[name]
+        assert np.all(np.abs(first.value - second.value) <= first.rounding)
+    assert np.all(np.abs(serial.literal.value - parallel.literal.value) <= serial.literal.rounding)
+    assert serial.facts["transitions"] == parallel.facts["transitions"] == 48 * 4
 
 
 @pytest.mark.skipif(
     not CALIBRATION_SCFOUT.is_file(), reason=f"no OpenMX calibration scfout at {CALIBRATION_SCFOUT}"
 )
-def test_at_a_time_reversal_invariant_point_of_the_real_scfout_the_integrand_vanishes_to_rounding():
-    """The calibration scfout is centrosymmetric: at Gamma and M every transition's integrand, and even the product
-    moduli, vanish but for rounding (1e-9 of a generic k-point's), so a tolerance scaled by them is no tolerance;
-    the two orbital bases' difference still measures the rounding, which QUEER's estimator meets."""
-    from queer.compat.generator.parity_shift import orthogonal_basis
-
+def test_a_real_nonorthogonal_scfout_with_position_moments_meets_queer():
+    """The real OpenMX calibration scfout (overlap, position moments, spin-orbit coupling): the physical mode meets
+    QUEER's estimator at generic k-points; at Gamma and M, where its inversion makes every integrand vanish but for
+    rounding, the two orbital bases' difference measures that rounding, and QUEER's estimator meets it."""
     model = OpenMXModel.from_scfout(CALIBRATION_SCFOUT)
-    tolerance = float(model.degeneracy_tolerance)
-    common = {"energy_scale": 1.0, "threshold_eV": tolerance, "regularization_eV": None, "occupied": 3}
-    generic = shift_integrand(model, [0.086, 0.237, 0.0], None, degenerate="covariant", **common)
+    assert model.position_blocks and np.abs(model.overlap([0.1, 0.2, 0.0]) - np.eye(model.nbnd)).max() > 0.1
+    rng = np.random.default_rng(5)
+    for k in rng.random((2, 3)) * [1, 1, 0]:
+        energies, weights, source, target = queer_transitions(model, k, 3)
+        _, mine, _ = transcribed(model, k, 3)
+        absolute = np.max(np.abs(weights).sum(axis=0))
+        assert np.max(np.abs(mine[source, target - 3] - weights)) <= 1e-10 * absolute
+    basis = orthogonal_basis(model.nbnd)
     for k in ([0.0, 0.0, 0.0], [0.5, 0.0, 0.0], [0.5, 0.5, 0.0]):
-        energies, weights, pairs, point = queer_transitions(model, np.asarray(k), 3, tolerance=tolerance)
-        first = shift_integrand(model, k, pairs, degenerate="covariant", **common)
-        second = shift_integrand(
-            model, k, pairs, degenerate="covariant", basis=orthogonal_basis(model.nbnd), **common
-        )
-        assert np.max(first["magnitude"]) < 1e-6 * np.max(generic["magnitude"]), k
+        energies, weights, source, target = queer_transitions(model, np.asarray(k), 3)
+        first_energies, first, _ = transcribed(model, k, 3)
+        second_energies, second, _ = transcribed(model, k, 3, basis=basis)
         queer = spectrum(energies, weights)
+        mine = spectrum(first_energies[source, target - 3], first[source, target - 3])
         spread = np.max(
-            np.abs(
-                spectrum(first["energies_eV"], queer_weights(first["integrand"]))
-                - spectrum(second["energies_eV"], queer_weights(second["integrand"]))
-            )
+            np.abs(mine - spectrum(second_energies[source, target - 3], second[source, target - 3]))
         )
-        transcribed = spectrum(first["energies_eV"], queer_weights(first["integrand"]))
-        assert spread > 0 and np.max(np.abs(transcribed - queer)) <= 100 * spread, k
+        assert spread > 0 and np.max(np.abs(mine - queer)) <= 100 * spread, k
