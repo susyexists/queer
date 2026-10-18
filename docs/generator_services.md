@@ -653,8 +653,11 @@ follows the driver:
 - the table is the model stage's folded table with E_F on its R = 0 diagonal,
   hermitized at k as the driver does, so a replay sees the driver's rounding;
 - `queer_results.json` holds the driver's `qgeom` block in the `pythtb_results.json`
-  schema (every key of the production job job-1cd360d9 is present, checked against
-  its key structure in `tests/fixtures/generator_schema/qgeom_keys.json`), with the
+  schema (every key of the production job job-1cd360d9 and of its two data files is
+  present, checked against their key structure in
+  `tests/fixtures/generator_schema/qgeom_keys.json`; the exceptions are the renamed
+  producer digests, the largest reaped worker's RSS, which QUEER does not report, and
+  the skipped `.eig` check), with the
   engine, counterpart and QUEER provenance, `provenance.queer_qgeom_sha256` (the
   digest of QUEER's quantum-geometry sources) and the inputs it read, including the
   `_tb.dat` and the `.eig`. `Out/qgeom_response.json` and `Out/qgeom_path.json` are
@@ -713,10 +716,12 @@ occupied count and its source, the occupied manifold's applicability):
   digit of each run plus the quantity's 1e-8 tolerance; the dipole sources, symmetry
   residuals, position checks, grid, window, electron count and verdict exactly or to
   the bounds derived from these. mu_CNP agrees to the count tolerance over the
-  density of states at it; inside a gap without states its interpolation is
-  undetermined and a difference is documented, as is a near-tie of the A3 maximum,
-  and the headline values at such a point are checked against the other run's curve
-  at their own mu;
+  smallest density of states between the two values; where that bound exceeds the mu
+  range (inside a gap without states, where rounding picks the interpolated mu_CNP and
+  BLAS kernels pick differently) a difference is documented. A headline point that a
+  mu_CNP difference snaps to another grid mu, or a near-tie of the A3 maximum, is
+  documented, and its values are checked against the other run's curve at their own
+  mu;
 - *no reported error enters a tolerance*: the stage differences (`A3_err`, `err`) and
   the smeared check are compared as values, never used as error bars, so a forged
   estimate fails instead of widening anything;
@@ -735,8 +740,10 @@ candidate stopped on its own clock are `not_comparable`.
 `qgeom_position_unavailable` (a generic three-band layer without exact symmetries, so
 no refinement decision depends on rounding) are the vendored driver's results under
 PythTB 2.0.2; the golden script also records the kernel's final vertex keys. QUEER
-reproduces every vertex set, stop reason and quantity; only the `.eig` check differs,
-as documented.
+reproduces every vertex set, stop reason and quantity, also with OpenBLAS's
+Sandybridge and SkylakeX kernels forced (`OPENBLAS_CORETYPE`); the `.eig` check
+differs, as documented, and under another kernel the insulator's T = 0 mu_CNP inside
+its gap may too.
 
 **Deviations from the plan.** A reference that cannot be replayed (stopped on its
 time budget with an unknown vertex count, or a candidate not replayed at it) is

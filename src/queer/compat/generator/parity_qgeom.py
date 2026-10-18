@@ -44,8 +44,10 @@ are written with 5 significant digits: each value agrees to half a unit in that
 digit of each run plus the quantity's 1e-8 tolerance. The dipole sources, the
 symmetry residuals, the position checks, the grid, window, electron count and
 verdict agree exactly or to the bounds derived from these. mu_CNP agrees to the
-count tolerance over the density of states at it, documented where that density
-vanishes.
+count tolerance over the smallest density of states between the two values; where
+that bound exceeds the mu range (inside a gap without states, where the
+interpolation of mu_CNP is undetermined) a difference is documented. Any difference
+may snap a headline point to another grid mu, which is then documented.
 
 **Producer gaps.** The driver never reads the ``.win``'s ``kpoints`` block, so its
 ``.eig`` check is always skipped where QUEER runs it: ``dft_check`` is documented.
@@ -104,7 +106,6 @@ HISTORY_EXACT = ("phase", "vertices", "leaves", "target")
 CHI_SETS = {"wpd_1_m05": (1.0, -0.5), "lka_2_m05": (2.0, -0.5), "qk_05_m1": (0.5, -1.0)}
 CHI_PER_M = 1.602176634e-19**2 / (6.62607015e-34 / (2.0 * math.pi)) * 1e-10 * 1e12
 RESIDUAL_TOL = 1e-12
-DOS_FLOOR = 1e-300
 
 
 def print_precision(values: Any) -> np.ndarray:
@@ -146,6 +147,9 @@ class QgeomComparison(_Comparison):
         self.producer_warning_codes = frozenset({WARN_QGEOM_PROBE, WARN_DFT_FROZEN_MISMATCH})
         self.queer_only_outputs = frozenset({VERTICES_FILE})
         self.ties: dict[str, str] = {}
+        # Per temperature: how far the two mu_CNP lie apart (eV), and where that is undetermined.
+        self.cnp_shift: dict[str, float] = {}
+        self.cnp_undetermined: set[str] = set()
 
     # ------------------------------------------------------- preconditions
     def step_preconditions(self) -> list[Callable[[], bool]]:
@@ -477,7 +481,9 @@ class QgeomComparison(_Comparison):
             lo = max(int(np.searchsorted(mu, low)) - 1, 0)
             hi = min(int(np.searchsorted(mu, high)) + 1, len(mu))
             smallest = min(smallest, float(np.nanmin(np.abs(dos[lo:hi]))) if hi > lo else 0.0)
-        return self.count_tolerance() / max(smallest, DOS_FLOOR) * 1e3  # meV
+        if smallest <= 0.0:
+            return math.inf
+        return self.count_tolerance() / smallest * 1e3  # meV
 
     def compare_mu_cnp(self, T: str, a: Any, b: Any) -> None:
         name = f"qgeom.electron_count.mu_cnp_meV.{T}"
@@ -485,18 +491,29 @@ class QgeomComparison(_Comparison):
             self.quantity(name, AGREE if a is b else UNEXPLAINED, detail=f"{a!r} vs {b!r}")
             return
         difference = abs(float(a) - float(b))
+        self.cnp_shift[T] = difference * 1e-3
+        if difference == 0.0:
+            self.quantity(name, AGREE, 0.0, 0.0, f"{a} meV")
+            return
+        # Any difference can snap the headline point to another grid mu (a value at a midpoint).
+        self.ties[f"CNP.{T}"] = "mu_CNP"
         tolerance = self.cnp_tolerance(T, min(a, b) * 1e-3, max(a, b) * 1e-3)
+        mu = _array(self.response(self.reference).get("mu_eV"))
+        span = float(np.ptp(mu)) * 1e3 if mu is not None and len(mu) else 0.0
         if difference <= 1e-9:
-            self.quantity(name, AGREE, difference, 1e-9, f"{a} meV")
-        elif difference <= tolerance:
-            self.ties[f"CNP.{T}"] = "mu_CNP"
+            self.quantity(name, AGREE, difference, 1e-9, f"{a} vs {b} meV")
+        elif math.isinf(tolerance) or tolerance > span:
+            self.cnp_undetermined.add(T)
             detail = (
                 f"{a} vs {b} meV: the count is flat between them (no states: the interpolation of mu_CNP is "
-                "undetermined there)"
-                if math.isinf(tolerance)
-                else f"{a} vs {b} meV within the count tolerance over the DOS between them ({tolerance:.3g} meV)"
+                "undetermined there; the count tolerance over the DOS exceeds the mu range)"
             )
-            self.quantity(name, DOCUMENTED, difference, None if math.isinf(tolerance) else tolerance, detail)
+            self.quantity(name, DOCUMENTED, difference, None, detail)
+        elif difference <= tolerance:
+            detail = (
+                f"{a} vs {b} meV within the count tolerance over the DOS between them ({tolerance:.3g} meV)"
+            )
+            self.quantity(name, AGREE, difference, tolerance, detail)
         else:
             self.quantity(name, UNEXPLAINED, difference, tolerance, f"{a} vs {b} meV")
 
@@ -687,8 +704,12 @@ class QgeomComparison(_Comparison):
                 eb.get("drude_eV"),
                 RELATIVE * _max_abs(ea.get("drude_eV"), eb.get("drude_eV")),
             )
-            cnp_tie = self.ties.get(f"CNP.{T}")
-            if cnp_tie and ea.get("mu_minus_cnp_eV") is not None and eb.get("mu_minus_cnp_eV") is not None:
+            undetermined = T in self.cnp_undetermined
+            if (
+                undetermined
+                and ea.get("mu_minus_cnp_eV") is not None
+                and eb.get("mu_minus_cnp_eV") is not None
+            ):
                 shift = _max_abs(
                     np.asarray(ea["mu_minus_cnp_eV"], float) - np.asarray(eb["mu_minus_cnp_eV"], float)
                 )
@@ -700,8 +721,12 @@ class QgeomComparison(_Comparison):
                     "shifted by the documented mu_CNP difference",
                 )
             else:
+                # The curve is mu - mu_CNP: it moves with mu_CNP, by no more than the two lie apart.
                 self.curve(
-                    f"{prefix}.mu_minus_cnp_eV", ea.get("mu_minus_cnp_eV"), eb.get("mu_minus_cnp_eV"), 1e-12
+                    f"{prefix}.mu_minus_cnp_eV",
+                    ea.get("mu_minus_cnp_eV"),
+                    eb.get("mu_minus_cnp_eV"),
+                    self.cnp_shift.get(T, 0.0) + 1e-12,
                 )
             err_a, err_b = ea.get("err") or {}, eb.get("err") or {}
             sigma_scale = RELATIVE * max(

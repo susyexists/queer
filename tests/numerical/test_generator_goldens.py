@@ -9,6 +9,7 @@ the library-replacement check that runs without PythTB.
 """
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -41,6 +42,12 @@ CASE_CORE_SHA256 = {"haldane_slab": "f4a73779a891de356cc53e55d8c077f0fdc6befce93
 # may differ from a golden, as documented ties; everything else must agree.
 TIE_BREAKS = ("edge_kpoints", "is_direct", "gap_midpoints")
 QGEOM_CASES = sorted(name for name, case in CASES.items() if case.step == "PYTHTB_QGEOM")
+CNP_TIES = (
+    r"qgeom\.electron_count\.mu_cnp_meV\.\d+K",
+    r"qgeom\.headline\.\d+K\.CNP\.mu_meV",
+    r"qgeom\.response\.\d+K\.mu_minus_cnp_eV",
+    r"qgeom\.dipole_sources\.CNP",
+)
 WANNIER_CASES = sorted(set(CASES) - set(QGEOM_CASES))
 # The quantum-geometry goldens are the vendored core's (its quantum-geometry code is 56fda912's).
 QGEOM_CORE_SHA256 = "0efcc4b3079266a8d35644d3d06f648857e31d86b12be173c6f03298a5d505c0"
@@ -107,8 +114,10 @@ def test_the_driver_golden_of_a_quantum_geometry_case_passes_against_queer(tmp_p
     assert report["verdict"] in (PASS, PASS_DOCUMENTED), report["summary"]
     kinds = {item["name"]: item["class"] for item in report["quantities"]}
     documented = sorted(name for name, kind in kinds.items() if kind == DOCUMENTED)
-    # The driver never reads the .win kpoints block, so only QUEER checks the .eig.
-    assert documented == (["qgeom.dft_check"] if case.eig else [])
+    # The driver never reads the .win kpoints block, so only QUEER checks the .eig. Inside a gap
+    # without states mu_CNP is undetermined; rounding picks it, and it differs between BLAS kernels.
+    ties = [name for name in documented if any(re.fullmatch(pattern, name) for pattern in CNP_TIES)]
+    assert sorted(set(documented) - set(ties)) == (["qgeom.dft_check"] if case.eig else [])
     assert set(kinds.values()) <= {AGREE, NOT_APPLICABLE, DOCUMENTED}
     assert kinds["qgeom.mesh"] == kinds["qgeom.stop"] == AGREE
     mesh = next(item for item in report["quantities"] if item["name"] == "qgeom.mesh")
