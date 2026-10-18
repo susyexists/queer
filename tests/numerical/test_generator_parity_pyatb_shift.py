@@ -3,12 +3,15 @@
 Candidates are real runner outputs on the analytic models of ``openmx_files``. A
 reference prints the candidate's own emulation of PyATB's scheme (what PyATB would
 print from QUEER's transitions) unless a test gives it other numbers. QUEER's
-physical value is what is judged: a faithful pair agrees directly or differs by
-PyATB's measured scheme or cut (documented, only once this build's clean control
-has passed), and each negative control must not pass: a flipped sign, a zeroed
-component, photon energies shifted by one step, another eta or occ_band, a
-candidate that is not converged, and a candidate whose physical value is wrong
-while its emulation of PyATB is right.
+physical value is what is judged: a faithful pair agrees directly (PyATB's table
+moved to QUEER's energy scale from its own curve) or differs by PyATB's scheme
+reproduced from QUEER's value (its window as QUEER records it, its bins' recorded
+moves, its method-1 cut recomputed from the scfout; documented only once this
+build's clean control has passed), and each negative control must not pass: a
+flipped sign, a zeroed component, photon energies shifted by one step, another eta
+or occ_band, a candidate that is not converged, a candidate whose physical value is
+wrong while its emulation of PyATB is right, any record inflated, missing or
+contradicting its recomputation.
 """
 
 import hashlib
@@ -31,8 +34,8 @@ from queer.compat.generator.openmx_shift import (
     PyatbShiftScheme,
     conversion,
     pyatb_scheme_spectrum,
-    transition_bounds,
 )
+from queer.compat.generator.openmx_steps import single_channel_model
 from queer.compat.generator.parity import (
     AFTER_CONVENTION,
     AGREE,
@@ -48,10 +51,9 @@ from queer.compat.generator.parity import (
 )
 from queer.compat.generator.parity_shift import (
     NO_CLEAN_CONTROL,
-    consistency_bound,
-    energy_scale_bound,
+    energy_scale_reach,
     literature_anchor,
-    slope_cap,
+    move_to_queer_scale,
     symmetry_gate,
 )
 from queer.compat.generator.pyatb_conventions import (
@@ -60,6 +62,7 @@ from queer.compat.generator.pyatb_conventions import (
     pyatb_shift_constant_ratio,
 )
 from queer.compat.generator.pyatb_files import SHIFT_COMPONENTS, shift_current_text
+from queer.compat.generator.pyatb_shift_integrand import queer_weights, shift_integrand
 from queer.compat.generator.results import package_source_sha256, package_sources
 from queer.compat.generator.runner import main, run
 from queer.models.evaluation import derivatives
@@ -94,6 +97,43 @@ RUNS = {
         {},
         1,
         {**COLLINEAR, "eta": 0.01, "domega": 0.002, "omega": [0.2, 6.0], "grid": [6, 6, 1]},
+        None,
+    ),
+    # PyATB's window at its narrow eta: the Hartree scale and the window's dropped transitions together.
+    "window_sharp": (
+        shift_spinor_scfout,
+        {},
+        4,
+        {**SPINOR, "omega": [2.0, 4.0], "eta": 0.01, "domega": 0.002},
+        None,
+    ),
+    # The split pairs without smearing and with a window: the cut beside PyATB's bins or its window.
+    "split_binned": (
+        shift_spinor_scfout,
+        {"exchange": 2e-5},
+        4,
+        {**SPINOR, "grid": [4, 4, 4], "smearing_method": 0, "domega": 0.05},
+        None,
+    ),
+    "split_window": (
+        shift_spinor_scfout,
+        {"exchange": 2e-5},
+        4,
+        {**SPINOR, "grid": [4, 4, 4], "omega": [2.0, 4.0]},
+        None,
+    ),
+    # A clean-configuration method-1 candidate with its self-convergence estimate (converged).
+    "converged": (shift_collinear_scfout, {}, 1, COLLINEAR, True),
+    # Narrower still: PyATB's Hartree constant moves the table by about 1 % of its peak at eta 0.002.
+    "sharp002": (shift_spinor_scfout, {}, 4, {**SPINOR, "eta": 0.002, "domega": 0.0004}, None),
+    # Pairs split by 9.9e-5 eV (flagged) and 1.01e-4 eV (not flagged) on PyATB's scale, and the split pairs at eta 0.01.
+    "split_near": (shift_spinor_scfout, {"exchange": 4.95e-5}, 4, {**SPINOR, "grid": [4, 4, 4]}, None),
+    "split_far": (shift_spinor_scfout, {"exchange": 5.06e-5}, 4, {**SPINOR, "grid": [4, 4, 4]}, None),
+    "split_sharp": (
+        shift_spinor_scfout,
+        {"exchange": 2e-5},
+        4,
+        {**SPINOR, "grid": [4, 4, 4], "eta": 0.01, "domega": 0.002},
         None,
     ),
 }
@@ -199,12 +239,14 @@ def components(report):
     return {item["class"] for item in report["quantities"] if item["name"].startswith("sigma_")}
 
 
-def judge(runs, tmp_path, name, clean_control=None, **reference):
+def judge(runs, tmp_path, name, clean_control=None, scfout=False, **reference):
+    """``name``'s run against a reference printing its emulation (or ``sigma``); ``scfout`` passes its scfout."""
     return compare(
         "QUEER_SHIFT_CURRENT",
         reference_from(tmp_path / "reference", runs[name], **reference),
         runs[name],
         clean_control=clean_control,
+        scfout=runs[name] / "scf.scfout" if scfout else None,
     )
 
 
@@ -292,7 +334,11 @@ def test_pyatbs_scheme_explains_a_difference_only_as_documented_after_a_passed_c
     assert DOCUMENTED in components(report) and components(report) <= {DOCUMENTED, AGREE}
     assert classes(report)["emulation_consistency"] == AGREE
     documented = [item for item in report["quantities"] if item["class"] == DOCUMENTED]
-    assert all("emulation of its scheme" in item["detail"] for item in documented)
+    assert all("PyATB's scheme reproduces it" in item["detail"] for item in documented)
+    assert all("transitions its window drops" in item["detail"] for item in documented)
+    # The rows the dropped transitions cannot reach carry enough of each component to check QUEER's value there.
+    scheme = report["tolerance_basis"]["scheme"]
+    assert scheme["rows_beyond_reach"] > 0 and min(scheme["informative_share"].values()) >= 0.1
     # The documented metric is the physical gap (to PyATB's print rounding), not the emulation's.
     physical = columns(read(runs["window"] / "queer_results.json")["shift_current"]["sigma_uA_V2"])
     gap = np.max(np.abs(scheme_table(runs["window"]) - physical), axis=0)
@@ -302,7 +348,13 @@ def test_pyatbs_scheme_explains_a_difference_only_as_documented_after_a_passed_c
     # cannot check QUEER's value: the run cannot judge QUEER at all.
     report = judge(runs, tmp_path / "coarse", "coarse", clean_control=clean_report)
     assert report["verdict"] == NOT_COMPARABLE and failed_preconditions(report) == ["pyatb_scheme_resolution"]
-    assert report["tolerance_basis"]["consistency"]["informative_share"]["xyz"] < 0.1
+    assert (
+        report["tolerance_basis"]["truncation_tail"] > 1e-6 and classes(report)["symmetry"] == NOT_APPLICABLE
+    )
+    # At PyATB's narrow eta its Hartree scale and its window act together: still reproduced exactly.
+    report = judge(runs, tmp_path / "window-sharp", "window_sharp", clean_control=clean_report)
+    assert report["verdict"] == PASS_DOCUMENTED, render_markdown(report)
+    assert report["tolerance_basis"]["energy_scale"]["applied"]
 
 
 def test_the_clean_control_is_recognised_from_the_data_and_must_agree(runs, tmp_path):
@@ -322,23 +374,12 @@ def test_the_clean_control_is_recognised_from_the_data_and_must_agree(runs, tmp_
     # A clean control that differs by 2e-4 of its peak fails, whatever the causes.
     report = judge(runs, tmp_path / "off", "clean", sigma=scheme_table(runs["clean"]) * (1 + 2e-4))
     assert report["verdict"] == FAIL and classes(report)["clean_control"] == UNEXPLAINED
-    # The candidate's own edge allowance cannot widen a clean control's agreement, and elsewhere it is
-    # capped by its transition weights.
-    for name in ("clean", "window"):
-        copy = shutil.copytree(runs[name], tmp_path / f"edges-{name}")
-        document = read(copy / "queer_results.json")
-        scheme = document["shift_current"]["diagnostics"]["pyatb_scheme"]
-        scheme["edge_allowance_uA_V2"] = {key: 1e6 for key in SHIFT_COMPONENTS}
-        write(copy / "queer_results.json", document)
-        report = compare("SHIFT_CURRENT", reference_from(tmp_path / f"edges-{name}-ref", copy), copy)
-        edges = report["tolerance_basis"]["edge_allowance_uA_V2"]
-        weights = document["shift_current"]["diagnostics"]["transition_bounds"]["abs_weight_uA_V2_eV"]
-        if name == "clean":
-            assert set(edges.values()) == {0.0}
-            off = reference_from(tmp_path / "edges-off", copy, sigma=scheme_table(copy) * (1 + 2e-4))
-            assert compare("SHIFT_CURRENT", off, copy)["verdict"] == FAIL
-        else:
-            assert all(edges[key] <= weights[key] / (0.1 * math.sqrt(math.pi)) * (1 + 1e-12) for key in edges)
+    # Its tolerance is 1e-4 of PyATB's peak and PyATB's print rounding: no number of the candidate widens it.
+    basis = report["tolerance_basis"]
+    assert basis["base_uA_V2"] == pytest.approx(
+        1e-4 * np.max(np.abs(scheme_table(runs["clean"]) * (1 + 2e-4)))
+    )
+    assert "edge_allowance_uA_V2" not in basis and "consistency" not in basis
     # PyATB's truncated Gaussian on a coarse step (interval 0) is measured, never a clean control.
     truncation = read(runs["coarse"] / "queer_results.json")["shift_current"]["diagnostics"][
         "gaussian_truncation"
@@ -376,10 +417,22 @@ def test_queers_physical_value_must_meet_pyatb_not_its_emulation_alone(runs, tmp
             assert report["verdict"] == FAIL, (label, render_markdown(report))
             assert classes(report)["emulation_consistency"] == UNEXPLAINED, label
             assert failed_preconditions(report) == []
-    # Where PyATB's scheme is too coarse to check QUEER's value, no wrong value passes either.
+    # Where PyATB's scheme is too coarse to check QUEER's value, a wrong value still contradicts the emulation's
+    # own sum of its transitions (an exact identity at any step); doubled everywhere it is not comparable.
     copy = tampered(tmp_path / "coarse-doubled", runs["coarse"], lambda values: 2 * values)
     reference = reference_from(tmp_path / "coarse-doubled-ref", copy, sigma=scheme_table(runs["coarse"]))
     report = compare("SHIFT_CURRENT", reference, copy, clean_control=clean_report)
+    assert report["verdict"] == FAIL and classes(report)["emulation_consistency"] == UNEXPLAINED
+
+    def everywhere(block):
+        scheme = block["diagnostics"]["pyatb_scheme"]
+        scheme["transitions_uA_V2"] = as_columns(2 * columns(scheme["transitions_uA_V2"]))
+
+    consistent = edited(tmp_path / "coarse-consistent", copy, everywhere)
+    reference = reference_from(
+        tmp_path / "coarse-consistent-ref", consistent, sigma=scheme_table(runs["coarse"])
+    )
+    report = compare("SHIFT_CURRENT", reference, consistent, clean_control=clean_report)
     assert report["verdict"] == NOT_COMPARABLE and failed_preconditions(report) == ["pyatb_scheme_resolution"]
     # A clean control whose physical value is wrong fails, so its report licenses nothing.
     broken = tampered(tmp_path / "broken-control", runs["clean"], lambda values: 2 * values)
@@ -393,48 +446,51 @@ def test_queers_physical_value_must_meet_pyatb_not_its_emulation_alone(runs, tmp
     assert report["verdict"] == FAIL and classes(report)["clean_control_release"] == UNEXPLAINED
 
 
-def test_the_consistency_bound_holds_for_pyatbs_scheme_on_random_transitions():
+def test_pyatbs_table_moves_to_queers_energy_scale_from_its_own_curve():
+    """PyATB places a transition E at s E (its Hartree constant) and multiplies by its constants r: its Gaussian table
+    P(w) = (r/s) X_{eta/s}(w/s). move_to_queer_scale undoes that from P's own curve (no candidate number); on random
+    transitions with near-cancelling pairs it meets QUEER's X to well within 1e-4 of the peak wherever its own
+    uncertainty is below half of that, and the reach bounds the move where the step is too coarse to resolve it."""
     rng = np.random.default_rng(11)
+    scale = PYATB_HARTREE_EV / HARTREE_EV
     ratio = pyatb_shift_constant_ratio()
-    for smearing, pair_mode in ((1, False), (1, True), (0, False), (0, True)):
-        energies = np.concatenate((rng.uniform(0.6, 3.4, 400), [0.55, 0.4, 3.6, 3.95, 1.0 + 1e-12]))
-        weights = rng.normal(size=(len(energies), len(SHIFT_COMPONENTS)))
-        scheme = PyatbShiftScheme(
-            1.0, 0.05 if smearing else 0.02, 61 if smearing else 151, 0.08, smearing, pair_mode
-        )
-        omega = scheme.start + np.arange(scheme.count) * scheme.domega
-        emulated, _ = pyatb_scheme_spectrum(scheme, energies, weights)
-        if smearing:
-            physical = (
-                np.exp(-(((omega[:, None] - energies) / 0.08) ** 2)) / 0.08 / math.sqrt(math.pi)
-            ) @ weights
-            raw = transition_bounds(scheme, energies, weights, None, None)
-        else:
-            half = omega + 0.5 * scheme.domega
-            lines = (half[:, None] - energies >= -scheme.domega / 2) & (
-                half[:, None] - energies < scheme.domega / 2
-            )
-            physical = lines.astype(float) @ weights
-            raw = transition_bounds(scheme, energies, weights, half, scheme.domega)
-        bounds = {
-            "abs_weight_uA_V2_eV": dict(zip(SHIFT_COMPONENTS, raw["abs_weight"])),
-            "abs_weight_below_window_uA_V2_eV": dict(zip(SHIFT_COMPONENTS, raw["abs_below"])),
-            "abs_weight_above_window_uA_V2_eV": dict(zip(SHIFT_COMPONENTS, raw["abs_above"])),
-            "max_abs_energy_eV": raw["energy_max"],
-            "abs_slope_uA_V2_per_eV": None
-            if not smearing
-            else dict(zip(SHIFT_COMPONENTS, raw["abs_slope"].T)),
-            "bin_moves_uA_V2": None if smearing else dict(zip(SHIFT_COMPONENTS, raw["bin_moves"].T)),
-        }
-        bound = consistency_bound(
-            bounds, smearing=smearing, eta=0.08, domega=scheme.domega, omega=omega, pair_mode=pair_mode
-        )
-        # The emulation (before PyATB's constant ratio r) and QUEER's estimator of the same transitions.
-        gap = ratio * np.abs(emulated - physical)
-        assert np.all(gap <= bound + 1e-12 * np.max(np.abs(physical))), (smearing, pair_mode)
-        assert np.max(gap) > 0
-        # A wrong physical value (twice the truth) breaks the bound.
-        assert np.any(np.abs(ratio * emulated - 2 * ratio * physical) > bound), (smearing, pair_mode)
+
+    def kernel(offset, eta):
+        return np.exp(-((offset / eta) ** 2)) / (eta * math.sqrt(math.pi))
+
+    for eta, step in ((0.1, 0.02), (0.01, 0.002), (0.01, 0.004), (0.002, 0.0004), (0.002, 0.0008)):
+        omega = 0.3 + step * np.arange(int(6.2 / step) + 1)
+        energies = rng.uniform(0.6, 6.2, 300)
+        weights = rng.normal(size=(300, 3))
+        pairs = energies[:100] + rng.uniform(-0.3, 0.3, 100) * eta
+        energies = np.concatenate((energies, pairs))
+        weights = np.concatenate((weights, -weights[:100] * rng.uniform(0.9, 1.1, (100, 1))))
+        queer = kernel(omega[:, None] - energies[None, :], eta) @ weights
+        pyatb = ratio * kernel(omega[:, None] - scale * energies[None, :], eta) @ weights
+        moved, uncertainty = move_to_queer_scale(pyatb, omega=omega, eta=eta, domega=step)
+        tolerance = 1e-4 * np.max(np.abs(queer))
+        resolved = uncertainty <= 0.5 * tolerance
+        assert resolved.mean() > 0.9, (eta, step)
+        error = np.abs(moved - queer)
+        assert np.all(error[resolved] <= tolerance + uncertainty[resolved]), (eta, step)
+        # The move matters: at eta 0.002 PyATB's Hartree constant alone moves the table by about 1 % of its peak.
+        if eta <= 0.01:
+            move = np.max(np.abs(pyatb / ratio - queer)) / np.max(np.abs(queer))
+            assert move > (5e-3 if eta == 0.002 else 1e-4), (eta, move)
+        # The reach covers what PyATB's Hartree constant does, and a wrong table (twice the truth) lies beyond it
+        # wherever the truth is a tenth of its peak.
+        reach = energy_scale_reach(pyatb, omega=omega, eta=eta, domega=step)
+        assert np.all(np.abs(pyatb - queer) <= reach + 1e-12 * np.max(np.abs(queer))), (eta, step)
+        large = np.abs(queer) > 0.1 * np.max(np.abs(queer))
+        assert np.all((np.abs(2 * queer - queer) > tolerance + reach)[large]), (eta, step)
+    # On a step of eta the move is not attempted; its reach still covers what PyATB's Hartree constant does.
+    omega = 0.3 + 0.1 * np.arange(63)
+    energies = rng.uniform(0.6, 6.2, 200)
+    weights = rng.normal(size=(200, 2))
+    queer = kernel(omega[:, None] - energies[None, :], 0.1) @ weights
+    pyatb = ratio * kernel(omega[:, None] - scale * energies[None, :], 0.1) @ weights
+    reach = energy_scale_reach(pyatb, omega=omega, eta=0.1, domega=0.1)
+    assert np.all(np.abs(pyatb - queer) <= reach + 1e-12 * np.max(np.abs(queer)))
 
 
 @pytest.mark.parametrize(
@@ -738,11 +794,51 @@ def pyatb_method_1_table(run_dir):
     return pyatb_shift_constant_ratio() * conversion(model) / len(points) * total
 
 
-def test_exact_kramers_pairs_are_no_cause_and_a_near_degenerate_pair_is_bounded_by_its_cut(
+def pyatb_table(run_dir):
+    """PyATB's method-1 table from the compat transcription of its integrand (its window on its scale, its 1e-4 eV
+    threshold and 0.04 eV regularization), its broadening, constants, spin factor and signed volume."""
+    document = read(run_dir / "queer_results.json")
+    block = document["shift_current"]
+    params = {**SHIFT_DEFAULTS, **read(run_dir / "queer_params.json")["parameters"]}
+    model = OpenMXModel.from_scfout(run_dir / "scf.scfout")
+    view = model if model.spin_mode == "soc" else single_channel_model(model)
+    occupied, domega = int(params["occ_band"]), float(params["domega"])
+    start = float(params["omega"][0])
+    count = len(block["omega_eV"])
+    pair_mode = int(params["n_occ"]) >= 1 and int(params["m_unocc"]) > int(params["n_occ"])
+    pairs = [(int(params["n_occ"]) - 1, int(params["m_unocc"]) - 1)] if pair_mode else None
+    scheme = PyatbShiftScheme(
+        start, domega, count, float(params.get("eta", 0.01)), int(params["smearing_method"]), pair_mode
+    )
+    grid = [int(value) for value in params["grid"]]
+    points = np.stack(np.meshgrid(*[np.arange(n) / n for n in grid], indexing="ij"), -1).reshape(-1, 3)
+    total = np.zeros((count, len(SHIFT_COMPONENTS)))
+    for k in points:
+        result = shift_integrand(
+            view,
+            k,
+            pairs,
+            energy_scale=PYATB_HARTREE_EV / HARTREE_EV,
+            threshold_eV=1e-4,
+            regularization_eV=0.04,
+            occupied=occupied,
+            window=None if pair_mode else (start, start + count * domega),
+        )
+        if result["pairs"]:
+            spectrum, _ = pyatb_scheme_spectrum(
+                scheme, result["energies_eV"], queer_weights(result["integrand"])
+            )
+            total += spectrum
+    factor = block["convention"]["export_sign"] * block["convention"]["pyatb_spin_factor"]
+    return factor * pyatb_shift_constant_ratio() * conversion(view) / len(points) * total
+
+
+def test_exact_kramers_pairs_are_no_cause_and_a_near_degenerate_pair_is_documented_by_its_recomputed_cut(
     runs, tmp_path, clean_report
 ):
     """PyATB's method 1 drops a pair's 1/dE for |dE| <= 1e-4 eV: an exact (Kramers) degeneracy changes nothing,
-    a split one changes the flagged k-points by exactly what the candidate measured."""
+    a split one changes the flagged k-points, which the comparison recomputes from the scfout; without the scfout
+    the cut is never documented on trust."""
     kramers = read(runs["kramers"] / "queer_results.json")["shift_current"]["diagnostics"]
     assert kramers["exact_degenerate_kpoints"] == 8 and kramers["kpoints_at_pyatb_threshold"] == 0
     assert kramers["regularisation"]["flagged_kpoints"] == 0 and kramers["clean_control"]["eligible"]
@@ -750,9 +846,11 @@ def test_exact_kramers_pairs_are_no_cause_and_a_near_degenerate_pair_is_bounded_
     assert split["regularisation"]["flagged_kpoints"] == 8 == split["regularisation"]["emulated_kpoints"]
     assert split["min_pair_gap_eV"] == pytest.approx(4e-5, rel=1e-6)
     for name in ("kramers", "split"):
-        # The candidate's emulation (its cut at the flagged k-points) is what the independent port prints.
+        # The candidate's emulation (its cut at the flagged k-points) is what the test's own port prints, and the
+        # compat transcription prints that too.
         port = pyatb_method_1_table(runs[name])
         assert np.max(np.abs(port - scheme_table(runs[name]))) <= 1e-6 * np.max(np.abs(port)), name
+        assert np.max(np.abs(port - pyatb_table(runs[name]))) <= 1e-8 * np.max(np.abs(port)), name
     physical = columns(read(runs["split"] / "queer_results.json")["shift_current"]["sigma_uA_V2"])
     shift = columns(split["regularisation"]["shift_uA_V2"])
     assert np.max(np.abs(shift)) > 1e-2 * np.max(np.abs(physical))
@@ -763,31 +861,67 @@ def test_exact_kramers_pairs_are_no_cause_and_a_near_degenerate_pair_is_bounded_
             runs, tmp_path / f"kramers-{factor}", "kramers", sigma=scheme_table(runs["kramers"]) * factor
         )
         assert report["verdict"] == FAIL and classes(report)["clean_control"] == UNEXPLAINED, factor
-    # PyATB's table differs from QUEER's physical value by the measured cut only: documented, bounded.
-    report = judge(runs, tmp_path / "split-alone", "split")
-    assert report["verdict"] == NOT_COMPARABLE and failed_preconditions(report) == ["clean_control"]
-    report = judge(runs, tmp_path / "split", "split", clean_control=clean_report)
-    assert report["verdict"] == PASS_DOCUMENTED, render_markdown(report)
-    documented = [item for item in report["quantities"] if item["class"] == DOCUMENTED]
-    assert documented and all("method-1 cut" in item["detail"] for item in documented)
-    assert report["semantics"]["rules"]["unbounded_causes"] == []
-    # The same cause cannot absorb anything beyond the measured cut.
-    for factor in (1.5, 0.9):
+    truth = pyatb_table(runs["split"])
+    report = judge(runs, tmp_path / "split-alone", "split", sigma=truth)
+    assert report["verdict"] == NOT_COMPARABLE and "clean_control" in failed_preconditions(report)
+    # Without the scfout the cut cannot be recomputed: not documented, not comparable.
+    report = judge(runs, tmp_path / "split-unverified", "split", clean_control=clean_report, sigma=truth)
+    assert report["verdict"] == NOT_COMPARABLE and failed_preconditions(report) == ["regularisation"]
+    assert "no scfout" in json.dumps(report["preconditions"]) and DOCUMENTED not in components(report)
+    # With it, every flagged k-point meets QUEER's estimator and PyATB's transcribed integrand: documented, at
+    # PyATB's default-like eta 0.01 too, beside its bins or its window, and for a spacing of 9.9e-5 eV.
+    for name in ("split", "split_binned", "split_window", "split_sharp", "split_near"):
+        report = judge(
+            runs,
+            tmp_path / f"{name}-scfout",
+            name,
+            clean_control=clean_report,
+            scfout=True,
+            sigma=pyatb_table(runs[name]),
+        )
+        assert report["verdict"] == PASS_DOCUMENTED, (name, render_markdown(report))
+        assert classes(report)["regularisation_recomputed"] == AGREE
+        documented = [item for item in report["quantities"] if item["class"] == DOCUMENTED]
+        assert documented and all("recomputed from the scfout" in item["detail"] for item in documented)
+        assert report["semantics"]["rules"]["unbounded_causes"] == []
+        assert report["semantics"]["rules"]["flagged_kpoints"]["verified"]
+    # A spacing of 1.01e-4 eV on PyATB's scale is no flagged k-point: a clean control that agrees directly.
+    far = read(runs["split_far"] / "queer_results.json")["shift_current"]["diagnostics"]
+    assert far["regularisation"]["flagged_kpoints"] == 0
+    assert far["min_pair_gap_eV"] * PYATB_HARTREE_EV / HARTREE_EV > 1e-4
+    report = judge(runs, tmp_path / "far", "split_far", sigma=pyatb_table(runs["split_far"]))
+    assert report["verdict"] == PASS and components(report) <= {AGREE, AFTER_CONVENTION}
+    near = read(runs["split_near"] / "queer_results.json")["shift_current"]["diagnostics"]
+    assert near["regularisation"]["flagged_kpoints"] == 8
+    # The same cause cannot absorb anything beyond PyATB's cut.
+    for factor in (1.5, 0.9, 1.001):
         report = judge(
             runs,
             tmp_path / f"split-{factor}",
             "split",
             clean_control=clean_report,
-            sigma=scheme_table(runs["split"]) * factor,
+            scfout=True,
+            sigma=truth * factor,
         )
         assert report["verdict"] == FAIL, factor
+    # Another scfout is not the candidate's: nothing is recomputed from it.
+    report = compare(
+        "SHIFT_CURRENT",
+        reference_from(tmp_path / "split-other", runs["split"], sigma=truth),
+        runs["split"],
+        clean_control=clean_report,
+        scfout=runs["clean"] / "scf.scfout",
+    )
+    assert report["verdict"] == NOT_COMPARABLE and "is not the candidate's" in json.dumps(
+        report["preconditions"]
+    )
 
 
-@pytest.mark.parametrize("name", ["sharp05", "sharp02", "sharp01", "sharp_collinear"])
+@pytest.mark.parametrize("name", ["sharp05", "sharp02", "sharp01", "sharp002", "sharp_collinear"])
 def test_a_correct_candidate_is_a_clean_control_at_pyatbs_narrow_broadening(runs, tmp_path, name):
     """PyATB's Hartree constant moves every transition by 2.3e-6 of its energy: at eta 0.01 a correct table
-    differs from PyATB's by 3.6e-4 of the peak. A direct agreement allows that effect as a derived term
-    (agree_after_convention), never more: the 1e-4 itself stays."""
+    differs from PyATB's by 3.6e-4 of the peak. PyATB's table moved back to QUEER's scale from its own curve meets
+    QUEER's value to 1e-4 (agree_after_convention); no candidate number enters, and the 1e-4 itself stays."""
     run = runs[name]
     collinear = name == "sharp_collinear"
     # PyATB: the independent port of its method-1 kernel, or (collinear) the emulation, which meets it to 1e-13.
@@ -800,12 +934,15 @@ def test_a_correct_candidate_is_a_clean_control_at_pyatbs_narrow_broadening(runs
         render_markdown(report)
     )
     assert components(report) <= {AGREE, AFTER_CONVENTION} and classes(report)["clean_control"] == AGREE
-    if name in ("sharp02", "sharp01"):
-        # The Hartree scale alone moves PyATB's table beyond 1e-4 of its peak, and the derived term covers it.
+    if name in ("sharp02", "sharp01", "sharp002"):
+        # The Hartree scale alone moves PyATB's table beyond 1e-4 of its peak; moved back to QUEER's scale from
+        # its own curve, it meets QUEER's value.
         assert np.max(np.abs(pyatb - physical)) > 1e-4 * peak
-        widened = [item for item in report["quantities"] if "Hartree scale and constants" in item["detail"]]
-        assert widened and all(item["metric"] > report["tolerance_basis"]["base_uA_V2"] for item in widened)
-        assert all(item["class"] == AFTER_CONVENTION for item in widened)
+        moved = [
+            item for item in report["quantities"] if "moved to QUEER's Hartree constant" in item["detail"]
+        ]
+        assert moved and all(item["metric"] > report["tolerance_basis"]["base_uA_V2"] for item in moved)
+        assert all(item["class"] == AFTER_CONVENTION for item in moved)
     # A wrong table never passes: doubled, negated, its largest component zeroed.
     zeroed = pyatb.copy()
     zeroed[:, int(np.argmax(np.max(np.abs(pyatb), axis=0)))] = 0.0
@@ -818,78 +955,55 @@ def test_a_correct_candidate_is_a_clean_control_at_pyatbs_narrow_broadening(runs
     assert report["verdict"] == FAIL and classes(report)["emulation_consistency"] == UNEXPLAINED
 
 
-def test_the_energy_scale_bound_holds_transition_by_transition_without_the_candidates_energies():
-    rng = np.random.default_rng(5)
-    scale = PYATB_HARTREE_EV / HARTREE_EV
-    for eta in (0.1, 0.02, 0.01):
-        omega = 0.3 + 0.002 * np.arange(3101)
-        energies = np.concatenate((rng.uniform(0.5, 6.0, 300), [0.3, 6.5, 40.0, 900.0]))
-        weights = rng.normal(size=(len(energies), len(SHIFT_COMPONENTS)))
-        offset = omega[:, None] - energies[None, :]
-        kernel = np.exp(-((offset / eta) ** 2)) / (eta * math.sqrt(math.pi))
-        moved = np.exp(-(((omega[:, None] - scale * energies[None, :]) / eta) ** 2)) / (
-            eta * math.sqrt(math.pi)
-        )
-        slope = (2 * np.abs(offset) / eta**2 * kernel) @ np.abs(weights)
-        weight = np.abs(weights).sum(axis=0)
-        bound = energy_scale_bound(slope, weight, eta=eta, omega=omega)
-        assert np.all(np.abs((moved - kernel) @ weights) <= bound * (1 + 1e-12)), eta
-        # The slope never exceeds its cap, over the transitions' range or anywhere.
-        for low, high in ((energies.min(), energies.max()), (None, None)):
-            assert np.all(slope <= slope_cap(weight, eta=eta, omega=omega, low=low, high=high) * (1 + 1e-12))
-    # Far from every transition the cap is the slope at the nearest one.
-    cap = slope_cap(np.ones(18), eta=0.1, omega=[3.0], low=1.0, high=2.0)
-    assert cap[0, 0] == pytest.approx(2 * 1.0 / 0.01 * math.exp(-100) / (0.1 * math.sqrt(math.pi)), rel=1e-12)
-
-
-def test_an_error_confined_to_the_flagged_kpoints_is_bounded_by_their_share(runs, tmp_path, clean_report):
+def test_an_error_confined_to_the_flagged_kpoints_never_passes(runs, tmp_path, clean_report):
     """A QUEER error at the k-points PyATB's method 1 cuts moves QUEER's value and the measured shift together
-    (shift = spectrum - cut spectrum there). The cut documents a difference only within those k-points' share of
-    the transition weights, (n_f / N_k) abs_weight / (eta sqrt(pi)), which such an error cannot widen; beyond
-    it the cut is an unbounded cause."""
+    (shift = spectrum - cut spectrum there). The flagged k-points' records must sum to both, and with the scfout
+    each one is recomputed: such an error fails at any size, never documented."""
     run = runs["split"]
     document = read(run / "queer_results.json")
-    diagnostics = document["shift_current"]["diagnostics"]
-    regularisation = diagnostics["regularisation"]
-    kernel = 1 / (0.1 * math.sqrt(math.pi))
-    weight = np.array(
-        [diagnostics["transition_bounds"]["abs_weight_uA_V2_eV"][key] for key in SHIFT_COMPONENTS]
-    )
-    share = 8 / 64 * weight * kernel
+    regularisation = document["shift_current"]["diagnostics"]["regularisation"]
     shift = columns(regularisation["shift_uA_V2"])
     physical = columns(document["shift_current"]["sigma_uA_V2"])
-    truth = scheme_table(run)
+    truth = pyatb_table(run)
     peak = np.max(np.abs(truth))
-    # The honest cut lies well inside the share, and the value is its unflagged part plus the flagged one, whose
-    # cut spectrum the cut's transitions there bound.
-    assert np.all(np.max(np.abs(shift), axis=0) <= 0.2 * share)
-    unflagged = columns(regularisation["sigma_unflagged_uA_V2"])
-    capacity = kernel * np.array(
-        [regularisation["abs_weight_flagged_uA_V2_eV"][key] for key in SHIFT_COMPONENTS]
-    )
-    assert np.all(np.abs(physical - shift - unflagged) <= capacity * (1 + 1e-9) + 1e-12 * peak)
-    report = judge(runs, tmp_path / "honest", "split", clean_control=clean_report)
-    assert report["verdict"] == PASS_DOCUMENTED, render_markdown(report)
-    assert report["semantics"]["rules"]["causes"]["regularisation"]["bounded"]
-    # The verifier's error of 50 and -20 times the true shift at the flagged k-points: gaps of 85 % and 32 % of
-    # PyATB's peak, documented before. Now the cut is unbounded: not comparable without a self-convergence
-    # estimate, and the symmetry gate fails the second.
-    for factor, verdict in ((50.0, NOT_COMPARABLE), (-20.0, FAIL)):
+    assert np.max(np.abs(physical + 2.0 * shift - truth)) > 1e-2 * peak
+    for factor in (2.0, 4.0, 8.0, -4.0, -8.0, 50.0, -20.0):
 
         def bug(block, factor=factor):
             block["sigma_uA_V2"] = as_columns(physical + factor * shift)
             block["diagnostics"]["regularisation"]["shift_uA_V2"] = as_columns((1 + factor) * shift)
 
-        copy = edited(tmp_path / f"bug{factor:g}", run, bug)
-        assert np.max(np.abs(physical + factor * shift - truth)) > 0.3 * peak
-        reference = reference_from(tmp_path / f"bug{factor:g}-ref", copy, sigma=truth)
-        report = compare("SHIFT_CURRENT", reference, copy, clean_control=clean_report)
-        assert report["verdict"] == verdict and DOCUMENTED not in components(report), render_markdown(report)
-        cause = report["semantics"]["rules"]["causes"]["regularisation"]
-        assert not cause["bounded"] and "share" in cause["detail"], cause
-        assert classes(report)["regularisation_record"] == AGREE == classes(report)["emulation_consistency"]
-        if verdict == NOT_COMPARABLE:
-            assert failed_preconditions(report) == ["self_convergence"]
+        def follow(block, factor=factor):
+            # The records follow the error too: each flagged k-point's physical transitions carry it.
+            bug(block)
+            for item in block["diagnostics"]["regularisation"]["flagged_records"]["kpoints"]:
+                own, cut = item["physical"], item["cut"]
+                own["weight_uA_V2_eV"] = (
+                    np.asarray(own["weight_uA_V2_eV"]).tolist()
+                    + (factor * np.asarray(own["weight_uA_V2_eV"])).tolist()
+                    + (-factor * np.asarray(cut["weight_uA_V2_eV"])).tolist()
+                )
+                own["energy_eV"] = own["energy_eV"] * 2 + cut["energy_eV"]
+
+        for label, edit in (("bug", bug), ("follow", follow)):
+            copy = edited(tmp_path / f"{label}{factor:g}", run, edit)
+            reference = reference_from(tmp_path / f"{label}{factor:g}-ref", copy, sigma=truth)
+            for scfout in (None, run / "scf.scfout"):
+                report = compare("SHIFT_CURRENT", reference, copy, clean_control=clean_report, scfout=scfout)
+                assert DOCUMENTED not in components(report), (label, factor, render_markdown(report))
+                if label == "bug":
+                    # The records still hold the true transitions: the value contradicts them.
+                    assert (
+                        report["verdict"] == FAIL and classes(report)["regularisation_record"] == UNEXPLAINED
+                    )
+                elif scfout is not None:
+                    assert report["verdict"] == FAIL, (factor, render_markdown(report))
+                    assert classes(report)["regularisation_recomputed"] == UNEXPLAINED
+                else:
+                    # Consistent records are not trusted: the cut needs the scfout.
+                    assert report["verdict"] in (NOT_COMPARABLE, FAIL), (factor, render_markdown(report))
+                    if report["verdict"] == NOT_COMPARABLE:
+                        assert failed_preconditions(report) == ["regularisation"]
     # A forged flag cannot open the cut on a clean run: its pair spacings flag nothing.
     clean_physical = columns(read(runs["clean"] / "queer_results.json")["shift_current"]["sigma_uA_V2"])
 
@@ -908,99 +1022,199 @@ def test_an_error_confined_to_the_flagged_kpoints_is_bounded_by_their_share(runs
         reference_from(tmp_path / "forged-ref", copy, sigma=scheme_table(runs["clean"])),
         copy,
         clean_control=clean_report,
+        scfout=runs["clean"] / "scf.scfout",
     )
     assert report["verdict"] == FAIL and classes(report)["regularisation_record"] == UNEXPLAINED
-    # The value without the flagged k-points must leave a cut spectrum their cut transitions can carry.
-    for label, change in (("unflagged", 1.5), ("doubled", 2.0)):
+    # The value without the flagged k-points, or a record of a k-point that is not on the grid, or one missing.
+    unflagged = columns(regularisation["sigma_unflagged_uA_V2"])
 
-        def wrong(block, label=label, change=change):
-            target = block["diagnostics"]["regularisation"]
-            if label == "unflagged":
-                target["sigma_unflagged_uA_V2"] = as_columns(change * unflagged)
-            else:
-                block["sigma_uA_V2"] = as_columns(change * physical)
-                block["diagnostics"]["pyatb_scheme"]["sigma_uA_V2"] = as_columns(change * truth)
-                target["shift_uA_V2"] = as_columns(change * shift)
+    def moved_k(block):
+        block["diagnostics"]["regularisation"]["flagged_records"]["kpoints"][0]["k"] = [0.1, 0.2, 0.3]
 
-        copy = edited(tmp_path / label, run, wrong)
+    def unflag(block):
+        block["diagnostics"]["regularisation"]["sigma_unflagged_uA_V2"] = as_columns(1.5 * unflagged)
+
+    def dropped(block):
+        block["diagnostics"]["regularisation"]["flagged_records"]["kpoints"].pop()
+
+    for label, change in (("unflagged", unflag), ("off-grid", moved_k), ("dropped", dropped)):
+        copy = edited(tmp_path / label, run, change)
         reference = reference_from(tmp_path / f"{label}-ref", copy, sigma=truth)
-        report = compare("SHIFT_CURRENT", reference, copy, clean_control=clean_report)
+        report = compare(
+            "SHIFT_CURRENT", reference, copy, clean_control=clean_report, scfout=run / "scf.scfout"
+        )
         assert report["verdict"] == FAIL and classes(report)["regularisation_record"] == UNEXPLAINED, label
 
 
-def test_transition_bounds_above_what_the_comparator_derives_fail(runs, tmp_path, clean_report):
-    """abs_slope is capped by abs_weight times the largest |G'| over the transitions' range, the window's weights
-    by the whole weight and the transitions' range, bin_moves by twice the weight: a bound above its cap fails,
-    and one at its cap cannot hide a wrong value."""
-    run = runs["window"]
-    document = read(run / "queer_results.json")
-    block = document["shift_current"]
-    physical = columns(block["sigma_uA_V2"])
-    truth = scheme_table(run)
-    magnitude = np.abs(physical)
-    wrong = physical.copy()
-    rows = []
-    for column in range(len(SHIFT_COMPONENTS)):
-        order = np.argsort(-magnitude[:, column])
-        keep = order[np.cumsum(magnitude[order, column]) <= 0.75 * magnitude[:, column].sum()]
-        wrong[keep, column] *= 2
-        rows.append(keep)
-    bounds = block["diagnostics"]["transition_bounds"]
-    weight = np.array([bounds["abs_weight_uA_V2_eV"][key] for key in SHIFT_COMPONENTS])
-    transitions = block["diagnostics"]["transitions"]
-    cap = slope_cap(
-        weight, eta=0.1, omega=block["omega_eV"], low=transitions["min_eV"], high=transitions["max_eV"]
-    )
-    for label, raised in (("inflated", 1e6 * np.max(magnitude)), ("capped", None)):
+def test_no_record_of_the_candidate_widens_a_tolerance(runs, tmp_path, clean_report):
+    """A physical value off by 0.5 % to 100 % beside records scaled by a normalization fault must never pass as a
+    clean control or be documented. No candidate magnitude enters a tolerance: the window's dropped
+    transitions, the emulation's transitions, the bins' moves and the flagged k-points' transitions are exact terms
+    that must add up, so inflating any of them fails, with or without a wrong physical value."""
+    for name in ("sharp01", "clean"):
+        for factor in (1.005, 1.02, 1.1, 2.0):
+            copy = tampered(
+                tmp_path / f"{name}-{factor}", runs[name], lambda values, factor=factor: factor * values
+            )
+            reference = reference_from(
+                tmp_path / f"{name}-{factor}-ref", copy, sigma=scheme_table(runs[name])
+            )
+            report = compare("SHIFT_CURRENT", reference, copy)
+            assert report["verdict"] == FAIL and classes(report)["clean_control"] == UNEXPLAINED, (
+                name,
+                factor,
+            )
 
-        def inflate(target, raised=raised):
-            target["sigma_uA_V2"] = as_columns(wrong)
-            slope = columns(target["diagnostics"]["transition_bounds"]["abs_slope_uA_V2_per_eV"])
-            for column, keep in enumerate(rows):
-                slope[keep, column] = cap[keep, column] if raised is None else slope[keep, column] + raised
-            target["diagnostics"]["transition_bounds"]["abs_slope_uA_V2_per_eV"] = as_columns(slope)
+    def inflate(key, factor, error):
+        def change(block):
+            scheme = block["diagnostics"]["pyatb_scheme"]
+            scheme[key] = as_columns(factor * columns(scheme[key]))
+            if error != 1.0:
+                block["sigma_uA_V2"] = as_columns(error * columns(block["sigma_uA_V2"]))
+                regularisation = block["diagnostics"]["regularisation"]
+                regularisation["sigma_unflagged_uA_V2"] = as_columns(
+                    error * columns(regularisation["sigma_unflagged_uA_V2"])
+                )
 
-        copy = edited(tmp_path / label, run, inflate)
-        report = compare(
-            "SHIFT_CURRENT",
-            reference_from(tmp_path / f"{label}-ref", copy, sigma=truth),
-            copy,
-            clean_control=clean_report,
-        )
-        assert report["verdict"] == FAIL, (label, render_markdown(report))
-        expected = UNEXPLAINED if label == "inflated" else AGREE
-        assert classes(report)["transition_bounds"] == expected, label
-        assert classes(report)["emulation_consistency"] == UNEXPLAINED, label
+        return change
 
-    # The window's weights: more than the whole, or below a window the lowest transition lies inside.
-    def heavy(target):
-        bounds = target["diagnostics"]["transition_bounds"]
-        bounds["abs_weight_below_window_uA_V2_eV"] = {
-            key: 2 * value for key, value in bounds["abs_weight_uA_V2_eV"].items()
-        }
-
-    def misplaced(target):
-        bounds = target["diagnostics"]["transition_bounds"]
-        bounds["abs_weight_below_window_uA_V2_eV"] = {
-            key: 1e-3 * value for key, value in bounds["abs_weight_uA_V2_eV"].items()
-        }
-
-    def moves(target):
-        bounds = target["diagnostics"]["transition_bounds"]
-        bins = columns(bounds["bin_moves_uA_V2"])
-        bins[0] = 3 * np.array([bounds["abs_weight_uA_V2_eV"][key] for key in SHIFT_COMPONENTS])
-        bounds["bin_moves_uA_V2"] = as_columns(bins)
-
-    for label, name, edit in (
-        ("heavy", "window", heavy),
-        ("misplaced", "clean", misplaced),
-        ("moves", "binned", moves),
+    for name, key in (
+        ("window", "window_dropped_uA_V2"),
+        ("window_sharp", "window_dropped_uA_V2"),
+        ("clean", "transitions_uA_V2"),
     ):
-        copy = edited(tmp_path / label, runs[name], edit)
-        report = compare(
-            "SHIFT_CURRENT", reference_from(tmp_path / f"{label}-ref", copy), copy, clean_control=clean_report
-        )
-        assert report["verdict"] == FAIL and classes(report)["transition_bounds"] == UNEXPLAINED, label
+        for factor in (10.0, 1e3):
+            for error in (1.0, 1.01, 1.1):
+                label = f"inflate-{name}-{factor:g}-{error:g}"
+                copy = edited(tmp_path / label, runs[name], inflate(key, factor, error))
+                reference = reference_from(tmp_path / f"{label}-ref", copy, sigma=scheme_table(runs[name]))
+                report = compare("SHIFT_CURRENT", reference, copy, clean_control=clean_report)
+                assert report["verdict"] == FAIL and DOCUMENTED not in components(report), label
+
+    def moved(block):
+        record = block["diagnostics"]["pyatb_scheme"]["moved_transitions"]
+        record["weight_uA_V2_eV"] = (1e3 * np.asarray(record["weight_uA_V2_eV"])).tolist()
+        block["binned_uA_V2"] = as_columns(1.1 * columns(block["binned_uA_V2"]))
+
+    def records(block):
+        for item in block["diagnostics"]["regularisation"]["flagged_records"]["kpoints"]:
+            for part in ("physical", "cut"):
+                item[part]["weight_uA_V2_eV"] = (10 * np.asarray(item[part]["weight_uA_V2_eV"])).tolist()
+
+    for name, change in (("split_binned", moved), ("split", records)):
+        copy = edited(tmp_path / f"records-{name}", runs[name], change)
+        reference = reference_from(tmp_path / f"records-{name}-ref", copy, sigma=pyatb_table(runs[name]))
+        for scfout in (None, runs[name] / "scf.scfout"):
+            report = compare("SHIFT_CURRENT", reference, copy, clean_control=clean_report, scfout=scfout)
+            assert report["verdict"] == FAIL and DOCUMENTED not in components(report), name
+
+
+def test_a_bug_over_every_kpoint_never_passes(runs, tmp_path, clean_report):
+    """A normalization bug over every k-point: every table the runner writes (value, its unflagged part and shift, the
+    emulation, its transitions, the window's dropped transitions, the bins' moves and the flagged k-points'
+    transitions) twice the truth, consistently. PyATB prints the truth: no scheme reproduces a factor of two."""
+
+    def doubled(block):
+        for holder in (block, block["legacy_single_channel"] or {}):
+            for key in ("sigma_uA_V2", "binned_uA_V2"):
+                if holder.get(key) is not None:
+                    holder[key] = as_columns(2 * columns(holder[key]))
+        diagnostics = block["diagnostics"]
+        regularisation, scheme = diagnostics["regularisation"], diagnostics["pyatb_scheme"]
+        for key in ("shift_uA_V2", "sigma_unflagged_uA_V2", "binned_shift_uA_V2", "binned_unflagged_uA_V2"):
+            if regularisation.get(key) is not None:
+                regularisation[key] = as_columns(2 * columns(regularisation[key]))
+        for key in ("sigma_uA_V2", "transitions_uA_V2", "window_dropped_uA_V2"):
+            if scheme.get(key) is not None:
+                scheme[key] = as_columns(2 * columns(scheme[key]))
+        for item in regularisation["flagged_records"]["kpoints"]:
+            for part in ("physical", "cut"):
+                item[part]["weight_uA_V2_eV"] = (2 * np.asarray(item[part]["weight_uA_V2_eV"])).tolist()
+        if scheme.get("moved_transitions"):
+            record = scheme["moved_transitions"]
+            record["weight_uA_V2_eV"] = (2 * np.asarray(record["weight_uA_V2_eV"])).tolist()
+
+    for name in ("window", "split", "split_window", "clean", "sharp01", "binned", "split_binned"):
+        copy = edited(tmp_path / name, runs[name], doubled)
+        reference = reference_from(tmp_path / f"{name}-ref", copy, sigma=scheme_table(runs[name]))
+        for scfout in (None, runs[name] / "scf.scfout"):
+            report = compare("SHIFT_CURRENT", reference, copy, clean_control=clean_report, scfout=scfout)
+            assert DOCUMENTED not in components(report), (name, render_markdown(report))
+            if name.startswith("split") and scfout is None:
+                # Consistent records of flagged k-points are not trusted: undecided until recomputed.
+                assert report["verdict"] == NOT_COMPARABLE and failed_preconditions(report) == [
+                    "regularisation"
+                ]
+            else:
+                assert report["verdict"] == FAIL, (name, render_markdown(report))
+    # With an unbounded cause and a converged candidate the plan documents it, as before.
+    copy = edited(tmp_path / "scissors", runs["scissors"], doubled)
+    reference = reference_from(tmp_path / "scissors-ref", copy, sigma=scheme_table(runs["scissors"]))
+    report = compare("SHIFT_CURRENT", reference, copy, clean_control=clean_report)
+    assert report["verdict"] == PASS_DOCUMENTED and report["semantics"]["rules"]["unbounded_causes"] == [
+        "scissors"
+    ]
+
+
+def test_noise_on_pyatbs_table_counts_against_the_tolerance(runs, tmp_path):
+    """PyATB's own table with noise of a share of its peak on every value: a clean control holds to 1e-4 of the
+    peak beside the Hartree scale (about 3e-5 of it at eta 0.1 with domega = eta, not removed on that step)."""
+    truth = scheme_table(runs["clean"])
+    peak = np.max(np.abs(truth))
+    signs = np.random.default_rng(4).choice([-1.0, 1.0], size=truth.shape)
+    for share, verdict in ((1e-6, PASS), (3e-5, PASS), (1.2e-4, FAIL), (1e-3, FAIL)):
+        report = judge(runs, tmp_path / f"noise-{share:g}", "clean", sigma=truth + share * peak * signs)
+        assert report["verdict"] == verdict, (share, render_markdown(report))
+
+
+def test_a_missing_record_is_a_contradiction(runs, tmp_path, clean_report):
+    """A candidate without diagnostics.regularisation (with or without pyatb_scheme) must not open an unmeasured
+    cause. The runner always writes its records; one missing is a contradiction that fails, here on a
+    converged clean-configuration method-1 candidate whose physical value is 2 or 0.3 times the truth."""
+    run = runs["converged"]
+    convergence = read(run / "queer_results.json")["shift_current"]["diagnostics"]["self_convergence"]
+    assert convergence["legacy_single_channel"]["converged"]
+    truth = scheme_table(run)
+    for drop in (
+        ("regularisation",),
+        ("regularisation", "pyatb_scheme"),
+        ("pyatb_scheme",),
+        ("pyatb_scheme.transitions_uA_V2",),
+        ("pyatb_scheme.window_dropped_uA_V2",),
+    ):
+        for factor in (2.0, 0.3):
+
+            def change(block, drop=drop, factor=factor):
+                legacy = block["legacy_single_channel"]
+                legacy["sigma_uA_V2"] = as_columns(factor * columns(legacy["sigma_uA_V2"]))
+                for key in drop:
+                    if "." in key:
+                        outer, inner = key.split(".")
+                        block["diagnostics"][outer].pop(inner)
+                    else:
+                        block["diagnostics"].pop(key)
+
+            label = "-".join(drop) + f"-{factor:g}"
+            copy = edited(tmp_path / label, run, change)
+            reference = reference_from(tmp_path / f"{label}-ref", copy, sigma=truth)
+            report = compare("SHIFT_CURRENT", reference, copy, clean_control=clean_report)
+            assert report["verdict"] == FAIL, (label, render_markdown(report))
+            assert classes(report)["candidate_record"] == UNEXPLAINED and DOCUMENTED not in components(report)
+            assert report["semantics"]["rules"]["unbounded_causes"] == []
+    # Without smearing the moved transitions, with flagged k-points their records.
+    for name, key in (
+        ("binned", "pyatb_scheme.moved_transitions"),
+        ("split", "regularisation.flagged_records"),
+    ):
+
+        def missing(block, key=key):
+            outer, inner = key.split(".")
+            block["diagnostics"][outer].pop(inner)
+
+        copy = edited(tmp_path / f"missing-{name}", runs[name], missing)
+        reference = reference_from(tmp_path / f"missing-{name}-ref", copy)
+        report = compare("SHIFT_CURRENT", reference, copy, clean_control=clean_report)
+        assert report["verdict"] == FAIL and classes(report)["candidate_record"] == UNEXPLAINED, name
 
 
 def test_the_build_identity_hashes_every_source_file_of_the_package(runs, tmp_path, clean_report):

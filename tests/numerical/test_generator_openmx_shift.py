@@ -18,10 +18,11 @@ from openmx_files import shift_collinear_scfout, shift_spinor_scfout
 from queer import ExecutionOptions, OpenMXModel
 from queer.compat.generator.openmx_params import limit_refusal
 from queer.compat.generator.openmx_shift import (
+    FLAGGED_RECORD_LIMIT,
     PyatbShiftScheme,
-    bin_moves,
+    bin_rows,
     component_table,
-    edge_allowance,
+    edge_transitions,
     pyatb_scheme_spectrum,
 )
 from queer.compat.generator.openmx_steps import single_channel_model
@@ -138,12 +139,20 @@ def test_the_shift_current_is_queers_own_estimator_in_pyatbs_layout(tmp_path):
     regularisation = diagnostics["regularisation"]
     assert regularisation["flagged_kpoints"] == 0 and regularisation["kpoints"] == 18
     assert not np.any(columns(regularisation["shift_uA_V2"]))
-    # Without a flagged k-point the value without them is the value, and they carry no weight.
+    # Without a flagged k-point the value without them is the value, and none is recorded.
     assert np.allclose(columns(regularisation["sigma_unflagged_uA_V2"]), physical, rtol=1e-13, atol=0)
-    assert set(regularisation["abs_weight_flagged_uA_V2_eV"].values()) == {0.0}
-    bounds = diagnostics["transition_bounds"]
-    assert bounds["max_abs_energy_eV"] == pytest.approx(transitions["max_eV"], rel=1e-15)
-    assert all(value == 0 for value in bounds["abs_weight_below_window_uA_V2_eV"].values())
+    records = regularisation["flagged_records"]
+    assert (
+        records["recorded"] and records["kpoints"] == [] and records["limit_kpoints"] == FLAGGED_RECORD_LIMIT
+    )
+    # The emulation's own sum of its transitions under QUEER's Gaussian is the value; nothing lies outside the
+    # window, so PyATB's window drops nothing.
+    pyatb = diagnostics["pyatb_scheme"]
+    listed = columns(pyatb["transitions_uA_V2"])
+    assert np.max(np.abs(listed - physical)) <= 1e-12 * np.max(np.abs(physical))
+    assert not np.any(columns(pyatb["window_dropped_uA_V2"]))
+    assert pyatb["moved_transitions"] is None and pyatb["edge_transitions"] == 0
+    assert "transition_bounds" not in diagnostics and "edge_allowance_uA_V2" not in pyatb
 
 
 def pyatb_loops(scheme, energies, weights):
@@ -194,37 +203,42 @@ def test_the_pyatb_scheme_follows_pyatbs_loops_transition_by_transition(smearing
         assert np.any(spectrum[0]) and pyatb_loops(scheme, energies[[0]], weights[[0]]).any()
 
 
-def test_edge_allowance_counts_transitions_on_bin_and_window_edges():
+def test_edge_transitions_counts_transitions_on_bin_and_window_edges():
     scheme = PyatbShiftScheme(1.0, 0.1, 10, 0.05, 0, False, energy_scale=1.0)
     energies = np.array([1.2 + 1e-12, 1.25, 1.0 - 1e-12, 1.5])
-    weights = np.ones((4, len(SHIFT_COMPONENTS))) * np.array([[1.0], [10.0], [100.0], [1000.0]])
-    allowance, count = edge_allowance(scheme, energies, weights)
-    assert count == 3 and np.allclose(allowance, 1101.0)
+    assert edge_transitions(scheme, energies) == 3
+    assert edge_transitions(scheme, energies[[1]]) == 0
 
 
-def test_bin_moves_name_the_transitions_queers_and_pyatbs_bins_place_apart():
+def test_bin_rows_name_the_transitions_queers_and_pyatbs_bins_place_apart():
     scheme = PyatbShiftScheme(1.0, 0.1, 10, 0.05, 0, False)
     half = 1.0 + 0.1 * np.arange(10) + 0.05
     # Inside a bin, on a bin edge, moved across the window's end by PyATB's Hartree scale (2.0000001 eV is
     # 1.9999956 eV on its scale), and below and above the window.
     energies = np.array([1.25, 1.3, 2.0000001, 0.95, 2.05])
-    weights = np.ones((5, len(SHIFT_COMPONENTS))) * np.array([[1.0], [10.0], [100.0], [1000.0], [10000.0]])
-    moves = bin_moves(scheme, half, 0.1, energies, weights)
-    assert moves[9, 0] == 100.0 and moves[0, 0] == 0.0 and moves[:, 0].sum() in (100.0, 110.0, 120.0)
+    own, pyatb, ambiguous = bin_rows(scheme, half, 0.1, energies)
+    assert own[0] == pyatb[0] == 2 and not ambiguous[0]
+    assert ambiguous[1]
+    assert own[2] == -1 and pyatb[2] == 9 and not ambiguous[2]
+    assert own[3] == pyatb[3] == -1 and own[4] == pyatb[4] == -1
     # A named pair keeps 0.95 eV: PyATB's int(-0.5) == 0 puts it in bin 0, QUEER's histogram drops it.
-    pair = bin_moves(PyatbShiftScheme(1.0, 0.1, 10, 0.05, 0, True), half, 0.1, energies, weights)
-    assert pair[0, 0] == 1000.0
-    # Row by row, the moves bound PyATB's bins against QUEER's histogram half a bin higher.
+    own, pyatb, _ = bin_rows(PyatbShiftScheme(1.0, 0.1, 10, 0.05, 0, True), half, 0.1, energies)
+    assert own[3] == -1 and pyatb[3] == 0
+    # PyATB's bins are QUEER's histogram half a bin higher plus the moves of the transitions the two place apart.
     rng = np.random.default_rng(5)
     for pair_mode in (False, True):
         scheme = PyatbShiftScheme(1.0, 0.1, 10, 0.05, 0, pair_mode)
         energies = np.concatenate((rng.uniform(0.8, 2.2, 3000), 1.0 + 0.1 * np.arange(12)))
         weights = rng.normal(size=(len(energies), len(SHIFT_COMPONENTS)))
-        pyatb, _ = pyatb_scheme_spectrum(scheme, energies, weights)
+        pyatb_table, _ = pyatb_scheme_spectrum(scheme, energies, weights)
         lines = (half[:, None] - energies >= -0.05) & (half[:, None] - energies < 0.05)
         queer = lines.astype(float) @ weights
-        moves = bin_moves(scheme, half, 0.1, energies, weights)
-        assert np.all(np.abs(pyatb - queer) <= moves + 1e-12) and np.any(moves)
+        own, pyatb, ambiguous = bin_rows(scheme, half, 0.1, energies)
+        moved = (own != pyatb) | ambiguous
+        moves = np.zeros_like(queer)
+        np.add.at(moves, pyatb[moved & (pyatb >= 0)], weights[moved & (pyatb >= 0)])
+        np.subtract.at(moves, own[moved & (own >= 0)], weights[moved & (own >= 0)])
+        assert np.allclose(pyatb_table, queer + moves, rtol=0, atol=1e-12) and moved.any()
 
 
 def test_a_collinear_scfout_reports_both_channels_and_pyatbs_doubled_spin_up_channel(tmp_path):
@@ -303,10 +317,108 @@ def test_without_smearing_the_file_holds_pyatbs_bin_weights(tmp_path):
     written = parse_shift_current((tmp_path / "Out/Shift_Current/shift_current.dat").read_text())
     assert np.allclose(written["sigma"], binned, rtol=5.01e-7, atol=0)
     scheme = columns(block["diagnostics"]["pyatb_scheme"]["sigma_uA_V2"])
-    # PyATB's bins and QUEER's differ only by the transitions bin_moves names.
-    moves = columns(block["diagnostics"]["transition_bounds"]["bin_moves_uA_V2"])
+    # PyATB's bins and QUEER's differ only by the transitions the record names, each in its two rows.
+    record = block["diagnostics"]["pyatb_scheme"]["moved_transitions"]
+    assert record["recorded"] and block["diagnostics"]["pyatb_scheme"]["window_dropped_uA_V2"] is None
+    moves = np.zeros_like(binned)
+    for weight, own, theirs in zip(record["weight_uA_V2_eV"], record["queer_row"], record["pyatb_row"]):
+        if theirs >= 0:
+            moves[theirs] += weight
+        if own >= 0:
+            moves[own] -= weight
     ratio = pyatb_shift_constant_ratio()
-    assert np.all(np.abs(scheme - ratio * binned) <= ratio * moves + 1e-9 * np.max(np.abs(binned)))
+    assert np.allclose(scheme, ratio * (binned + moves), rtol=0, atol=1e-9 * np.max(np.abs(binned)))
+
+
+def gaussian_rows(omega, energies, weights, eta):
+    """QUEER's Gaussian (standard deviation eta/sqrt(2)) of recorded transitions on the photon energies."""
+    energies = np.asarray(energies)
+    kernel = np.exp(-(((np.asarray(omega)[:, None] - energies[None, :]) / eta) ** 2)) / (
+        eta * math.sqrt(math.pi)
+    )
+    return kernel @ np.asarray(weights).reshape(len(energies), len(SHIFT_COMPONENTS))
+
+
+def test_every_flagged_kpoint_is_recorded_with_its_transitions(tmp_path, monkeypatch):
+    """A comparison recomputes PyATB's method-1 cut from the scfout at the k-points the runner flags: it records
+    each one (fractional coordinates) with QUEER's transitions there, physical and with the cut, which sum to
+    the value less the value without them and to the shift; beyond the record's limit it keeps none."""
+    payload = shift_params(grid=[4, 4, 4])
+    code, document = execute(tmp_path / "split", payload, exchange=2e-5)
+    assert code == EXIT_OK, document.get("error")
+    block = document["shift_current"]
+    regularisation = block["diagnostics"]["regularisation"]
+    records = regularisation["flagged_records"]
+    assert regularisation["flagged_kpoints"] == 8 and records["recorded"] and records["reason"] is None
+    omega = np.asarray(block["omega_eV"])
+    physical = columns(block["sigma_uA_V2"])
+    total = np.zeros_like(physical)
+    cut = np.zeros_like(physical)
+    keys = set()
+    for item in records["kpoints"]:
+        keys.add(tuple(np.round(np.asarray(item["k"]) * 4).astype(int)))
+        assert item["pair_gap_eV"] == pytest.approx(4e-5, rel=1e-6)
+        spectrum = gaussian_rows(
+            omega, item["physical"]["energy_eV"], item["physical"]["weight_uA_V2_eV"], 0.1
+        )
+        total += spectrum
+        cut += spectrum - gaussian_rows(omega, item["cut"]["energy_eV"], item["cut"]["weight_uA_V2_eV"], 0.1)
+    assert len(keys) == 8
+    scale = np.max(np.abs(physical))
+    unflagged = columns(regularisation["sigma_unflagged_uA_V2"])
+    assert np.max(np.abs(physical - unflagged - total)) <= 1e-12 * scale
+    assert np.max(np.abs(columns(regularisation["shift_uA_V2"]) - cut)) <= 1e-12 * scale
+    # The emulation's transitions under QUEER's Gaussian are the value less the measured cut.
+    listed = columns(block["diagnostics"]["pyatb_scheme"]["transitions_uA_V2"])
+    assert np.max(np.abs(listed - (physical - columns(regularisation["shift_uA_V2"])))) <= 1e-12 * scale
+    # Past the record's limit nothing is kept: a comparison then cannot recompute the cut.
+    import queer.compat.generator.openmx_shift as shift_module
+
+    monkeypatch.setattr(shift_module, "FLAGGED_RECORD_LIMIT", 4)
+    code, document = execute(tmp_path / "limited", payload, exchange=2e-5)
+    records = document["shift_current"]["diagnostics"]["regularisation"]["flagged_records"]
+    assert code == EXIT_OK and not records["recorded"] and records["kpoints"] == []
+    assert "8 flagged k-points" in records["reason"]
+
+
+def test_the_window_record_holds_what_pyatbs_window_drops(tmp_path):
+    """QUEER's value of the transitions outside PyATB's window, at the k-points it does not regularize: it reaches
+    only the photon energies within a few eta of the window's ends."""
+    code, document = execute(tmp_path, shift_params(omega=[2.0, 4.0]))
+    assert code == EXIT_OK, document.get("error")
+    block = document["shift_current"]
+    pyatb = block["diagnostics"]["pyatb_scheme"]
+    dropped = columns(pyatb["window_dropped_uA_V2"])
+    omega = np.asarray(block["omega_eV"])
+    end = 2.0 + len(omega) * 0.1
+    far = np.minimum(omega - 2.0, end - omega) >= 0.6
+    physical = columns(block["sigma_uA_V2"])
+    assert np.max(np.abs(dropped)) > 0.1 * np.max(np.abs(physical))
+    assert np.max(np.abs(dropped[far])) <= 1e-12 * np.max(np.abs(physical))
+    model = OpenMXModel.from_scfout(tmp_path / "scf.scfout")
+    # QUEER's own estimator without the transitions outside [2.0, 4.1) eV on PyATB's scale: the value less the record.
+    from queer.compat.generator.openmx_shift import PyatbShiftScheme as Scheme
+    from queer.observables.nonlinear import shift_current_point, shift_current_settings
+
+    scheme = Scheme(2.0, 0.1, len(omega), 0.1, 1, False)
+    settings = shift_current_settings(
+        model, omega, model.fermi_energy, eta=0.1 / math.sqrt(2), smearing="gaussian", occupied_bands=2
+    )
+    kept = np.zeros_like(physical)
+    points = np.stack(np.meshgrid(*[np.arange(n) / n for n in (3, 3, 2)], indexing="ij"), -1).reshape(-1, 3)
+    for k in points:
+        point = shift_current_point(model, k, settings)
+        source, target = np.nonzero(point["factor"])
+        energies = point["gap"][source, target]
+        weights = component_table(
+            np.moveaxis(point["factor"][source, target] * point["integrand"][..., source, target], -1, 0)
+        )
+        inside = scheme.inside(energies)
+        kept += gaussian_rows(omega, energies[inside], weights[inside], 0.1)
+    from queer.compat.generator.openmx_shift import conversion
+
+    kept *= conversion(model) / len(points)
+    assert np.max(np.abs(physical - dropped - kept)) <= 1e-12 * np.max(np.abs(physical))
 
 
 def test_a_left_handed_lattice_flips_what_the_file_holds(tmp_path):

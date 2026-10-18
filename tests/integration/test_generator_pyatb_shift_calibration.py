@@ -87,16 +87,16 @@ def assert_emulation_reproduces_pyatb(case, document):
     """QUEER's emulation of PyATB's scheme reproduces PyATB's table to PyATB's print precision.
 
     Each printed value within 1e-6 of itself (``%15.6e`` rounds to 5e-7), plus 1e-10
-    of the peak for summation order and the allowance of the transitions within
-    1e-9 eV of a bin or window edge.
+    of the peak for summation order; no transition lies within 1e-9 eV of a bin or
+    window edge, where the two codes' rounding could place it apart.
     """
     printed = np.asarray(
         parse_shift_current((DATA / case / "Out/Shift_Current/shift_current.dat").read_text())["sigma"]
     )
     scheme = document["shift_current"]["diagnostics"]["pyatb_scheme"]
+    assert scheme["edge_transitions"] == 0, case
     emulated = np.column_stack([scheme["sigma_uA_V2"][name] for name in SHIFT_COMPONENTS])
-    edge = np.array([scheme["edge_allowance_uA_V2"][name] for name in SHIFT_COMPONENTS])
-    allowed = PRINT_PRECISION * np.abs(emulated) + 1e-10 * np.max(np.abs(emulated)) + edge
+    allowed = PRINT_PRECISION * np.abs(emulated) + 1e-10 * np.max(np.abs(emulated))
     excess = np.abs(printed - emulated) - allowed
     assert np.all(excess <= 0), f"{case}: worst excess {np.max(excess):.3g} microA/V^2"
 
