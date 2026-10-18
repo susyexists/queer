@@ -41,7 +41,7 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
-from ...observables.qgeom import OUTCOMES, AdaptiveMesh, key_hashes, seed_id
+from ...observables.qgeom import OUTCOMES, SEED_KINDS, AdaptiveMesh, key_hashes, seed_id
 
 HISTORY_EXACT = ("phase", "vertices", "leaves", "target")
 # The driver keeps the last entries of its history.
@@ -92,10 +92,6 @@ def _rows(entry: Mapping[str, Any]) -> dict[int, tuple[int, int]]:
 
 def _complete(entry: Mapping[str, Any]) -> bool:
     return len(entry.get("tied") or []) == entry.get("tied_count", 0)
-
-
-def _outcomes(mask: int) -> list[str]:
-    return [name for i, name in enumerate(OUTCOMES) if mask >> i & 1]
 
 
 def lowest_bit(x: np.ndarray) -> np.ndarray:
@@ -335,8 +331,7 @@ def _seed_difference(sa: Any, sb: Any) -> Attribution | None:
 
     def rows(record: Mapping[str, Any]) -> dict[int, int]:
         return {
-            seed_id(i, ("gap", "extremum")[kind], b0, b1): taken
-            for i, kind, b0, b1, taken in record.get("tied") or []
+            seed_id(i, SEED_KINDS[kind], b0, b1): taken for i, kind, b0, b1, taken in record.get("tied") or []
         }
 
     ra, rb = rows(sa), rows(sb)
