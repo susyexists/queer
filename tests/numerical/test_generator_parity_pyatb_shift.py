@@ -35,6 +35,8 @@ from queer.compat.generator.parity import (
     render_markdown,
 )
 from queer.compat.generator.parity_shift import (
+    AGREEMENT_RELATIVE,
+    DETERMINED_SHARE,
     NO_SCFOUT,
     NOT_REPRODUCED,
     TOO_LARGE,
@@ -102,6 +104,47 @@ RUNS = {
     "sharp": (shift_spinor_scfout, {}, 4, {**SPINOR, "eta": 0.002, "domega": 0.0004}),
     # A response that vanishes: no odd mixing and no spin-orbit coupling leave every transition's integrand zero.
     "centro": (shift_spinor_scfout, {"mixing_odd": (0.0, 0.0, 0.0), "soc": 0.0, "soc_z": 0.0}, 4, SPINOR),
+    # Integrands at the level of rounding: a weakly broken symmetry (odd mixing 4e-7, spin-orbit 1e-4) on the TRIM
+    # points of a 2 x 2 x 2 grid at PyATB's narrow broadening.
+    "weak": (
+        shift_spinor_scfout,
+        {"mixing_odd": (4e-7, 5e-7, 3e-7), "soc": 1e-4, "soc_z": 5e-5, "exchange": 0.1},
+        4,
+        {**SPINOR, "grid": [2, 2, 2], "eta": 0.01, "domega": 0.002},
+    ),
+    # The 4e-5 eV pairs split across the occupation boundary (a transition inside a pair), and one band pair of them.
+    "split_occupation": (
+        shift_spinor_scfout,
+        {"exchange": 2e-5},
+        4,
+        {**SPINOR, "grid": [4, 4, 4], "occ_band": 1},
+    ),
+    "split_pair": (
+        shift_spinor_scfout,
+        {"exchange": 2e-5},
+        4,
+        {**SPINOR, "grid": [4, 4, 4], "omega": [1.5, 6.5], "n_occ": 2, "m_unocc": 3},
+    ),
+    # Scissored transitions exactly on bin edges without smearing (QUEER's histogram must tile its rows).
+    "scissors_binned": (
+        shift_collinear_scfout,
+        {},
+        1,
+        {**COLLINEAR, "scissors": 0.3, "smearing_method": 0, "domega": 0.02},
+    ),
+    "scissors_edge": (
+        shift_collinear_scfout,
+        {},
+        1,
+        {**COLLINEAR, "scissors": 0.1, "smearing_method": 0, "domega": 0.04},
+    ),
+    # Records Hermitian only to 1e-9 eV, as an SCF's quadrature leaves them: PyATB's reader Hermitizes nspin 1.
+    "nonhermitian": (
+        shift_collinear_scfout,
+        {"asymmetry": 1e-9},
+        1,
+        {**COLLINEAR, "grid": [12, 12, 1], "eta": 0.01, "domega": 0.002, "omega": [0.2, 6.0]},
+    ),
     "method0": (shift_collinear_scfout, {}, 1, {**COLLINEAR, "method": 0}),
     "adaptive": (shift_spinor_scfout, {}, 4, {**SPINOR, "smearing_method": 2, "grid": [2, 2, 1]}),
     "converged": (shift_spinor_scfout, {}, 4, SPINOR, True),
@@ -128,6 +171,12 @@ EXPECTED = {
     "sharp": (PASS, {AGREE, AFTER_CONVENTION}, None),
     "centro": (PASS, {AGREE}, None),
     "converged": (PASS, {AGREE}, None),
+    "weak": (PASS, {AGREE, AFTER_CONVENTION}, None),
+    "split_occupation": (PASS_DOCUMENTED, {AGREE, DOCUMENTED}, None),
+    "split_pair": (PASS_DOCUMENTED, {AGREE, DOCUMENTED}, "cut"),
+    "scissors_binned": (PASS_DOCUMENTED, {AFTER_CONVENTION, DOCUMENTED}, "scissors"),
+    "scissors_edge": (PASS_DOCUMENTED, {AFTER_CONVENTION, DOCUMENTED}, "scissors"),
+    "nonhermitian": (PASS, {AGREE, AFTER_CONVENTION}, None),
 }
 CALIBRATION_SCFOUT = Path(
     os.environ.get("QUEER_PYATB_CALIBRATION_SCFOUT")
@@ -185,9 +234,8 @@ def runs(tmp_path_factory):
 def port_table(run_dir):
     """What PyATB prints for a run (the port), unprinted."""
     params = read(run_dir / "queer_params.json")
-    model = OpenMXModel.from_scfout(run_dir / "scf.scfout")
     block = {**SHIFT_DEFAULTS, **params["parameters"]}
-    return pyatb_shift(model, block, nspin=params["input_parameters"]["nspin"])[1]
+    return pyatb_shift(run_dir / "scf.scfout", block, nspin=params["input_parameters"]["nspin"])[1]
 
 
 @pytest.fixture(scope="module")
@@ -346,7 +394,9 @@ def test_a_correct_candidate_passes_or_is_documented_by_the_recomputation(runs, 
     ],
     ids=lambda item: item[0],
 )
-@pytest.mark.parametrize("name", ["clean", "kramers", "split", "left", "pyatb_default"])
+@pytest.mark.parametrize(
+    "name", ["clean", "kramers", "split", "left", "pyatb_default", "weak", "split_occupation"]
+)
 def test_a_wrong_physical_value_fails_whatever_pyatb_printed(runs, printed, tmp_path, name, transform):
     """QUEER's value changed, its file consistent with it: check A fails, whether PyATB printed its own table or the
     wrong value itself (correlated diagnostics or a PyATB that agrees with the wrong value change nothing)."""
@@ -443,6 +493,77 @@ def test_a_collinear_spin_down_bug_fails(runs, printed, tmp_path):
             copy, reference_from(tmp_path / f"ref-{label.replace(' ', '-')}", copy, printed("collinear"))
         )
         assert report["verdict"] == FAIL, label
+
+
+@pytest.mark.parametrize("defect", ["hartree", "reconciliation", "spin-down"])
+def test_a_defect_in_queers_scfout_reader_fails(runs, printed, tmp_path, monkeypatch, defect):
+    """QUEER's runner reads the scfout through QUEER's reader; the recomputation parses it itself and PyATB (the port)
+    with a reader of its own. A wrong Hartree constant (27.0 eV), a reconciliation whose Hamiltonian is 1 % off, or a
+    collinear spin-down channel parsed from the spin-up records moves QUEER's value and nothing else: check A fails.
+    (While the recomputation built its operators from QUEER's reader, these passed both checks.)"""
+    import queer.io.openmx as reader
+    import queer.models.openmx as models
+
+    names = ["clean", "collinear"]
+    if defect == "hartree":
+        monkeypatch.setattr(reader, "HARTREE_EV", 27.0)
+    elif defect == "reconciliation":
+        original = models._canonical_native_operators
+
+        def scaled(data):
+            h, s, r, errors = original(data)
+            return {key: 1.01 * value for key, value in h.items()}, s, r, errors
+
+        monkeypatch.setattr(models, "_canonical_native_operators", scaled)
+    else:
+        original_spin = reader._spin_hamiltonian
+
+        def spin_up_twice(real, imaginary, mode):
+            if mode == "collinear":
+                real = (real[0], real[0], *real[2:])
+            return original_spin(real, imaginary, mode)
+
+        monkeypatch.setattr(reader, "_spin_hamiltonian", spin_up_twice)
+        names = ["collinear"]
+    bugged = {name: candidate(tmp_path / name, *RUNS[name]) for name in names}
+    monkeypatch.undo()
+    for name, directory in bugged.items():
+        report = judge(directory, reference_from(tmp_path / f"ref-{name}", directory, printed(name)))
+        assert report["verdict"] == FAIL and classes(report)["physical.sigma_uA_V2"] == UNEXPLAINED, name
+
+
+def test_an_entry_the_scfout_does_not_determine_is_never_a_failure(runs, printed, tmp_path):
+    """What the scfout determines is judged before check A: QUEER's value beyond its rounding at entries whose
+    recomputation is not determined to the agreement tolerance (Kramers pairs split by 1e-8 eV, a transition inside a
+    pair) makes the comparison not comparable; the same excess at a determined entry fails."""
+    from queer.compat.generator.pyatb_shift_integrand import ShiftRun, recompute
+    from queer.compat.generator.shift_scfout import read_records
+
+    directory = runs["split_tiny"]
+    params = read(directory / "queer_params.json")
+    run_settings = ShiftRun.from_block({**SHIFT_DEFAULTS, **params["parameters"]})
+    table = recompute(read_records(directory / "scf.scfout"), run_settings, workers=1).physical["sigma"]
+    peak = np.max(np.abs(table.value))
+    undetermined = table.smooth > DETERMINED_SHARE * AGREEMENT_RELATIVE * peak
+    assert undetermined.any() and not undetermined.all()
+    row, column = np.unravel_index(
+        int(np.argmax(np.where(undetermined, 0.0, np.abs(table.value)))), table.value.shape
+    )
+    determined = np.zeros_like(undetermined)
+    determined[row, column] = True
+    for label, where, verdict in (
+        ("undetermined", undetermined, NOT_COMPARABLE),
+        ("determined", determined, FAIL),
+    ):
+        copy = edited(
+            tmp_path / label,
+            directory,
+            transformed("sigma_uA_V2", lambda t, w=where: t + np.where(w, 3 * table.rounding + 1e-30, 0.0)),
+        )
+        report = judge(copy, reference_from(tmp_path / f"ref-{label}", copy, printed("split_tiny")))
+        assert report["verdict"] == verdict, (label, render_markdown(report))
+        if verdict == NOT_COMPARABLE:
+            assert "does not determine" in failed_preconditions(report)["determined"]
 
 
 def test_a_degeneracy_tolerance_bug_fails(tmp_path, monkeypatch):
@@ -821,6 +942,36 @@ def test_pyatbs_cut_at_natural_near_degeneracies_of_the_real_scfout_is_documente
     )
     report = judge(copy, reference_from(tmp_path / "ref-wrong", copy, table))
     assert report["verdict"] == FAIL and classes(report)["physical.sigma_uA_V2"] == UNEXPLAINED
+
+
+@pytest.mark.skipif(not CALIBRATION_SCFOUT.is_file(), reason=f"no calibration scfout at {CALIBRATION_SCFOUT}")
+@pytest.mark.parametrize(
+    ("grid", "eta", "domega"),
+    [([6, 6, 1], 0.01, 0.01), ([9, 9, 1], 0.1, 0.02)],
+    ids=["6x6-eta0.01", "9x9-eta0.1"],
+)
+def test_noise_level_integrands_of_the_real_scfout_agree_as_noise(tmp_path, grid, eta, domega):
+    """The calibration scfout with occ_band 4: at Gamma and the other TRIM points its near inversion leaves integrands
+    of rounding size, which the transcription and QUEER compute differently. At PyATB's eta 0.01 such entries failed
+    check A against a rounding taken from one second basis; at eta 0.1 PyATB's printed table was not reproduced at
+    that noise level (2.98e-26 against 2.66e-26). The rounding now holds every factor's own rounding: a pass, with
+    PyATB's table reproduced; QUEER's value doubled, or moved by 1e-7 of the magnitudes it cancels from, fails."""
+    block = {**REAL, "occ_band": 4, "grid": grid, "eta": eta, "domega": domega}
+    directory = candidate(tmp_path / "real", CALIBRATION_SCFOUT, {}, 4, block)
+    table = port_table(directory)
+    report = judge(directory, reference_from(tmp_path / "reference", directory, table))
+    assert report["verdict"] == PASS, render_markdown(report)
+    rules = report["semantics"]["rules"]
+    assert rules["pyatb_reproduced"]["reproduced"]
+    cancelled = rules["determined"]["tables"]["physical.sigma_uA_V2"]["cancelled_scale_uA_V2"]
+    rows = len(table)
+    for label, change in (
+        ("x2", lambda t: 2 * t),
+        ("plus 1e-7", lambda t: t + 1e-7 * cancelled * (np.arange(rows)[:, None] == rows // 3)),
+    ):
+        copy = edited(tmp_path / label.replace(" ", "-"), directory, transformed("sigma_uA_V2", change))
+        report = judge(copy, reference_from(tmp_path / f"ref-{label.replace(' ', '-')}", copy, table))
+        assert report["verdict"] == FAIL, label
 
 
 def test_the_literature_anchor_checks_peak_position_and_height(runs):

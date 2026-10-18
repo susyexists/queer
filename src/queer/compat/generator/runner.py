@@ -27,8 +27,8 @@ compared with :mod:`~queer.compat.generator.parity_pyatb`; its step may then be
 left out, and ``--scfout`` names the scfout to hash when the reference has no
 ``inputs.sha256``. A shift-current comparison needs ``--scfout``: it recomputes
 both spectra from it on ``--workers`` processes (default: every CPU) and refuses
-more than ``--recompute-budget`` k-points x bands^3 (default 4e9; run a larger
-comparison as a separate job). It exits 0 for ``pass`` and ``pass_with_documented_differences``,
+more than ``--recompute-budget`` of work, k-points x bands^2 x (bands + photon
+energies / 8) (default 8e9; run a larger comparison as a separate job). It exits 0 for ``pass`` and ``pass_with_documented_differences``,
 2 otherwise (``fail``, ``not_comparable`` or unusable arguments).
 """
 

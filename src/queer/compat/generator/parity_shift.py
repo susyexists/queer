@@ -3,11 +3,12 @@ full independent recomputation of both from the scfout.
 
 QUEER's reported values are its physical estimator, and they are what is judged. The comparison reads no record
 of the candidate's but its tables: every number it compares them with, and every tolerance, comes from its own
-evaluation of the scfout (:mod:`~queer.compat.generator.pyatb_shift_integrand`), which computes on the run's own
-k grid and photon energies QUEER's physical spectrum and the table PyATB 60fc6b2a prints, each in two orbital
-bases (their spread, with the kernel's and the conditioned magnitudes' rounding, is each table's rounding
-tolerance). The user decided on 2026-10-18 to replace the comparator's earlier records, floors, partial
-recomputations and per-release clean-control report by this recomputation: each comparison verifies itself.
+evaluation of the scfout (:mod:`~queer.compat.generator.pyatb_shift_integrand`, on its own parse of the scfout,
+:mod:`~queer.compat.generator.shift_scfout`, so that no defect of QUEER's reader is shared), which computes on the
+run's own k grid and photon energies QUEER's physical spectrum and the table PyATB 60fc6b2a prints, each in four
+orbital bases (with the first-order rounding of every integrand, their spread is each table's rounding tolerance).
+The user decided on 2026-10-18 to replace the comparator's earlier records, floors, partial recomputations and
+per-release clean-control report by this recomputation: each comparison verifies itself.
 :func:`compare_shift` judges a candidate directory against a PyATB reference directory (``Input``,
 ``inputs.sha256``, ``Out/input.json``, ``Out/running.log`` and ``Out/Shift_Current/shift_current.dat``):
 
@@ -16,22 +17,23 @@ recomputations and per-release clean-control report by this recomputation: each 
    ``inputs.sha256`` entry and the candidate's provenance; the same settings as PyATB resolves them;
    PyATB's printed photon energies are its ``start + i * domega`` to its five decimals; ``nspin`` matches the
    scfout (4 with spin-orbit coupling, else 1); ``method 1`` and ``smearing_method`` 0 or 1 (``method 0`` and
-   the adaptive smearing are not transcribed); k-points times bands^3 within the recompute budget
-   (:data:`RECOMPUTE_BUDGET`, ``recompute_budget=``, ``--recompute-budget``: else too large to recompute here,
-   run the comparison as a separate job); a scfout the transcription evaluates.
-2. **QUEER's physical value** (check A; a mismatch is ``differs_unexplained``, a QUEER defect, and fails
+   the adaptive smearing are not transcribed); the work, k-points x bands^2 x (bands + photon energies / 8),
+   within the recompute budget (:data:`RECOMPUTE_BUDGET`, ``recompute_budget=``, ``--recompute-budget``: else too
+   large to recompute here, run the comparison as a separate job); a scfout the transcription evaluates.
+2. **Determined**, judged first: an entry of a table checks A and B judge (QUEER's physical tables and PyATB's
+   literal one) is determined when its rounding tolerance without the edge placements lies within
+   :data:`DETERMINED_SHARE` of 1e-4 of its table's largest value; every entry is when the table vanishes (its
+   values and rounding below :data:`VANISHING_RELATIVE` of the broadened magnitudes it cancels from, and its
+   values within :data:`VANISHING_ROUNDING` times its rounding).
+3. **QUEER's physical value** (check A; a mismatch is ``differs_unexplained``, a QUEER defect, and fails
    whatever PyATB printed): ``sigma_uA_V2``, without smearing ``binned_uA_V2``, and for a collinear scfout
    ``legacy_single_channel`` (PyATB's spin factor times the spin-up channel; ``sigma_uA_V2`` is both channels)
-   each equal the recomputation's physical mode at every entry within its rounding tolerance, and their sums
-   over the photon energies up to each one within the summed tolerance (a transition on a bin edge may land on
-   either side of it, never vanish or count twice); the candidate's photon energies are PyATB's; its own
-   ``shift_current.dat`` holds the lattice's handedness times its table.
-3. **Determined**: every table checks A and B judge (QUEER's physical tables and PyATB's literal one) has a
-   rounding tolerance without the edge placements within :data:`DETERMINED_SHARE` of 1e-4 of its largest value,
-   unless it vanishes (its values and rounding below :data:`VANISHING_RELATIVE` of the broadened magnitudes it
-   cancels from); else the scfout does not determine the values to the agreement tolerance (near-degenerate
-   levels; PyATB's own value changing with its eigensolver's basis inside degenerate levels):
-   ``not_comparable``. A wrong value check A has already failed stays a failure.
+   each equal the recomputation's physical mode at every determined entry within its rounding tolerance, and their
+   sums over the photon energies up to each one within the summed tolerance (a transition on a bin edge may land
+   on either side of it, never vanish or count twice); an entry the scfout does not determine counts at most its
+   tolerance, so it never fails, and makes the comparison ``not_comparable`` (near-degenerate levels; PyATB's own
+   value changing with its eigensolver's basis inside degenerate levels); the candidate's photon energies are
+   PyATB's; its own ``shift_current.dat`` holds the lattice's handedness times its table.
 4. **PyATB's table** (check B): PyATB's printed table equals the recomputation's PyATB-literal mode within its
    print precision (half a unit in the seventh significant digit of each printed value) and the literal mode's
    rounding tolerance; else ``not_comparable`` ("PyATB's table is not reproduced", with the gap): a reader or
@@ -71,14 +73,19 @@ DETERMINED_SHARE = 0.1
 # calibration scfout's inversion-symmetric response is determined to 1.7e-8 of them where four natural near-degenerate
 # k-points condition it (18 x 18 x 1, occ_band 16), so the share leaves a margin above that.
 VANISHING_RELATIVE = 1e-6
+# ... and when its values also lie within this many times its rounding: zero but for rounding and the scfout's own
+# asymmetry. Near-degenerate partners' transitions carry magnitudes far above what their sum cancels from, so the share
+# alone would call a nonzero table vanishing.
+VANISHING_ROUNDING = 1e3
 OMEGA_TOLERANCE_EV = 1e-9
 OMEGA_PRINT_EV = 5.01e-6
 FILE_RELATIVE = 5.01e-7
 SYMMETRY_THRESHOLD = 1e-4
 SIGN_SIGNIFICANCE = 1e-4
-# k-points x bands^3 (summed over the channels) a comparison recomputes here: one core does about 1.5e6 a second on
-# the calibration scfout (30 bands, 601 photon energies, a Gaussian), so the budget is some 45 minutes on one core.
-RECOMPUTE_BUDGET = 4e9
+# The work (k-points x bands^2 x (bands + photon energies / 8), summed over the channels; pyatb_shift_integrand.work) a
+# comparison recomputes here: one core does about 3e6 a second on the calibration scfout (30 bands, 51 to 2401 photon
+# energies, four bases), so the budget is some 45 minutes on one core.
+RECOMPUTE_BUDGET = 8e9
 NO_SCFOUT = (
     "the shift-current comparison recomputes the spectrum from the scfout (compare with scfout=, or --scfout)"
 )
@@ -152,7 +159,9 @@ class _ShiftComparison(_PyatbComparison):
         self.budget = RECOMPUTE_BUDGET if recompute_budget is None else float(recompute_budget)
         self.rules: dict[str, Any] = {}
         self.basis: dict[str, Any] = {}
-        self.model: Any = None
+        self.records: Any = None
+        self.undetermined: dict[str, np.ndarray] = {}
+        self.determination: dict[str, Any] = {}
         self.run_settings: Any = None
         self.recomputation: Any = None
         self.physical_ok = True
@@ -258,21 +267,23 @@ class _ShiftComparison(_PyatbComparison):
         return self.precondition("method", True, f"method 1, smearing_method {self.smearing}")
 
     def check_model(self) -> bool:
-        """The scfout read, its spin layout as PyATB's ``nspin`` reads it, and the budget."""
-        from ...models.openmx import OpenMXModel
-        from ...physics.validation import NumericalError
+        """The scfout parsed by the recomputation's own reader, its spin layout as PyATB's ``nspin`` reads it, and
+        the budget."""
         from .pyatb_shift_integrand import ShiftRun, work
+        from .shift_scfout import read_records
 
+        if self.scfout is None:
+            return self.precondition("inputs", False, NO_SCFOUT)
         try:
-            self.model = OpenMXModel.from_scfout(self.scfout)
+            self.records = read_records(self.scfout)
             self.run_settings = ShiftRun.from_block(self.effective)
-        except (OSError, ValueError, ArithmeticError, KeyError, NumericalError) as error:
+        except (OSError, ValueError, ArithmeticError, KeyError) as error:
             return self.precondition(
                 "scfout", False, f"the scfout cannot be read: {type(error).__name__}: {error}"
             )
         nspin = int(self.notes.get("parameters", {}).get("input", {}).get("nspin") or 0)
-        mode = self.model.spin_mode
-        expected = 4 if mode == "soc" else 1
+        mode = self.records.spin_mode
+        expected = self.records.nspin
         if nspin and nspin != expected:
             return self.precondition(
                 "spin", False, f"PyATB read nspin {nspin}; the scfout's {mode} layout is nspin {expected}"
@@ -285,11 +296,14 @@ class _ShiftComparison(_PyatbComparison):
                 "its spinor bands (spin factor 1)" if mode == "soc" else "its spin-up channel (spin factor 2)"
             ),
         )
-        self.sign = 1 if float(np.linalg.det(np.asarray(self.model.lattice, float))) > 0 else -1
+        self.sign = self.records.handedness
         self.legacy = mode == "collinear"
-        size = work(self.model, self.run_settings)
+        size = work(self.records, self.run_settings)
         ok = size <= self.budget
-        detail = f"k-points x bands^3 {size:.3g} within the recompute budget {self.budget:.3g}"
+        detail = (
+            f"k-points x bands^2 x (bands + photon energies / 8) {size:.3g} within the recompute budget "
+            f"{self.budget:.3g}"
+        )
         return self.precondition(
             "recompute_budget", ok, detail if ok else f"{TOO_LARGE} ({detail.replace('within', 'beyond')})"
         )
@@ -298,9 +312,7 @@ class _ShiftComparison(_PyatbComparison):
         from .pyatb_shift_integrand import recompute
 
         try:
-            self.recomputation = recompute(
-                self.model, self.run_settings, handedness=self.sign, workers=self.workers
-            )
+            self.recomputation = recompute(self.records, self.run_settings, workers=self.workers)
         except (ValueError, ArithmeticError, np.linalg.LinAlgError) as error:
             return self.precondition(
                 "recompute", False, f"the scfout cannot be recomputed here: {type(error).__name__}: {error}"
@@ -340,7 +352,9 @@ class _ShiftComparison(_PyatbComparison):
         return pairs
 
     def check_physical(self) -> None:
-        """Check A: every table of QUEER's physical value against the recomputation's physical mode."""
+        """Check A: every table of QUEER's physical value against the recomputation's physical mode, at every entry
+        the scfout determines (:meth:`determine`); an entry it does not determine counts at most its tolerance (it
+        makes the comparison not comparable, never a failure)."""
         omega = np.asarray(self.block.get("omega_eV") or [], float)
         expected = self.reference_omega()
         if (
@@ -361,22 +375,36 @@ class _ShiftComparison(_PyatbComparison):
                     f"physical.{name}", UNEXPLAINED, detail=f"QUEER's results lack {name} of this run"
                 )
                 continue
+            undetermined = self.undetermined.get(f"physical.{name}", np.zeros(recomputed.value.shape, bool))
+            tolerance = recomputed.rounding
             difference = values - recomputed.value
-            gap = np.abs(difference)
-            ratio = gap / np.maximum(recomputed.rounding, 1e-300)
+            judged = np.where(undetermined, np.clip(difference, -tolerance, tolerance), difference)
+            gap = np.abs(judged)
+            ratio = gap / np.maximum(tolerance, 1e-300)
             row, column = np.unravel_index(int(np.argmax(ratio)), ratio.shape)
-            ok = bool(np.all(gap <= recomputed.rounding))
+            ok = bool(np.all(gap <= tolerance))
             # A transition on a discontinuity of the kernel (a bin edge) may land on either side of it, so its entries
             # allow either placement; their sum over the rows does not depend on that choice beyond the edge's own
             # rows: QUEER may move such a transition across its edge, never drop it or count it twice.
-            cumulative = np.abs(np.cumsum(difference, axis=0))
-            allowed = np.cumsum(recomputed.smooth, axis=0) + recomputed.edge_cumulative
+            cumulative = np.abs(np.cumsum(judged, axis=0))
+            allowed = (
+                np.cumsum(recomputed.smooth + np.where(undetermined, recomputed.edge, 0.0), axis=0)
+                + recomputed.edge_cumulative
+            )
             conserved = bool(np.all(cumulative <= allowed))
-            beyond = int(np.count_nonzero(gap > recomputed.rounding))
+            beyond = int(np.count_nonzero(gap > tolerance))
+            skipped = int(np.count_nonzero(undetermined & (np.abs(difference) > tolerance)))
             detail = (
                 f"QUEER's {name} against the recomputed physical value: worst {SHIFT_COMPONENTS[column]} at "
                 f"{self.reference_omega()[row]:.5f} eV, |Q - T| {gap[row, column]:.4g} vs its rounding "
-                f"{recomputed.rounding[row, column]:.4g} microA/V^2 ({beyond} entries beyond)"
+                f"{tolerance[row, column]:.4g} microA/V^2 ({beyond} entries beyond"
+                + (
+                    f"; {int(np.count_nonzero(undetermined))} entries the scfout does not determine, {skipped} of "
+                    "them beyond their rounding"
+                    if undetermined.any()
+                    else ""
+                )
+                + ")"
             )
             if ok and not conserved:
                 excess = cumulative - allowed
@@ -392,7 +420,7 @@ class _ShiftComparison(_PyatbComparison):
                 f"physical.{name}",
                 AGREE if ok else UNEXPLAINED,
                 float(gap[row, column]),
-                float(recomputed.rounding[row, column]),
+                float(tolerance[row, column]),
                 detail,
             )
 
@@ -443,64 +471,81 @@ class _ShiftComparison(_PyatbComparison):
             raise ValueError(f"QUEER's results lack {name}")
         return self.sign * values, name, self.sign < 0 or self.legacy or self.smearing == 0
 
-    def determined(self) -> bool:
-        """Step 3: every table checks A and B judge is determined by the scfout to a share of the agreement
-        tolerance (its rounding without the edge placements, which check A bounds through the rows' sums, within
-        :data:`DETERMINED_SHARE` x 1e-4 of its largest value), unless it vanishes (its values and rounding below
-        :data:`VANISHING_RELATIVE` of the broadened magnitudes it cancels from)."""
+    def determine(self) -> bool:
+        """Step 2, before check A: which entries of every table checks A and B judge (QUEER's physical tables and
+        PyATB's literal one) the scfout determines to a share of the agreement tolerance: an entry whose rounding
+        without the edge placements (which check A bounds through the rows' sums) lies within
+        :data:`DETERMINED_SHARE` x 1e-4 of its table's largest value, or every entry of a table that vanishes (its
+        values and rounding below :data:`VANISHING_RELATIVE` of the broadened magnitudes it cancels from). Records
+        the facts; True when every entry is determined."""
         recomputation = self.recomputation
         tables = [(f"physical.{name}", recomputed) for name, _, recomputed in self.queer_tables()]
         tables.append(("literal", recomputation.literal))
         facts: dict[str, Any] = {}
-        failed: list[tuple[str, float, float, float]] = []
         for name, values in tables:
             scale = _largest(values.value)
-            smooth = _largest(values.smooth)
+            smooth = values.smooth
             cancelled = _largest(values.absolute)
-            vanishing = cancelled > 0 and max(scale, smooth) <= VANISHING_RELATIVE * cancelled
+            vanishing = (
+                cancelled > 0
+                and max(scale, _largest(smooth)) <= VANISHING_RELATIVE * cancelled
+                and scale <= VANISHING_ROUNDING * _largest(smooth)
+            )
             allowed = DETERMINED_SHARE * AGREEMENT_RELATIVE * scale
-            ok = vanishing or smooth <= allowed
+            undetermined = np.zeros(values.value.shape, bool) if vanishing else smooth > allowed
+            self.undetermined[name] = undetermined
             facts[name] = {
                 "largest_uA_V2": scale,
-                "rounding_uA_V2": smooth,
+                "rounding_uA_V2": _largest(smooth),
                 "allowed_uA_V2": allowed,
                 "edge_uA_V2": _largest(values.edge),
                 "cancelled_scale_uA_V2": cancelled,
+                "basis_spread_uA_V2": _largest(values.spread),
                 "vanishing": vanishing,
-                "determined": ok,
+                "undetermined_entries": int(np.count_nonzero(undetermined)),
+                "determined": not undetermined.any(),
             }
-            if not ok:
-                failed.append((name, smooth, allowed, _largest(values.value - values.other)))
         compared, literal = recomputation.compared, recomputation.literal
         both = all(facts[name]["vanishing"] for name, _ in tables)
         cancelled = max(_largest(compared.absolute), _largest(literal.absolute))
         self.vanishing = VANISHING_RELATIVE * cancelled if both else 0.0
+        self.determination = {"tables": facts, "vanishing": both}
         self.rules["determined"] = {
             "share": DETERMINED_SHARE,
             "vanishing_relative": VANISHING_RELATIVE,
+            "vanishing_rounding": VANISHING_ROUNDING,
             "vanishing": both,
             "tables": facts,
         }
-        if not failed:
+        return all(item["determined"] for item in facts.values())
+
+    def record_determined(self, determined: bool) -> bool:
+        """The determination as a precondition (check A has passed): an entry the scfout does not determine makes
+        the comparison not comparable."""
+        facts = self.determination["tables"]
+        if determined:
             detail = (
                 f"every table vanishes within its rounding (below {VANISHING_RELATIVE:g} of the magnitudes it cancels "
                 "from)"
-                if both
-                else f"every table's rounding within {DETERMINED_SHARE:g} x 1e-4 of its largest value (at most "
-                + ", ".join(f"{name} {facts[name]['rounding_uA_V2']:.3g}" for name, _ in tables)
+                if self.determination["vanishing"]
+                else f"every entry's rounding within {DETERMINED_SHARE:g} x 1e-4 of its table's largest value (at most "
+                + ", ".join(f"{name} {item['rounding_uA_V2']:.3g}" for name, item in facts.items())
                 + " microA/V^2)"
             )
             return self.precondition("determined", True, detail)
         causes = []
-        for name, smooth, allowed, spread in failed:
+        for name, item in facts.items():
+            if item["determined"]:
+                continue
             cause = (
                 "PyATB's own value changes with its eigensolver's basis inside (near-)degenerate levels"
                 if name == "literal"
                 else "QUEER's physical value is ill-conditioned at near-degenerate levels"
             )
             causes.append(
-                f"{name}: rounding up to {smooth:.4g} microA/V^2 beyond {DETERMINED_SHARE:g} x 1e-4 of its largest "
-                f"value = {allowed:.4g} (two-basis spread {spread:.4g}; {cause})"
+                f"{name}: {item['undetermined_entries']} entries with rounding up to {item['rounding_uA_V2']:.4g} "
+                f"microA/V^2 beyond {DETERMINED_SHARE:g} x 1e-4 of its largest value = {item['allowed_uA_V2']:.4g} "
+                f"(spread over the bases {item['basis_spread_uA_V2']:.4g}; {cause})"
             )
         return self.precondition(
             "determined",
@@ -643,6 +688,8 @@ class _ShiftComparison(_PyatbComparison):
                 return
         if not self.recompute():
             return
+        # What the scfout determines is judged first: check A judges the determined entries only.
+        determined = self.determine()
         try:
             self.compare_candidate_file()
             self.check_physical()
@@ -651,19 +698,21 @@ class _ShiftComparison(_PyatbComparison):
             self.quantity("physical", UNEXPLAINED, detail=f"QUEER's results could not be compared: {error}")
             return
         self.self_convergence()
+        if not self.physical_ok:
+            # Check A failed at a determined entry: a QUEER defect, whatever PyATB printed.
+            self.rules["determined"]["role"] = "information: check A failed at an entry the scfout determines"
+            try:
+                self.check_pyatb(self.printed())
+            except MALFORMED:
+                pass
+            return
+        # Both preconditions are recorded: an undetermined comparison still says whether PyATB's table is reproduced.
+        determined = self.record_determined(determined)
         try:
             printed = self.printed()
         except MALFORMED as error:
-            # PyATB's table unreadable: not comparable, unless QUEER's own value has already failed.
-            if self.physical_ok:
-                self.precondition("pyatb_reproduced", False, f"PyATB's table cannot be read: {error}")
+            self.precondition("pyatb_reproduced", False, f"PyATB's table cannot be read: {error}")
             return
-        if not self.physical_ok:
-            # Check A failed: a QUEER defect, whatever PyATB printed.
-            self.check_pyatb(printed)
-            return
-        # Both preconditions are recorded: an undetermined comparison still says whether PyATB's table is reproduced.
-        determined = self.determined()
         reproduced = self.check_pyatb(printed)
         if not (determined and reproduced):
             return
@@ -680,10 +729,12 @@ class _ShiftComparison(_PyatbComparison):
                 "key": None,
                 "description": (
                     "PyATB's SHIFT_CURRENT on an OpenMX scfout against QUEER's physical value, both recomputed from "
-                    "the scfout by an independent transcription: QUEER's definition (exact SI 2019 constants, the "
-                    "reader's Hartree, Gaussian eta/sqrt(2) or per-eV histogram, covariant exact degeneracies) and "
-                    "PyATB 60fc6b2a's (Hartree 27.211324570273 eV, its SI constants, window, int() rows, 5 eta "
-                    "truncation, method-1 cut, spin factor and signed volume), each in two orbital bases"
+                    "the scfout by an independent transcription with its own parse of the scfout: QUEER's definition "
+                    "(exact SI 2019 constants, CODATA's Hartree and Bohr, the records projected onto their "
+                    "translation identities, Gaussian eta/sqrt(2) or a histogram tiling its rows, covariant exact "
+                    "degeneracies) and PyATB 60fc6b2a's (its reader's Hartree, Bohr and nspin-1 Hermitization, its "
+                    "SI constants, window, int() rows, 5 eta truncation, method-1 cut, spin factor and signed "
+                    "volume), each in four orbital bases"
                 ),
                 "rules": self.rules,
                 "conversions_applied": self.sign < 0 or self.legacy or self.smearing_or_none() == 0,
@@ -697,6 +748,7 @@ class _ShiftComparison(_PyatbComparison):
                 "print_precision": "half a unit in the seventh significant digit (%15.6e)",
                 "determined_share": DETERMINED_SHARE,
                 "vanishing_relative": VANISHING_RELATIVE,
+                "vanishing_rounding": VANISHING_ROUNDING,
                 "recompute_budget": self.budget,
                 **self.basis,
             }
@@ -720,7 +772,8 @@ def compare_shift(
 ) -> dict[str, Any]:
     """The report of a shift-current comparison (:mod:`~queer.compat.generator.parity`'s schema). ``scfout`` is
     required (the candidate's and the reference's, by SHA-256); ``workers`` (None: every CPU) recompute it and
-    ``recompute_budget`` caps k-points x bands^3 (default :data:`RECOMPUTE_BUDGET`)."""
+    ``recompute_budget`` caps its work, k-points x bands^2 x (bands + photon energies / 8) (default
+    :data:`RECOMPUTE_BUDGET`)."""
     comparison = _ShiftComparison(
         reference, candidate, scfout, workers=workers, recompute_budget=recompute_budget
     )

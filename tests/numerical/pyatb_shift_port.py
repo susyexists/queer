@@ -1,18 +1,20 @@
 """A loop-by-loop port of PyATB 60fc6b2a's SHIFT_CURRENT (method 1), standing in for PyATB in tests.
 
-Written from PyATB's sources (``shift_current_solver.cpp``: ``get_shift_current_conductivity``,
-``get_shift_current_conductivity_ik`` and ``get_Inm_ik_sumOver``; ``linear_response.cpp``: ``get_D_degenerate``
-and ``get_partial_eigenvalue_fromBar``; ``xr_operation.cpp`` and ``base_data.cpp``: the upper-triangle Bloch
-sums and the position operator's lower triangle; read only, written anew) in the order PyATB runs them: one
-k-point at a time, one pair at a time, its own generalized eigensolver (``scipy.linalg.eigh``). It shares no
-code with ``queer.compat.generator.pyatb_shift_integrand``; it reads the scfout's own records through QUEER's
-reader (``model.data``), as the comparator's PyATB mode does, so a reader defect would pass both. Method 0 and
-the adaptive smearing are not ported.
+Written from PyATB's sources (``openmx_read_scfout.py``: the scfout's records, its Hartree and Bohr, the spinor
+assembly and the real-space Hermitization of ``nspin 1``; ``shift_current_solver.cpp``:
+``get_shift_current_conductivity``, ``get_shift_current_conductivity_ik`` and ``get_Inm_ik_sumOver``;
+``linear_response.cpp``: ``get_D_degenerate`` and ``get_partial_eigenvalue_fromBar``; ``xr_operation.cpp`` and
+``base_data.cpp``: the upper-triangle Bloch sums and the position operator's lower triangle; read only, written
+anew) in the order PyATB runs them: one record at a time, one k-point at a time, one pair at a time, its own
+generalized eigensolver (``scipy.linalg.eigh``). It shares no code with QUEER's scfout reader, with
+``queer.compat.generator.shift_scfout`` or with ``queer.compat.generator.pyatb_shift_integrand``: a defect in any of
+them leaves it unchanged. Method 0 and the adaptive smearing are not ported.
 """
 
 from __future__ import annotations
 
 import math
+import struct
 
 import numpy as np
 from scipy.linalg import eigh
@@ -21,6 +23,7 @@ COMPONENTS = tuple(a + b + c for a in "xyz" for b, c in ("xx", "xy", "xz", "yy",
 THRESHOLD = 1e-4
 REGULARIZATION = 0.04
 AU2EV = 27.211324570273
+BOHR_TO_ANG = 0.52917721
 EV_SECONDS = 6.582119e-16
 E_CHARGE = 1.602176565e-19
 HBAR = 1.054571726e-34
@@ -28,24 +31,113 @@ TEM_B = (0, 0, 0, 1, 1, 2)
 TEM_C = (0, 1, 2, 1, 2, 2)
 
 
-def _records(model, channel):
-    """The scfout's records of the channel PyATB reads: H (PyATB's eV), S, r_a (Angstrom), keyed by translation."""
-    data = model.data
-    size = model.nbnd if model.spin_mode != "collinear" else model.n_spatial
-    rows = slice(channel * size, (channel + 1) * size)
-    scale = AU2EV / float(model.metadata["hartree_to_ev"])
-    keys = sorted(set(data.hamiltonian) | set(data.overlap) | {key for axis in data.position for key in axis})
+def _read(path):
+    """PyATB's reading of a version-3 scfout: H (its eV), S and r_a (Angstrom) per translation, the lattice
+    (Angstrom), the basis size and nspin."""
+    data = open(path, "rb").read()
+    endian = "<" if 0 <= struct.unpack("<6i", data[:24])[1] <= 15 else ">"
+    at = 0
 
-    def dense(blocks, key):
-        if key not in blocks:
-            return np.zeros((size, size), complex)
-        block = blocks[key]
-        return np.asarray(block.toarray() if hasattr(block, "toarray") else block, complex)[rows, rows]
+    def ints(count):
+        nonlocal at
+        values = struct.unpack_from(f"{endian}{count}i", data, at)
+        at += 4 * count
+        return list(values)
 
-    hamiltonian = {key: scale * dense(data.hamiltonian, key) for key in keys}
-    overlap = {key: dense(data.overlap, key) for key in keys}
-    position = [{key: dense(axis, key) for key in keys} for axis in (data.position or ({}, {}, {}))]
-    return keys, hamiltonian, overlap, position, size
+    def doubles(count):
+        nonlocal at
+        values = struct.unpack_from(f"{endian}{count}d", data, at)
+        at += 8 * count
+        return list(values)
+
+    head = ints(6)
+    atoms, spin, cells = head[0], head[1] % 4, head[5] + 1
+    order = ints(1)[0]
+    doubles(4 * cells)
+    cell_index = ints(4 * cells)
+    cell_of = [tuple(cell_index[4 * c + 1 : 4 * c + 4]) for c in range(cells)]
+    orbitals = ints(atoms)
+    neighbours = ints(atoms)
+    partner = [ints(neighbours[a] + 1) for a in range(atoms)]
+    cell = [ints(neighbours[a] + 1) for a in range(atoms)]
+    tv = np.array(doubles(12)).reshape(3, 4)[:, 1:]
+    doubles(12)
+    centres = [doubles(4)[1:] for _ in range(atoms)]
+    start = [sum(orbitals[:a]) for a in range(atoms)]
+    n_orb = sum(orbitals)
+    size = 2 * n_orb if spin == 3 else n_orb
+
+    def matrix_set():
+        out = []
+        for a in range(atoms):
+            for h in range(neighbours[a] + 1):
+                b = partner[a][h] - 1
+                out.append(np.array([doubles(orbitals[b]) for _ in range(orbitals[a])]))
+        return out
+
+    hks = [matrix_set() for _ in range(spin + 1)]
+    ihks = [matrix_set() for _ in range(3)] if spin == 3 else None
+    olp = matrix_set()
+    moments = []
+    for _ in range(3):
+        sets = [matrix_set() for _ in range(order)]
+        moments.append(sets[0] if order else None)
+    hamiltonian, overlap, position = {}, {}, {}
+    pair = 0
+    for a in range(atoms):
+        for h in range(neighbours[a] + 1):
+            b = partner[a][h] - 1
+            key = cell_of[cell[a][h]]
+            i0, j0, rows, cols = start[a], start[b], orbitals[a], orbitals[b]
+            for store in (hamiltonian, overlap):
+                store.setdefault(key, np.zeros((size, size), complex))
+            position.setdefault(key, np.zeros((3, size, size), complex))
+            s_block = olp[pair]
+            if spin == 3:
+                up = hks[0][pair] + 1j * ihks[0][pair]
+                down = hks[1][pair] + 1j * ihks[1][pair]
+                mixed = hks[2][pair] + 1j * (hks[3][pair] + ihks[2][pair])
+                hamiltonian[key][i0 : i0 + rows, j0 : j0 + cols] += up
+                hamiltonian[key][n_orb + i0 : n_orb + i0 + rows, n_orb + j0 : n_orb + j0 + cols] += down
+                hamiltonian[key][i0 : i0 + rows, n_orb + j0 : n_orb + j0 + cols] += mixed
+                overlap[key][n_orb + i0 : n_orb + i0 + rows, n_orb + j0 : n_orb + j0 + cols] += s_block
+            else:
+                hamiltonian[key][i0 : i0 + rows, j0 : j0 + cols] += hks[0][pair]
+            overlap[key][i0 : i0 + rows, j0 : j0 + cols] += s_block
+            for d in range(3):
+                if moments[d] is None:
+                    continue
+                block = moments[d][pair] + centres[a][d] * s_block
+                position[key][d, i0 : i0 + rows, j0 : j0 + cols] += block
+                if spin == 3:
+                    position[key][d, n_orb + i0 : n_orb + i0 + rows, n_orb + j0 : n_orb + j0 + cols] += block
+            pair += 1
+    keys = set(hamiltonian) | {tuple(-x for x in key) for key in hamiltonian}
+    zero = np.zeros((size, size), complex)
+
+    def mate(store, key):
+        return store.get(tuple(-x for x in key), zero)
+
+    if spin == 3:
+        filled = {}
+        for key in keys:
+            block = np.array(hamiltonian.get(key, zero))
+            block[n_orb:, :n_orb] = mate(hamiltonian, key)[:n_orb, n_orb:].conj().T
+            filled[key] = block
+        hamiltonian = filled
+        overlap = {key: np.array(overlap.get(key, zero)) for key in keys}
+    else:
+        hamiltonian = {
+            key: 0.5 * (hamiltonian.get(key, zero) + mate(hamiltonian, key).conj().T) for key in keys
+        }
+        overlap = {key: 0.5 * (overlap.get(key, zero) + mate(overlap, key).conj().T) for key in keys}
+    keys = sorted(keys)
+    hamiltonian = {key: AU2EV * hamiltonian[key] for key in keys}
+    axes = [
+        {key: BOHR_TO_ANG * position.get(key, np.zeros((3, size, size)))[d].real for key in keys}
+        for d in range(3)
+    ]
+    return keys, hamiltonian, overlap, axes, size, tv * BOHR_TO_ANG, 4 if spin == 3 else 1
 
 
 def _upper_sum(blocks, keys, phases, weights=None):
@@ -84,15 +176,16 @@ def _velocity(hbar, sbar, energies, band):
     return float(np.linalg.eigvalsh(block, UPLO="L")[band - low])
 
 
-def pyatb_shift(model, block, *, nspin):
+def pyatb_shift(scfout, block, *, nspin):
     """PyATB's printed shift current ``(count, 18)`` (microA/V^2) and its photon energies, for ``block`` (PyATB's
-    resolved SHIFT_CURRENT keys) on ``model`` (an OpenMXModel read from the scfout); ``nspin`` 1 reads the
-    spin-up channel and doubles, 4 the spinor bands."""
+    resolved SHIFT_CURRENT keys) on the ``scfout`` (a path); ``nspin`` 1 reads the spin-up channel and doubles, 4
+    the spinor bands."""
     if int(block.get("method", 1)) != 1 or int(block.get("smearing_method", 1)) not in (0, 1):
         raise ValueError("the port covers method 1 with smearing_method 0 or 1")
-    keys, hamiltonian, overlap, position, size = _records(model, 0)
+    keys, hamiltonian, overlap, position, size, cell, layout = _read(scfout)
+    if int(nspin) != layout:
+        raise ValueError(f"nspin {nspin} is not the scfout's {layout}")
     translations = np.array(keys, float)
-    cell = np.asarray(model.lattice, float)
     cartesian = translations @ cell
     volume = float(np.linalg.det(cell))
     occ = int(block["occ_band"])

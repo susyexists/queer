@@ -1361,7 +1361,7 @@ def compare(
     ``scfout`` names the scfout to hash when the reference holds no
     ``inputs.sha256``; a shift current requires it, recomputes its spectrum from it
     on ``workers`` (None: every CPU) and refuses a recomputation larger than
-    ``recompute_budget`` k-points x bands^3
+    ``recompute_budget`` of work, k-points x bands^2 x (bands + photon energies / 8)
     (:mod:`~queer.compat.generator.parity_shift`). Returns the report of
     :func:`~queer.compat.generator.parity.compare`'s schema.
     """

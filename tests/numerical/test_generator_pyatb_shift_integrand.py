@@ -1,10 +1,14 @@
-"""The independent recomputation of a Generator shift current from its scfout (``pyatb_shift_integrand``).
+"""The independent recomputation of a Generator shift current from its scfout (``shift_scfout`` and
+``pyatb_shift_integrand``).
 
-Its physical mode is QUEER's shift current written from the equations (its own Bloch sums, generalized
-eigenproblem and covariant treatment of exact degeneracies, no code of QUEER's observables): it must meet QUEER's
-estimator transition by transition and table by table. Its PyATB-literal mode is what PyATB 60fc6b2a prints: it
-must meet ``pyatb_shift_port``, a loop-by-loop port of PyATB's method 1 that shares no code with it. The two
-orbital bases measure each table's rounding, and a transition on a bin edge is priced both ways.
+Its own parse of the scfout builds QUEER's physical operators (the records QUEER's reader reconciles, read and
+reconciled anew) and PyATB's (its reader's constants and Hermitization). Its physical mode is QUEER's shift current
+written from the equations (its own Bloch sums, generalized eigenproblem and covariant treatment of exact
+degeneracies, no code of QUEER's reader or observables): it must meet QUEER's estimator transition by transition
+and table by table, within the conditioned term magnitudes' floor. Its PyATB-literal mode is what PyATB 60fc6b2a
+prints: it must meet ``pyatb_shift_port``, a loop-by-loop port of PyATB's reader and method 1 that shares no code
+with it. Several orbital bases measure each table's rounding, QUEER's histogram tiles its rows, and a transition on
+a bin edge is priced both ways.
 """
 
 import math
@@ -25,17 +29,30 @@ from queer.compat.generator.pyatb_shift_integrand import (
     PATH_STEPS,
     PYATB_REGULARIZATION,
     PYATB_THRESHOLD,
+    TERM_FLOOR,
+    Kernels,
     ShiftRun,
     bloch_operators,
-    channels,
     cluster_labels,
-    exactness_bound,
     kpoint_grid,
     orthogonal_basis,
     point_integrand,
+    pyatb_rows,
     pyatb_velocities,
+    queer_rows,
     recompute,
     work,
+)
+from queer.compat.generator.shift_scfout import (
+    PYATB_BOHR,
+    PYATB_HARTREE,
+    Blocks,
+    codata_bohr,
+    codata_hartree,
+    exactness_bound,
+    literal_channel,
+    physical_channels,
+    read_records,
 )
 from queer.models.evaluation import derivatives
 from queer.observables.nonlinear import shift_current, shift_current_point, shift_current_settings
@@ -63,14 +80,15 @@ def queer_transitions(model, k, occupied):
     return point["gap"][source, target], weights, source, target
 
 
-def transcribed(model, k, occupied, **options):
-    """The transcription's physical transitions at ``k`` in QUEER's weights (``-I / 2``)."""
+def transcribed(path, k, occupied, **options):
+    """The transcription's physical transitions at ``k`` of the scfout at ``path`` in QUEER's weights (``-I / 2``)."""
+    records = read_records(path)
     result = point_integrand(
-        channels(model)[0].reconciled,
+        physical_channels(records)[0],
         k,
         occupied,
         treatment="covariant",
-        threshold=exactness_bound(model),
+        threshold=exactness_bound(records),
         **options,
     )
     return result["energies"], -0.5 * result["integrand"], result
@@ -84,18 +102,18 @@ def spectrum(energies, weights, eta=0.01):
 
 
 def recomputed(path, block):
-    model = OpenMXModel.from_scfout(path)
+    records = read_records(path)
     full = {**SHIFT_DEFAULTS, **block}
-    sign = 1 if np.linalg.det(np.asarray(model.lattice, float)) > 0 else -1
-    return model, full, recompute(model, ShiftRun.from_block(full), handedness=sign, workers=1)
+    return records, full, recompute(records, ShiftRun.from_block(full), workers=1)
 
 
 def test_its_bloch_sums_are_the_models_and_pyatbs_upper_triangles(tmp_path):
     shift_spinor_scfout(tmp_path / "soc.scfout", overlap_hopping=(0.06, 0.04, 0.03), dipole=0.3)
     model = OpenMXModel.from_scfout(tmp_path / "soc.scfout")
+    records = read_records(tmp_path / "soc.scfout")
     k = np.array([0.13, 0.41, 0.77])
-    channel = channels(model)[0]
-    operators = bloch_operators(channel.reconciled, k)
+    physical = physical_channels(records)[0]
+    operators = bloch_operators(physical, k)
     first, second = derivatives(model, k), derivatives(model, k, order=2)
     assert np.allclose(operators.h[0], model.hamiltonian(k), rtol=0, atol=1e-13)
     assert np.allclose(operators.s[0], model.overlap(k), rtol=0, atol=1e-13)
@@ -104,9 +122,76 @@ def test_its_bloch_sums_are_the_models_and_pyatbs_upper_triangles(tmp_path):
     assert np.abs(operators.r).max() > 0.01
     # PyATB's sums of the records' upper triangles, completed Hermitian and the position operator's lower triangle
     # from (r + i dS)^dagger, are the same operators for records that hold their translation identities exactly.
-    literal = bloch_operators(channel.recorded, k, construction="pyatb")
+    upper = bloch_operators(physical, k, construction="pyatb")
     for name in ("h", "s", "dh", "ds", "d2h", "d2s", "r", "dr"):
-        assert np.allclose(getattr(literal, name), getattr(operators, name), rtol=0, atol=1e-12), name
+        assert np.allclose(getattr(upper, name), getattr(operators, name), rtol=0, atol=1e-12), name
+    # PyATB's reader: the same records in its Hartree and Bohr.
+    literal = literal_channel(records)
+    assert np.allclose(
+        literal.hamiltonian / PYATB_HARTREE, physical.hamiltonian / codata_hartree(), atol=1e-15
+    )
+    assert np.allclose(literal.cartesian / PYATB_BOHR, physical.cartesian / codata_bohr(), atol=1e-12)
+    assert np.allclose(literal.position / PYATB_BOHR, physical.position / codata_bohr(), atol=1e-12)
+
+
+def test_its_own_parse_is_the_scfout_and_not_queers_reader(tmp_path, monkeypatch):
+    """The recomputation reads the scfout itself: its physical operators equal QUEER's reconciled model blocks, and a
+    defect in QUEER's reader (its Hartree constant, its reconciliation, its spin-down channel) leaves them unchanged.
+    The real calibration scfout's records hold their identities to 4.4e-9 eV: the parse reconciles them as QUEER's
+    definition says."""
+    import queer.io.openmx as reader
+    import queer.models.openmx as models
+
+    shift_collinear_scfout(tmp_path / "collinear.scfout")
+    paths = [tmp_path / "collinear.scfout"] + ([CALIBRATION_SCFOUT] if CALIBRATION_SCFOUT.is_file() else [])
+    for path in paths:
+        model = OpenMXModel.from_scfout(path)
+        records = read_records(path)
+        assert records.spin_mode == model.spin_mode
+        size = records.orbitals
+        for index, blocks in enumerate(physical_channels(records)):
+            rows = (
+                slice(index * size, (index + 1) * size) if records.spin_mode == "collinear" else slice(None)
+            )
+            for position, key in enumerate(map(tuple, blocks.translations)):
+                for mine, theirs in (
+                    (blocks.hamiltonian[position], model.hamiltonian_blocks.get(key)),
+                    (blocks.overlap[position], model.overlap_blocks.get(key)),
+                ):
+                    expected = 0.0 if theirs is None else theirs.toarray()[rows, rows]
+                    assert np.allclose(mine, expected, rtol=0, atol=1e-14 * max(1.0, np.abs(mine).max()))
+        assert exactness_bound(records) == pytest.approx(model.degeneracy_tolerance, rel=1e-12)
+    before = physical_channels(read_records(tmp_path / "collinear.scfout"))
+    monkeypatch.setattr(reader, "HARTREE_EV", 27.0)
+    original = models._canonical_native_operators
+
+    def scaled(data):
+        h, s, r, errors = original(data)
+        return {key: 1.01 * value for key, value in h.items()}, s, r, errors
+
+    monkeypatch.setattr(models, "_canonical_native_operators", scaled)
+    after = physical_channels(read_records(tmp_path / "collinear.scfout"))
+    for first, second in zip(before, after, strict=True):
+        assert np.array_equal(first.hamiltonian, second.hamiltonian)
+    # The spin-down channel is its own records: its orbital levels 0.5 eV apart from the spin-up ones on site.
+    shift = np.zeros_like(after[0].hamiltonian)
+    shift[int(np.flatnonzero((after[0].translations == 0).all(axis=1))[0])] = np.diag([-0.5, 0.5])
+    assert np.allclose(after[1].hamiltonian - after[0].hamiltonian, shift, rtol=0, atol=1e-12)
+
+
+def test_pyatbs_reader_hermitizes_nspin_1_records_in_real_space(tmp_path):
+    """A collinear scfout whose +x record is off its partner's adjoint by 1e-9 eV: PyATB's reader replaces H(R) by
+    (H(R) + H(-R)^dagger)/2 before its upper triangles; QUEER's definition projects it the same way."""
+    shift_collinear_scfout(tmp_path / "nonherm.scfout", asymmetry=1e-9)
+    records = read_records(tmp_path / "nonherm.scfout")
+    literal = literal_channel(records)
+    partners = [
+        int(np.flatnonzero((records.translations == -key).all(axis=1))[0]) for key in records.translations
+    ]
+    mirrored = np.swapaxes(literal.hamiltonian[partners].conj(), -1, -2)
+    assert np.max(np.abs(literal.hamiltonian - mirrored)) <= 1e-15
+    raw = records.hamiltonian[0] * PYATB_HARTREE
+    assert np.max(np.abs(raw - np.swapaxes(raw[partners], -1, -2))) > 0.9e-9
 
 
 def test_a_nonorthogonal_model_needs_its_position_blocks():
@@ -117,9 +202,9 @@ def test_a_nonorthogonal_model_needs_its_position_blocks():
     overlap = np.zeros((3, 2, 2), complex)
     overlap[0] = np.eye(2)
     overlap[1] = overlap[2] = 0.05 * np.eye(2)
-    model = OpenMXModel(translations, hopping, overlap, lattice=np.diag([3.0, 10.0, 10.0]))
+    blocks = Blocks(translations, translations @ np.diag([3.0, 10.0, 10.0]), hopping, overlap, None)
     with pytest.raises(ValueError, match="position blocks"):
-        bloch_operators(channels(model)[0].reconciled, [0.1, 0.0, 0.0])
+        bloch_operators(blocks, [0.1, 0.0, 0.0])
 
 
 def test_pyatbs_grid_degenerate_velocities_and_levels():
@@ -153,7 +238,7 @@ def test_the_physical_mode_meets_queers_estimator_transition_by_transition(
     model = OpenMXModel.from_scfout(tmp_path / "soc.scfout")
     for k in points:
         energies, weights, source, target = queer_transitions(model, np.asarray(k), 2)
-        mine_energies, mine, _ = transcribed(model, k, 2)
+        mine_energies, mine, _ = transcribed(tmp_path / "soc.scfout", k, 2)
         assert np.max(np.abs(mine_energies[source, target - 2] - energies)) <= 1e-12
         absolute = np.max(np.abs(weights).sum(axis=0))
         assert np.max(np.abs(mine[source, target - 2] - weights)) <= 1e-9 * absolute, (label, k)
@@ -169,14 +254,14 @@ def test_the_covariant_treatment_of_an_exact_degeneracy_is_queers_in_any_basis(t
         tmp_path / "kramers.scfout", exchange=0.0, overlap_hopping=(0.06, 0.04, 0.03), dipole=0.6
     )
     model = OpenMXModel.from_scfout(tmp_path / "kramers.scfout")
-    blocks = channels(model)[0].reconciled
+    blocks = physical_channels(read_records(tmp_path / "kramers.scfout"))[0]
     for k, degenerate in (([0.0, 0.0, 0.0], True), ([0.5, 0.0, 0.0], True), ([0.13, 0.27, 0.31], False)):
         energies, weights, _, _ = queer_transitions(model, np.asarray(k), 2)
         queer = spectrum(energies, weights)
         peak = np.max(np.abs(queer))
         bases = (None, orthogonal_basis(4), orthogonal_basis(4, seed=7))
         for basis in bases:
-            mine_energies, mine, _ = transcribed(model, k, 2, basis=basis)
+            mine_energies, mine, _ = transcribed(tmp_path / "kramers.scfout", k, 2, basis=basis)
             assert np.max(np.abs(spectrum(mine_energies, mine) - queer)) <= 1e-12 * peak, k
         literal = []
         for basis in bases:
@@ -223,8 +308,8 @@ def test_the_literal_mode_is_pyatbs_table(tmp_path, label, writer, model_args, n
     """The PyATB-literal table equals the loop-by-loop port of PyATB's method 1 within its own rounding tolerance,
     which is far below PyATB's print precision."""
     writer(tmp_path / "model.scfout", **model_args)
-    model, full, recomputation = recomputed(tmp_path / "model.scfout", block)
-    _, port = pyatb_shift(model, full, nspin=nspin)
+    _, full, recomputation = recomputed(tmp_path / "model.scfout", block)
+    _, port = pyatb_shift(tmp_path / "model.scfout", full, nspin=nspin)
     literal = recomputation.literal
     peak = np.max(np.abs(port))
     assert peak > 0
@@ -242,7 +327,8 @@ def test_the_physical_tables_are_queers_shift_current(tmp_path):
     (PyATB's spin factor times the spin-up one), and the binned table without smearing."""
     shift_collinear_scfout(tmp_path / "collinear.scfout")
     block = {**COLLINEAR, "smearing_method": 0}
-    model, full, recomputation = recomputed(tmp_path / "collinear.scfout", block)
+    _, full, recomputation = recomputed(tmp_path / "collinear.scfout", block)
+    model = OpenMXModel.from_scfout(tmp_path / "collinear.scfout")
     run = ShiftRun.from_block(full)
     common = {
         "occupied_bands": 1,
@@ -277,6 +363,51 @@ def test_the_physical_tables_are_queers_shift_current(tmp_path):
         assert bool(np.max(table.edge) > 0) == name.endswith("binned"), name
 
 
+@pytest.mark.parametrize(
+    ("start", "domega", "end"),
+    [
+        (0.2, 0.02, 4.5),
+        (0.3, 0.05, 6.5),
+        (0.0, 0.01, 6.0),
+        (0.3, 0.02, 6.5),
+        (-0.5, 0.002, 6.5),
+        (1.5, 0.01, 6.5),
+    ],
+)
+def test_every_transition_lands_in_exactly_one_row(start, domega, end):
+    """QUEER's histogram and PyATB's rows place each transition by one integer index: energies exactly on the edges
+    (as the photon energies and as decimal numbers) land in exactly one row, where a test of each row's centre in
+    floating point dropped or doubled 5-15 % of them."""
+    run = ShiftRun.from_block(
+        {
+            "occ_band": 1,
+            "omega": [start, end],
+            "domega": domega,
+            "smearing_method": 0,
+            "eta": 0.01,
+            "grid": [1, 1, 1],
+        }
+    )
+    omega = run.omega
+    edges = np.concatenate([omega, omega + domega / 2, np.round(omega, 10), np.round(omega + domega / 2, 10)])
+    inside = (edges > start + 2 * domega) & (edges < run.end - 2 * domega)
+    kernels = Kernels(run)
+    for binned in (True, False):
+        totals = kernels.queer(binned=binned).value(edges).sum(axis=0) * (1.0 if binned else domega)
+        assert np.allclose(totals[inside], 1.0), binned
+        assert set(np.round(totals, 12)) <= {0.0, 1.0}
+    assert np.array_equal(kernels.pyatb().value(edges).sum(axis=0)[inside], np.ones(int(inside.sum())))
+    # The rules: per eV (w_i - domega/2, w_i + domega/2], binned (w_i, w_i + domega], PyATB int((E - start)/domega).
+    middle = start + 10 * domega
+    assert queer_rows(
+        run, np.array([middle + 0.4 * domega, middle + 0.6 * domega]), binned=False
+    ).tolist() == [10, 11]
+    assert queer_rows(
+        run, np.array([middle + 0.4 * domega, middle + 1.2 * domega]), binned=True
+    ).tolist() == [10, 11]
+    assert pyatb_rows(run, np.array([middle + 0.4 * domega, start - 0.4 * domega])).tolist() == [10, 0]
+
+
 def test_a_transition_on_a_bin_edge_is_priced_both_ways(tmp_path):
     """The collinear model's two transitions at exactly 1.64 eV lie on the edge between rows 35 and 36 of the bins
     (w, w + domega]: the edge term holds their weight in both rows, and in the sum over the rows only in row 35."""
@@ -299,11 +430,11 @@ def test_its_workers_give_the_same_tables(tmp_path, monkeypatch):
 
     monkeypatch.setattr(pyatb_shift_integrand, "SERIAL_WORK", 0.0)
     shift_spinor_scfout(tmp_path / "soc.scfout")
-    model = OpenMXModel.from_scfout(tmp_path / "soc.scfout")
+    records = read_records(tmp_path / "soc.scfout")
     run = ShiftRun.from_block({**SHIFT_DEFAULTS, **SPINOR, "grid": [4, 4, 3]})
-    assert work(model, run) == 48 * 4**3
-    serial = recompute(model, run, handedness=1, workers=1)
-    parallel = recompute(model, run, handedness=1, workers=2, memory_bytes=4e9)
+    assert work(records, run) == 48 * 4**2 * (4 + run.count / 8)
+    serial = recompute(records, run, workers=1)
+    parallel = recompute(records, run, workers=2, memory_bytes=4e9)
     assert serial.facts["workers"] == 1 and parallel.facts["workers"] == 2
     for name in ("sigma",):
         first, second = serial.physical[name], parallel.physical[name]
@@ -317,24 +448,24 @@ def test_its_workers_give_the_same_tables(tmp_path, monkeypatch):
 )
 def test_a_real_nonorthogonal_scfout_with_position_moments_meets_queer():
     """The real OpenMX calibration scfout (overlap, position moments, spin-orbit coupling): the physical mode meets
-    QUEER's estimator at generic k-points; at Gamma and M, where its inversion makes every integrand vanish but for
-    rounding, the two orbital bases' difference measures that rounding, and QUEER's estimator meets it."""
+    QUEER's estimator at generic k-points; at Gamma and M, where its near inversion leaves every integrand at the
+    level of rounding (a factor a symmetry forbids is noise of the size of the elements its eigenvectors' rounding
+    mixes in, not of its own size), QUEER's estimator meets it within the term floor: the integrand's first-order
+    rounding propagated from the operators, eigenvectors and energies, times :data:`TERM_FLOOR` (the bases' spread
+    alone, the earlier rounding scale, falls short there)."""
     model = OpenMXModel.from_scfout(CALIBRATION_SCFOUT)
     assert model.position_blocks and np.abs(model.overlap([0.1, 0.2, 0.0]) - np.eye(model.nbnd)).max() > 0.1
     rng = np.random.default_rng(5)
     for k in rng.random((2, 3)) * [1, 1, 0]:
         energies, weights, source, target = queer_transitions(model, k, 3)
-        _, mine, _ = transcribed(model, k, 3)
+        _, mine, _ = transcribed(CALIBRATION_SCFOUT, k, 3)
         absolute = np.max(np.abs(weights).sum(axis=0))
         assert np.max(np.abs(mine[source, target - 3] - weights)) <= 1e-10 * absolute
-    basis = orthogonal_basis(model.nbnd)
-    for k in ([0.0, 0.0, 0.0], [0.5, 0.0, 0.0], [0.5, 0.5, 0.0]):
-        energies, weights, source, target = queer_transitions(model, np.asarray(k), 3)
-        first_energies, first, _ = transcribed(model, k, 3)
-        second_energies, second, _ = transcribed(model, k, 3, basis=basis)
-        queer = spectrum(energies, weights)
-        mine = spectrum(first_energies[source, target - 3], first[source, target - 3])
-        spread = np.max(
-            np.abs(mine - spectrum(second_energies[source, target - 3], second[source, target - 3]))
-        )
-        assert spread > 0 and np.max(np.abs(mine - queer)) <= 100 * spread, k
+    for occupied in (3, 4, 16):
+        for k in ([0.0, 0.0, 0.0], [0.5, 0.0, 0.0], [0.5, 0.5, 0.0]):
+            _, weights, source, target = queer_transitions(model, np.asarray(k), occupied)
+            _, mine, result = transcribed(CALIBRATION_SCFOUT, k, occupied)
+            floor = 0.5 * TERM_FLOOR * result["terms"][source, target - occupied]
+            gap = np.abs(mine[source, target - occupied] - weights)
+            assert np.all(gap <= floor), (occupied, k)
+            assert np.max(gap / floor) < 0.1, (occupied, k)

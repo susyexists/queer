@@ -238,13 +238,16 @@ def shift_collinear_scfout(
     split=0.25,
     spin=1,
     chemp_eV=0.0,
+    asymmetry=0.0,
 ):
     """A gapped 2D two-orbital model without inversion, collinear (``spin`` 1) or non-spin-polarized (0).
 
     The real mixing ``forward e^{ik} + backward e^{-ik}`` has both a cos and a sin
     part along each axis of a rectangular cell (3.0, 3.3, 12 Å). With ``spin`` 1 the
     two channels' orbital levels move by ``+split`` and ``-split`` in opposite
-    directions, so their shift currents differ.
+    directions, so their shift currents differ. ``asymmetry`` (eV) moves the +x record
+    off its partner's adjoint by ``asymmetry [[0.3, 1], [-0.7, 0.5]]``, as an SCF's
+    quadrature leaves real records Hermitian only to some 1e-9 eV.
     """
     lattice = np.diag([3.0, 3.3, 12.0])
 
@@ -257,6 +260,7 @@ def shift_collinear_scfout(
             hop = np.array([[hopping[0], forward[axis]], [backward[axis], hopping[1]]])
             blocks[1 + 2 * axis] = hop
             blocks[2 + 2 * axis] = hop.T
+        blocks[1] = blocks[1] + asymmetry * np.array([[0.3, 1.0], [-0.7, 0.5]])
         return blocks
 
     components = (channel(1), channel(-1)) if spin == 1 else (channel(0),)

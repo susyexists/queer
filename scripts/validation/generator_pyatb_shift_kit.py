@@ -16,8 +16,9 @@ possible. It writes, under ``--output``:
 - ``queer-side/<case>/``: QUEER's own run of each case (``queer_params.json``,
   ``queer_results.json``, its ``shift_current.dat``) and ``queer-side/summary.json``
   with each case's prediction: the comparison of QUEER's run against the table of
-  ``tests/numerical/pyatb_shift_port.py`` (a loop-by-loop port of PyATB's method 1)
-  standing in for PyATB's;
+  ``tests/numerical/pyatb_shift_port.py`` (a loop-by-loop port of PyATB's reader and
+  method 1, sharing no code with QUEER's reader or the recomputation) standing in for
+  PyATB's;
 - ``README.md``: the SHA-256 of every file, how to run the kit and the expected
   verdicts.
 
@@ -274,7 +275,6 @@ def predict(output: Path, case: str, model: str, nspin: int, workspace: Path, wo
     """The comparison of QUEER's run against the loop port's table standing in for PyATB's."""
     from pyatb_shift_port import pyatb_shift
 
-    from queer import OpenMXModel
     from queer.compat.generator.openmx_params import SHIFT_DEFAULTS
     from queer.compat.generator.parity import compare
 
@@ -282,7 +282,7 @@ def predict(output: Path, case: str, model: str, nspin: int, workspace: Path, wo
     scfout = output / model
     started = time.perf_counter()
     if int(block.get("method", 1)) == 1:
-        _, table = pyatb_shift(OpenMXModel.from_scfout(scfout), block, nspin=nspin)
+        _, table = pyatb_shift(scfout, block, nspin=nspin)
     else:
         start, end = (float(value) for value in block["omega"])
         table = np.zeros((int((end - start) / float(block["domega"])) + 1, len(SHIFT_COMPONENTS)))
@@ -404,8 +404,9 @@ def readme(output: Path, summary: dict) -> str:
         "",
         "## Cases and the expected comparison",
         "",
-        "The expected verdict is what the comparison gives with the loop port of PyATB's method 1",
-        "(`tests/numerical/pyatb_shift_port.py`) standing in for PyATB (`prediction` in `queer-side/summary.json`).",
+        "The expected verdict is what the comparison gives with the loop port of PyATB's reader and method 1",
+        "(`tests/numerical/pyatb_shift_port.py`, sharing no code with QUEER's reader or the recomputation) standing in",
+        "for PyATB (`prediction` in `queer-side/summary.json`).",
         "",
         "| Case | scfout | Expected verdict | Expected classes | Documented by | QUEER max abs sigma (uA/V^2) | Purpose |",
         "|---|---|---|---|---|---|---|",
@@ -421,9 +422,11 @@ def readme(output: Path, summary: dict) -> str:
         "",
         "`queer-side/<case>/queer_results.json` holds QUEER's run of each case: `shift_current.sigma_uA_V2` is QUEER's",
         "physical value, the value judged, and its diagnostics are plain facts of the run. A comparison reads none of",
-        "them: it recomputes QUEER's physical spectrum and the table PyATB prints from the scfout, each in two orbital",
-        "bases (`queer.compat.generator.pyatb_shift_integrand`), checks QUEER's tables against the first (a mismatch",
-        "fails) and PyATB's printed table against the second (a mismatch is `not_comparable`), and classes each",
+        "them: it parses the scfout itself (`queer.compat.generator.shift_scfout`, no code of QUEER's reader) and",
+        "recomputes QUEER's physical spectrum and the table PyATB prints from it, each in four orbital bases",
+        "(`queer.compat.generator.pyatb_shift_integrand`); it judges first which entries the scfout determines, then",
+        "checks QUEER's tables against the first at those entries (a mismatch fails) and PyATB's printed table",
+        "against the second (a mismatch is `not_comparable`), and classes each",
         "component, documenting a difference with the recomputation's own attribution (PyATB's SI constants, Hartree",
         "constant, window, rows and truncation, scissored kernels, method-1 integrand). `queer-side/summary.json` lists",
         "the headline numbers, the prediction and the build (`queer_source_sha256`) the runs come from.",
