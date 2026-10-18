@@ -218,3 +218,30 @@ def test_layer_band_geometry_is_an_observable_with_units():
     assert result.metadata["position_level"] == "diagonal"
     with pytest.raises(ValueError):
         obs.layer_band_geometry(table, np.zeros((0, 3)), window=(0, 2))
+
+
+def test_a_wannier_model_gives_its_table_at_both_levels():
+    from queer.models.wannier import WannierModel
+
+    rng = np.random.default_rng(7)
+    R, H, lattice, centres = layer(rng, bands=3)
+    r = position_table(rng, R, centres)
+    model = WannierModel(R, H, lattice=lattice, centres=centres, position=r, fermi_energy=0.4)
+    frame = phys.layer_frame(lattice)
+    shifted = H.copy()
+    shifted[np.flatnonzero(~R.any(axis=1))[0]] -= 0.4 * np.eye(3)
+    proj = np.stack([frame["e1"][:2], frame["e2"][:2]], axis=1)
+    full = obs.QgeomTable.from_model(model)
+    expected = obs.QgeomTable(R, shifted, lattice, frame, r=r[..., :2] @ proj)
+    assert full.level == "full"
+    np.testing.assert_array_equal(full.stack, expected.stack)
+    diagonal = obs.QgeomTable.from_model(model, level="diagonal")
+    tau = np.stack([centres @ frame["e1"], centres @ frame["e2"]], axis=1)
+    assert diagonal.level == "diagonal"
+    np.testing.assert_allclose(diagonal.tau, tau, atol=1e-13)
+    tilted = lattice.copy()
+    tilted[1, 2] = 0.5
+    with pytest.raises(ValueError, match="normal along z"):
+        obs.QgeomTable.from_model(WannierModel(R, H, lattice=tilted, centres=centres, position=r))
+    with pytest.raises(ValueError, match="position matrices"):
+        obs.QgeomTable.from_model(WannierModel(R, H, lattice=lattice, centres=centres), level="full")
