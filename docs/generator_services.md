@@ -752,7 +752,8 @@ for an adaptive integral, `Out/AHC/integraton.log`. The command recognises such 
 directory and needs no `--step`; `--scfout FILE` names the scfout to hash when the
 reference has no `inputs.sha256`. A `SHIFT_CURRENT` comparison requires `--scfout`
 (it recomputes both spectra from it, on `--workers N` processes, refusing more than
-`--recompute-budget N` k-points x bands^3; see the shift current below):
+`--recompute-budget N` of work, k-points x bands^2 x (bands + photon energies / 8);
+see the shift current below):
 
 ```bash
 python -m queer generator compare --reference runs/pyatb-ahc --candidate runs/queer-ahc \
@@ -946,29 +947,52 @@ served them.
 
 *The recomputation* (`queer.compat.generator.pyatb_shift_integrand`) evaluates, on
 the run's own Gamma-origin grid and photon energies, two complete spectra of all 18
-components from the scfout, sharing only the scfout reader (`OpenMXModel`) and
-numpy with QUEER, none of its runner or observables:
+components from the scfout. It reads the scfout itself
+(`queer.compat.generator.shift_scfout`, written from OpenMX's version-3 record layout:
+`Hks`, `iHks`, `OLP`, the first `OLPpo` moments, the lattice and atomic positions in
+atomic units; the file must end where its records and embedded input lines say) and
+shares only numpy and scipy with QUEER: none of QUEER's scfout reader, runner or
+observables. A defect in QUEER's reader (its Hartree constant, its reconciliation of
+the records, its spin-down channel) therefore moves QUEER's value and not the
+physical mode's, and check A fails; a defect in this parse moves the literal table and
+not PyATB's, and check B is not met. (Until 2026-10-18 the physical mode was built from
+QUEER's reader; three such defects then passed both checks.)
 
-- the **physical** mode, QUEER's shift current written from its equations:
+- the **physical** mode, QUEER's shift current written from its equations on QUEER's
+  physical operators: CODATA's Hartree and Bohr (`scipy.constants`); a collinear
+  scfout's spin-down channel from its own `Hks` records; with spin-orbit coupling the
+  spinor `[[uu, ud], [ud(-R)^+, dd]]` (`uu = Hks0 + i iHks0`, `dd = Hks1 + i iHks1`,
+  `ud = Hks2 + i (Hks3 + iHks2)`); the absolute position operator
+  `r_a(R) = OLPpo_a(R) + tau_a S(R)` (`tau` the bra orbital's atom); every record
+  projected onto the translation identities, `H(R) = (H(R) + H(-R)^+)/2`, the same for
+  `S`, and `r_a(R) = (r_a(R) + r_a(-R)^+ + R_a S(R))/2`. Then
   `sigma^abc(w) = -(pi e^2/hbar) (g/(V N_k)) sum_k sum_{m occ, n empty} f_mn
-  Im[r^b_mn r^c_nm;a]_(bc) delta(w - w_nm)` with the exact SI 2019 `e` and `hbar`, the
-  reader's Hartree, `V = abs(det A)`, `g = 2` without spin polarization, a collinear
-  scfout's two channels summed (each with `occ_band` levels) and the spinor bands with
-  spin-orbit coupling; the scissors moving the transition energies only; every
-  transition above the degeneracy tolerance (`max(1e-9 eV, 10 x)` the largest
-  adjoint residual of the scfout's own Hamiltonian records, measured here); the
-  Gaussian `exp(-(x/eta)^2)/(eta sqrt(pi))` (standard deviation `eta/sqrt(2)`) or,
-  without smearing, the histogram `1[w - E in [-domega/2, domega/2)]/domega` per eV
-  and the weight in `(w, w + domega]` (`binned_uA_V2`); an exact degeneracy treated
+  Im[r^b_mn r^c_nm;a]_(bc) delta(w - w_nm)` with the exact SI 2019 `e` and `hbar`,
+  `V = abs(det A)`, `g = 2` without spin polarization, a collinear scfout's two
+  channels summed (each with `occ_band` levels) and the spinor bands with spin-orbit
+  coupling; the scissors moving the transition energies only; every transition above
+  the degeneracy tolerance (`max(1e-9 eV, 10 x)` the largest adjoint residual of the
+  scfout's own Hamiltonian records, measured here); the Gaussian
+  `exp(-(x/eta)^2)/(eta sqrt(pi))` (standard deviation `eta/sqrt(2)`) or, without
+  smearing, QUEER's histogram with each transition's row from one integer index, so
+  every transition lands in exactly one row: per eV row `i` holds
+  `w_i - domega/2 < E <= w_i + domega/2` (`ceil(x - 1/2)`, weight `1/domega`) and
+  `binned_uA_V2`'s row `i` holds `w_i < E <= w_i + domega` (`ceil(x) - 1`), with
+  `x = (E - start)/domega` (a test of each row's centre in floating point dropped or
+  doubled 5-15 % of the transitions exactly on an edge); an exact degeneracy treated
   covariantly (parallel transport inside the degenerate levels,
   `D_a = -Sbar_a/2 + i (rbar_a + rbar_a^+)/2` there, and their velocity matrix), so a
   degenerate level's transitions sum to a value independent of the basis inside it;
 - the **PyATB-literal** mode, what PyATB 60fc6b2a prints, transcribed from its
   sources (`shift_current_solver.cpp`, `linear_response.cpp`, `xr_operation.cpp`,
-  `base_data.cpp`, `openmx_read_scfout.py`; read only, written anew): its Bloch sums
-  of the upper triangles of the scfout's records (Hermitian completion; the position
-  operator's lower triangle from `(r + i dS)^+`), its Hartree constant
-  27.211324570273 eV, the scissored levels in its derivative kernels, its method-1
+  `base_data.cpp`, `openmx_read_scfout.py`; read only, written anew): its reader's
+  operators (Hartree 27.211324570273 eV, Bohr 0.52917721 Angstrom; for `nspin 1` the
+  spin-up `Hks` only, with `H` and `S` replaced by `(X(R) + X(-R)^+)/2` over the
+  translations and their negatives before anything else; for `nspin 4` the spinor with
+  its `H21` block from `H12(-R)^+` and the recorded overlap; the real part of the
+  position operator built with the recorded overlap), its Bloch sums of their upper
+  triangles (Hermitian completion; the position operator's lower triangle from
+  `(r + i dS)^+`), the scissored levels in its derivative kernels, its method-1
   integrand (`get_Inm_ik_sumOver` with `get_D_degenerate`: `1/dE`, or
   `dE/(dE^2 + 0.04^2)` within 1e-4 eV, `i rbar(j, j)` on the diagonal, and the band
   velocities of `get_partial_eigenvalue_fromBar`), its window
@@ -977,24 +1001,49 @@ numpy with QUEER, none of its runner or observables:
   or its bare row weight without smearing, and its prefactor
   `-t pi e^3/(2 hbar^2 V N_k) 1e6` with its constants (`t` = 6.582119e-16 eV s,
   e = 1.602176565e-19 C, hbar = 1.054571726e-34 J s), the signed cell volume and its
-  spin factor (2 for `nspin 1`, which reads the spin-up channel only). `method 0`
-  and the adaptive smearing are not transcribed.
+  spin factor (2 for `nspin 1`). `method 0` and the adaptive smearing are not
+  transcribed. A collinear scfout whose records are Hermitian only to 1e-10 to 3e-9 eV
+  was not reproduced before the Hermitization was transcribed.
 
-Each mode is evaluated again in a fixed random orthogonal change of the orbital
-basis, which reaches the same levels and integrand through other floating-point
-operations. A table's **rounding tolerance** at each entry is 100 times the envelope
-`sum_k abs(T_k - T'_k)` of the two bases' tables (taken per k-point, so no
-cancellation between k-points hides it), plus `1e-13` times the broadened magnitudes
-`abs(r^b) abs(r^c_;a) + abs(r^c) abs(r^b_;a)` of its transitions times their
-conditioning `1 + max abs(E)/s` (`s` the nearest other level), plus the kernel's own
-rounding and its slope times the transition energies' rounding (each `64 eps`), plus,
-for a transition within 1e-9 eV of a discontinuity of the kernel (a bin edge, PyATB's
-row and window edges), the difference of placing it either side. No number of the
-candidate's enters a tolerance. The conditioned floor is needed: on the split model
-(Kramers pairs 4e-5 eV apart) QUEER's own value differs from the recomputation by 3.8
-times the 100-fold envelope, and by 2 % of the floor. Where PyATB's own value depends
-on its eigensolver's basis inside degenerate levels (on-site dipoles at exact Kramers
-pairs), the two bases differ by that dependence and the tolerance says so.
+Each mode is evaluated in four orbital bases: the first and three fixed random
+orthogonal changes of it, each with the translations of its Bloch sums in another
+fixed random order, which reach the same levels and integrand through other
+floating-point operations. A table's **rounding tolerance** at each entry is
+
+- 100 times its envelope, the largest over the other bases of `sum_k abs(T_k - T'_k)`
+  (taken per k-point, so no cancellation between k-points hides it);
+- plus 32 eps times the broadened first-order rounding of its transitions'
+  integrands: every quantity of the formula carries its rounding forward (a product
+  `x y` by `N_x |y| + |x| N_y`, a sum by its parts' sum, the second-order product too)
+  from three sources: the operators' Bloch sums and projections
+  (`|C|^T (sum_R |w_R| |X(R)|) |C|`); the eigenvectors, which a backward-stable solver
+  rotates into each other level `j` by up to `s/|E_m - E_j|`
+  (`s = max |E| max(1, max_n |C_n|^2)`), moving a projection by
+  `s (G |Xbar| + |Xbar| G)` with `G_mj = 1/|E_m - E_j|` (a symmetry-forbidden factor is
+  noise of the size of the elements that rotation mixes in, not of its own size); and
+  the energies (`max |E|` each, through every `1/dE`). Levels closer than 1 % of the
+  kernel's width (eta, or domega without smearing) are one group: for a transition
+  between two groups that lie wholly on their sides of the occupation boundary (and no
+  band pair) the table sums every transition between them, so the rotation inside a
+  group cancels there but for the group's spread through the kernel's slope (or whole
+  at a bin edge within that spread); a transition inside a group keeps all of it;
+- plus the kernel's own rounding and its slope times the transition energies'
+  rounding (each `64 eps`);
+- plus, for a transition within 1e-9 eV of a discontinuity of the kernel (a bin edge,
+  PyATB's row and window edges), the difference of placing it either side.
+
+No number of the candidate's enters a tolerance. Measured transition by transition
+against QUEER's estimator on thirteen models (clean, nonorthogonal with dipoles,
+Kramers pairs, pairs split by 4e-5 and 1e-7 eV, weakly broken symmetries, the real
+calibration scfout at occ_band 2, 4 and 16), QUEER's difference is at most 4.2e-16 of
+that first-order rounding, so 32 eps leaves a factor of 17. A single second basis is
+not a bound where integrands are rounding (the earlier design's 100-fold two-basis
+envelope plus `1e-13` of the conditioned magnitudes `abs(r^b) abs(r^c_;a)`): QUEER's
+honest value then failed at PyATB's eta 0.01 on 10 of 20 real-scfout configurations and
+on 12 of 48 weakly broken analytic models. Where PyATB's own value depends on its
+eigensolver's basis inside degenerate levels (on-site dipoles at exact Kramers pairs, its
+regularized block at natural near-degeneracies), the bases differ by that dependence and
+the tolerance says so.
 
 In order:
 
@@ -1004,29 +1053,34 @@ In order:
    candidate's provenance; PyATB's resolved settings equal QUEER's (its defaults and
    band-pair rule, `nspin` as the scfout's layout reads it: 4 with spin-orbit
    coupling, else 1); PyATB's printed photon energies are its `start + i domega` to
-   its five decimals; `method 1` and `smearing_method` 0 or 1; k-points times bands^3
-   (summed over the channels) within the recompute budget (`recompute_budget=`,
-   `--recompute-budget`, default 4e9: else "too large to recompute here: run the
-   comparison as a separate job"); a scfout the reader and the transcription evaluate.
-2. *Check A, QUEER's physical value* (a mismatch is `differs_unexplained`, a QUEER
+   its five decimals; `method 1` and `smearing_method` 0 or 1; the work, k-points x
+   bands^2 x (bands + photon energies / 8) summed over the channels, within the
+   recompute budget (`recompute_budget=`, `--recompute-budget`, default 8e9: else "too
+   large to recompute here: run the comparison as a separate job"); a scfout the parse
+   and the transcription evaluate.
+2. *Determined*, judged first: an entry of a table checks A and B judge (QUEER's
+   physical tables and PyATB's literal one) is determined when its rounding without
+   the edge placements (which the sums bound) lies within 0.1 times 1e-4 of the
+   table's largest value; every entry is when the table vanishes (its values and
+   rounding below 1e-6 of the broadened magnitudes it cancels from, and its values
+   within 1e3 times its rounding: near-degenerate partners' transitions carry
+   magnitudes far above what their sum cancels from, so the share alone would call a
+   nonzero table vanishing).
+3. *Check A, QUEER's physical value* (a mismatch is `differs_unexplained`, a QUEER
    defect, and fails whatever PyATB printed): `sigma_uA_V2`, without smearing
    `binned_uA_V2`, and for a collinear scfout `legacy_single_channel` (PyATB's spin
    factor times the spin-up channel; `sigma_uA_V2` is both channels) each equal the
-   physical mode at every entry within its rounding tolerance, and their sums over the
-   photon energies up to each one within the summed tolerance: a transition on a bin
-   edge may land on either side of it (its two rows allow either placement), never
-   vanish or count twice. QUEER's photon energies are PyATB's to 1e-9 eV, and its own
-   `shift_current.dat` holds the lattice's handedness times its table.
-3. *Determined* (`not_comparable`): every table checks A and B judge has a rounding
-   tolerance (without the edge placements, which the sums bound) within 0.1 times
-   1e-4 of its largest value, unless it vanishes (its values and rounding below 1e-6
-   of the broadened magnitudes it cancels from; the calibration scfout's
-   inversion-symmetric response is determined to 1.7e-8 of them where four natural
-   near-degenerate k-points condition it). Otherwise the scfout does not determine the
-   values to the agreement tolerance (QUEER's value ill-conditioned at near-degenerate
-   levels, or PyATB's own value changing with its eigensolver's basis inside
-   degenerate levels). A wrong value check A has already failed stays a failure; the
-   report still says whether PyATB's table was reproduced.
+   physical mode at every determined entry within its rounding tolerance, and their
+   sums over the photon energies up to each one within the summed tolerance: a
+   transition on a bin edge may land on either side of it (its two rows allow either
+   placement), never vanish or count twice. An entry the scfout does not determine
+   counts at most its tolerance, so it never fails a comparison; it makes the
+   comparison `not_comparable` (the scfout does not determine the values to the
+   agreement tolerance: QUEER's value ill-conditioned at near-degenerate levels, or
+   PyATB's own value changing with its eigensolver's basis inside degenerate levels).
+   QUEER's photon energies are PyATB's to 1e-9 eV, and its own `shift_current.dat`
+   holds the lattice's handedness times its table. A failure here stands; the report
+   still records the determination and whether PyATB's table was reproduced.
 4. *Check B, PyATB's table* (`not_comparable`, "PyATB's table is not reproduced",
    with the gap): PyATB's printed table equals the PyATB-literal mode within its print
    precision (half a unit in the seventh significant digit of each `%15.6e` value) and
@@ -1042,53 +1096,63 @@ In order:
    otherwise `differs_documented` with the measured gap and an attribution computed by
    the recomputation, which switches PyATB's ingredients on one after another
    (`constants`, `hartree`, `window`, `bins`: its rows and truncation, `scissors`: its
-   scissored derivative kernels, `cut`: its method-1 integrand and Bloch sums) and
-   reports each step's largest change and the residual (QUEER's and PyATB's gaps to
-   the recomputation, bounded by checks A and B). Because checks A and B hold, the
-   steps telescope from QUEER's value to PyATB's table: every documented difference
-   is explained by construction. **Approved deviation from the plan (the user,
-   2026-10-17)**: a difference fully explained by a reproduced, bounded mechanism is
-   documented without an open-ended cause.
+   scissored derivative kernels, `cut`: its method-1 integrand and the Bloch sums of
+   its reader's operators) and reports each step's largest change and the residual
+   (QUEER's and PyATB's gaps to the recomputation, bounded by checks A and B). Because
+   checks A and B hold, the steps telescope from QUEER's value to PyATB's table: every
+   documented difference is explained by construction. **Approved deviation from the
+   plan (the user, 2026-10-17)**: a difference fully explained by a reproduced, bounded
+   mechanism is documented without an open-ended cause.
 
 *Information, not gates*: the symmetry of the two tables (the components above 1e-4
 of each table's largest value and the signs of their integrals over omega), the
 candidate's self-convergence estimate, for a collinear scfout the gap between QUEER's
 physical value (both channels) and PyATB's table, and the recomputation's facts
 (transitions PyATB selects, the k-points its method 1 regularizes and those with an
-exact degeneracy, the smallest such spacing, the bases' seed, workers and seconds).
+exact degeneracy, the smallest such spacing, the records' distances from their
+translation identities, the bases' seed, workers and seconds).
 
-*Cost.* The recomputation is a full grid evaluation, twice per mode (two bases),
-vectorized over batches of 32 k-points and spread over `--workers` processes (QUEER's
-process executor; default every CPU), its memory planned like the runner's. One core
-evaluates about 1.5e6 of `N_k nbnd^3` a second on the calibration scfout (30 bands,
-601 photon energies, a Gaussian; the photon energies set the kernels' share, and
-without smearing it is faster), so the default budget of 4e9 is
-some 45 minutes on one core. The calibration kit's cases (16^3 k-points of the
-four-band spinor model, 48 x 48 of the collinear one, 12 x 12 of the real scfout)
-each recompute in 1 to 3 seconds on 8 workers.
+*Cost.* The recomputation is a full grid evaluation, four times per mode, vectorized
+over batches of 32 k-points and spread over `--workers` processes (QUEER's process
+executor; default every CPU), its memory planned like the runner's. Its work is
+k-points x bands^2 x (bands + photon energies / 8), summed over the channels: the
+eigensystems and integrands grow as the cube of the bands, the kernels as the square of
+the bands times the photon energies. One core does about 3e6 of it a second on the
+calibration scfout (30 bands; 51, 601 and 2401 photon energies alike), so the default
+budget of 8e9 is some 45 minutes on one core; its 18 x 18 grid with 601 photon
+energies takes 10 s, 36 x 36 takes 39 s.
 
 *Scenarios* (`tests/numerical/test_generator_parity_pyatb_shift.py`, with
-`tests/numerical/pyatb_shift_port.py`, a loop-by-loop port of PyATB's method 1, as
-PyATB): a wrong QUEER value (negated, doubled, zeroed, scaled by 1 + 1e-6, columns
-swapped, rows rolled, one component zeroed) fails with or without diagnostics that
-agree with it and whether PyATB printed its own table or the wrong value; forged
-diagnostics change nothing; QUEER reporting PyATB's window, Hartree constant or
-truncation as its physical value fails; an error in either table without smearing,
-a wrong spin-down channel or a wrong legacy channel fails; a degeneracy tolerance
-too large (5e-5 eV for pairs 4e-5 eV apart) fails; an error confined to the k-points
-PyATB's method 1 regularizes fails; a transition on a bin edge may change rows but
-not vanish or count twice; a PyATB table scaled, shifted, rolled or with one
-component zeroed is `not_comparable`, also at exact Kramers pairs; correct candidates
-pass or are documented (scissors: `scissors`; PyATB's window: `window`; pairs split
-by 4e-5 eV: `cut`), including PyATB's default eta 0.01 on steps of 0.01 and 0.02 eV,
-narrow eta on fine steps, left-handed and collinear lattices, Kramers pairs at the
-TRIM points in orthogonal and nonorthogonal bases, and responses that vanish; a
-correct candidate whose levels are split by 1e-8 eV (QUEER's value ill-conditioned)
-or whose exact Kramers pairs carry on-site dipoles (PyATB's value basis-dependent) is
-`not_comparable`. On the real calibration scfout its vanishing response passes (12 x
-12, occ_band 3), and on 18 x 18 with occ_band 16, where four k-points hold levels
-5.8e-5 eV apart, PyATB's cut breaks the inversion that makes the physical value
-vanish: 12 components are documented, each by `cut`.
+`tests/numerical/pyatb_shift_port.py`, a loop-by-loop port of PyATB's reader and method
+1 that shares no code with QUEER's reader or the recomputation, as PyATB): a wrong
+QUEER value (negated, doubled, zeroed, scaled by 1 + 1e-6, columns swapped, rows
+rolled, one component zeroed) fails with or without diagnostics that agree with it and
+whether PyATB printed its own table or the wrong value, also on weakly broken symmetries
+and on pairs split across the occupation boundary; a defect in QUEER's scfout reader
+(its Hartree constant 27.0 eV, its reconciled Hamiltonian 1 % off, its collinear
+spin-down channel parsed from the spin-up records) fails; forged diagnostics change
+nothing; QUEER reporting PyATB's window, Hartree constant or truncation as its physical
+value fails; an error in either table without smearing, a wrong spin-down channel or a
+wrong legacy channel fails; a degeneracy tolerance too large (5e-5 eV for pairs 4e-5
+eV apart) fails; an error confined to the k-points PyATB's method 1 regularizes fails;
+a transition on a bin edge may change rows but not vanish or count twice; QUEER's value
+beyond its rounding only at entries the scfout does not determine is
+`not_comparable`, at a determined entry it fails; a PyATB table scaled, shifted, rolled
+or with one component zeroed is `not_comparable`, also at exact Kramers pairs; correct
+candidates pass or are documented (scissors: `scissors`, also with transitions exactly
+on bin edges; PyATB's window: `window`; pairs split by 4e-5 eV: `cut`, also across the
+occupation boundary and for one band pair of them), including PyATB's default eta 0.01
+on steps of 0.01 and 0.02 eV, narrow eta on fine steps, left-handed and collinear
+lattices, records Hermitian only to 1e-9 eV, weakly broken symmetries whose integrands
+are rounding at TRIM points, Kramers pairs at the TRIM points in orthogonal and
+nonorthogonal bases, and responses that vanish; a correct candidate whose levels are
+split by 1e-8 eV at eta 0.01 (QUEER's value ill-conditioned) or whose exact Kramers
+pairs carry on-site dipoles (PyATB's value basis-dependent) is `not_comparable`. On the
+real calibration scfout its vanishing response passes (12 x 12, occ_band 3; and occ_band
+4 at eta 0.01 and 0.1, whose integrands at the TRIM points are rounding, with PyATB's
+table reproduced), and on 18 x 18 with occ_band 16, where four k-points hold levels
+5.8e-5 eV apart, PyATB's cut breaks the inversion that makes the physical value vanish:
+12 components are documented, each by `cut`.
 
 *Literature anchor*, on its own: `literature_anchor(run, anchor)` takes GaAs
 sigma^xyz of Ibanez-Azpiroz, Tsirkin and Souza, PRB 97, 245143 (2018) at the
