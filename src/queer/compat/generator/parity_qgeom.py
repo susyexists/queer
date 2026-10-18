@@ -26,8 +26,9 @@ sets are equal when both runs recorded ``Out/qgeom_vertices.json`` with equal
 SHA-256 of the sorted integer vertex keys (exact coordinates), or, against a
 reference without the record, when the recorded mesh (vertex count, vertices per
 rule, levels, finest cell, seeds, controlled mu, the capped gap rule and the last
-12 history entries) is equal. The stop reason and the convergence flags must be
-equal.
+12 history entries) is equal. A record must be its own run's mesh, and a QUEER
+candidate without one fails against a reference that has one. The stop reason and
+the convergence flags must be equal.
 
 **Quantities.** With δ(T) = 1e-8 max(max A3, max |M|) over both runs at
 temperature T: the occupied manifold's C and C_in to 1e-8 max(1, |C|), K_in, K_diag
@@ -333,6 +334,27 @@ class QgeomComparison(_Comparison):
             self.reference.out("qgeom_vertices.json"),
             self.candidate.out("qgeom_vertices.json"),
         )
+        # Each record must be its own run's mesh; QUEER always writes one.
+        inconsistent = [
+            f"the {run.role}'s vertex record ({record.get('count')} vertices) is not its mesh "
+            f"({integration.get('vertices')} vertices)"
+            for run, record, integration in ((self.reference, record_a, ia), (self.candidate, record_b, ib))
+            if isinstance(record, dict) and record.get("count") != integration.get("vertices")
+        ]
+        own = ib.get("vertex_set")
+        if (
+            isinstance(record_b, dict)
+            and isinstance(own, dict)
+            and own.get("sha256") != record_b.get("sha256")
+        ):
+            inconsistent.append("the candidate's vertex record differs from its integration.vertex_set")
+        if self.candidate.engine == "queer" and isinstance(record_a, dict) and not isinstance(record_b, dict):
+            inconsistent.append("the candidate wrote no Out/qgeom_vertices.json")
+        if inconsistent:
+            self.quantity(
+                "qgeom.mesh", UNEXPLAINED, float(len(inconsistent)), 0.0, _shorten("; ".join(inconsistent))
+            )
+            return
         if isinstance(record_a, dict) and isinstance(record_b, dict):
             fields = ("count", "base", "unit", "sha256")
             differing = [

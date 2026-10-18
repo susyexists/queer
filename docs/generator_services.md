@@ -706,7 +706,9 @@ occupied count and its source, the occupied manifold's applicability):
   both runs recorded them, which are exact coordinates; against a reference without
   the record, the recorded mesh: vertex count, vertices per rule, levels, finest
   cell, seeds, controlled mu, the capped gap rule and the history), the same stop
-  reason and convergence flags;
+  reason and convergence flags. A record must be its own run's mesh (its count that
+  run's vertex count, QUEER's digest its `vertex_set`'s), and a QUEER candidate
+  without one fails against a reference that has one;
 - *quantities*, with δ(T) = 1e-8 max(max A3, max |M|) over both runs: C, C_in to
   1e-8 max(1, |C|); K_in, K_diag, K_upper_loose to 1e-8 of their largest element;
   the headline A3 to δ, theta0 to asin(min(1, δ/A3))/3 on 3 theta0 modulo 360°, the

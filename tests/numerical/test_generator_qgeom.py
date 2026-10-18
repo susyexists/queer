@@ -470,6 +470,20 @@ def test_a_dropped_vertex_fails_with_or_without_the_vertex_keys(metal, tmp_path)
     write(candidate / "Out" / "qgeom_vertices.json", record)
     report = compare("QUEER_QGEOM", reference, candidate)
     assert report["verdict"] == FAIL and quantities(report)["qgeom.mesh"] == UNEXPLAINED
+    # A record that is not its run's mesh, or a candidate without one, fails too.
+    for name, mutate in (
+        ("stale", lambda record: record.update(count=record["count"] + 1)),
+        ("missing", None),
+    ):
+        broken = copy(metal[1], tmp_path / name)
+        if mutate is None:
+            (broken / "Out" / "qgeom_vertices.json").unlink()
+        else:
+            data = read(broken / "Out" / "qgeom_vertices.json")
+            mutate(data)
+            write(broken / "Out" / "qgeom_vertices.json", data)
+        report = compare("QUEER_QGEOM", reference, broken)
+        assert report["verdict"] == FAIL and quantities(report)["qgeom.mesh"] == UNEXPLAINED, name
     # Against a reference without the record the recorded mesh decides.
     bare = copy(reference, tmp_path / "bare")
     (bare / "Out" / "qgeom_vertices.json").unlink()
