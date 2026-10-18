@@ -41,6 +41,17 @@ STEPS = {
     "QUEER_TOPOLOGY": {"kpath": LAYER_PATH, "loop_points": 11, "transverse_points": 6},
     "QUEER_BERRY": {"kpath": LAYER_PATH, "kpath_points": 24, "berry_mesh": 8},
     "QUEER_SLAB": {"slab_kpoints": 12, "slab_cells": 4},
+    "QUEER_QGEOM": {
+        "kpath": LAYER_PATH,
+        "kpath_points": 24,
+        "mu_range_meV": [-50.0, 50.0],
+        "mu_step_meV": 10.0,
+        "temperatures_K": [10.0, 20.0, 40.0],
+        "qgeom_base_mesh": 16,
+        "qgeom_max_points": 10000,
+        "qgeom_tolerance": 0.05,
+        "occupation_mesh": 21,
+    },
 }
 # OpenMX steps: their PyATB function block, read from the staged scfout.
 OPENMX_STEPS = {
@@ -64,6 +75,7 @@ STEP_BLOCKS = {
     "QUEER_TOPOLOGY": "topology",
     "QUEER_BERRY": "berry",
     "QUEER_SLAB": "slab",
+    "QUEER_QGEOM": "qgeom",
 }
 
 
