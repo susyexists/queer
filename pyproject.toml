@@ -97,6 +97,7 @@ files = [
   "src/queer/observables/geometry.py",
   "src/queer/observables/integrated.py",
   "src/queer/observables/nonlinear.py",
+  "src/queer/observables/qgeom.py",
   "src/queer/observables/optical.py",
   "src/queer/observables/result.py",
   "src/queer/observables/surface.py",

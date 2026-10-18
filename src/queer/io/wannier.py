@@ -821,3 +821,125 @@ def _normalized_matrix(data, matrices, mode, wsvec):
     if isinstance(wsvec.shifts, (ComputedWignerSeitzShifts, PackedWignerSeitzShifts)):
         return wsvec.shifts.normalized_matrices(data, matrices)
     return PackedWignerSeitzShifts.from_mapping(wsvec.shifts).normalized_matrices(data, matrices)
+
+
+@dataclass(frozen=True)
+class TbLayout:
+    """The header of a wannier90 ``_tb.dat`` and the exact size its body must have.
+
+    ``h_line_bytes`` is the measured length of one Hamiltonian entry line and
+    ``r_line_bytes`` the position entry line length derived from the file size;
+    ``lines_ok`` holds when they have wannier90 3.1's widths (45 or 46 bytes and 64
+    more), and the file is complete when ``actual_bytes == expected_bytes``.
+    """
+
+    lattice: np.ndarray
+    num_wann: int
+    nrpts: int
+    ndegen: np.ndarray
+    header_bytes: int
+    h_line_bytes: int
+    r_line_bytes: int
+    expected_bytes: int
+    actual_bytes: int
+    lines_ok: bool
+
+
+@dataclass(frozen=True)
+class TbRecords:
+    """``_tb.dat`` blocks as written, not divided by ``ndegen``, indexed [j-1, i-1] = <0j|X|Ri>.
+
+    ``R`` (nR, 3), ``H`` (nR, N, N) eV and ``r`` (nR, N, N, 2) Å with the Cartesian x
+    and y components; ``rz2_offdiag`` is sum |r_z|^2 / ndegen over every entry but the
+    (0, n, n) diagonal (r_z itself is not kept).
+    """
+
+    R: np.ndarray
+    H: np.ndarray
+    r: np.ndarray
+    rz2_offdiag: float
+
+
+def read_tb_layout(path: str | Path) -> TbLayout:
+    """The header and size check of a wannier90 3.1 ``_tb.dat`` (``hamiltonian_write_tb``).
+
+    Layout: a date line; three lattice rows (Å, list-directed, so read by tokens);
+    num_wann; nrpts; ndegen at 15 per line; then per R a blank line, the R line and N^2
+    lines ``j i Re Im`` of H, and then the same for r with ``j i xRe xIm yRe yIm zRe zIm``.
+    A format's trailing ``1x`` writes nothing at the end of a record, so the H line
+    length is measured and the r line length derived from the size. A truncated header
+    raises ``ValueError``.
+    """
+    source = Path(path)
+    with source.open("rb") as handle:
+        handle.readline()
+        reals: list[float] = []
+        while len(reals) < 9:
+            line = handle.readline()
+            if not line:
+                raise ValueError("truncated _tb.dat header")
+            reals += [float(x) for x in line.split()]
+        num_wann = int(handle.readline().split()[0])
+        nrpts = int(handle.readline().split()[0])
+        ndegen: list[int] = []
+        while len(ndegen) < nrpts:
+            line = handle.readline()
+            if not line:
+                raise ValueError("truncated _tb.dat degeneracies")
+            ndegen += [int(x) for x in line.split()]
+        header = handle.tell()
+        handle.readline()  # blank
+        handle.readline()  # first R
+        h_line = len(handle.readline())
+    actual = source.stat().st_size
+    nn = num_wann * num_wann
+    body = actual - header - nrpts * 34
+    r_line = body // (nrpts * nn) - h_line if body > 0 and nrpts and nn else 0
+    expected = header + nrpts * (34 + (h_line + r_line) * nn)
+    return TbLayout(
+        lattice=np.asarray(reals[:9], float).reshape(3, 3),
+        num_wann=num_wann,
+        nrpts=nrpts,
+        ndegen=np.asarray(ndegen[:nrpts], int),
+        header_bytes=header,
+        h_line_bytes=h_line,
+        r_line_bytes=r_line,
+        expected_bytes=expected,
+        actual_bytes=actual,
+        lines_ok=h_line in (45, 46) and r_line == h_line + 64,
+    )
+
+
+def read_tb_records(path: str | Path, layout: TbLayout) -> TbRecords:
+    """Stream the blocks of a ``_tb.dat`` whose :func:`read_tb_layout` checked out.
+
+    Each block is read as one fixed-size record, so a 1 GB file costs one pass. An r
+    block whose translation differs from its H block raises ``ValueError``.
+    """
+    n, nr = layout.num_wann, layout.nrpts
+    nn = n * n
+    lh, lr = layout.h_line_bytes, layout.r_line_bytes
+    R = np.zeros((nr, 3), int)
+    H = np.zeros((nr, n, n), complex)
+    r = np.zeros((nr, n, n, 2), complex)
+    rz2 = 0.0
+    with Path(path).open("rb") as handle:
+        handle.seek(layout.header_bytes)
+        for k in range(nr):
+            handle.readline()
+            R[k] = [int(x) for x in handle.readline().split()]
+            v = np.array(handle.read(lh * nn).split(), dtype=float).reshape(n, n, 4)
+            H[k] = (v[:, :, 2] + 1j * v[:, :, 3]).T
+        for k in range(nr):
+            handle.readline()
+            Rk = [int(x) for x in handle.readline().split()]
+            if Rk != R[k].tolist():
+                raise ValueError(f"the r block's R {Rk} differs from the H block's {R[k].tolist()}")
+            v = np.array(handle.read(lr * nn).split(), dtype=float).reshape(n, n, 8)
+            r[k, :, :, 0] = (v[:, :, 2] + 1j * v[:, :, 3]).T
+            r[k, :, :, 1] = (v[:, :, 4] + 1j * v[:, :, 5]).T
+            rz = (v[:, :, 6] + 1j * v[:, :, 7]).T
+            if not R[k].any():
+                rz = rz - np.diag(np.diag(rz))
+            rz2 += float(np.sum(np.abs(rz) ** 2)) / float(layout.ndegen[k])
+    return TbRecords(R=R, H=H, r=r, rz2_offdiag=rz2)
