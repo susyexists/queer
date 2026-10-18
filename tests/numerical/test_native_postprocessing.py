@@ -1,5 +1,6 @@
 """Independent small format records, quadrature and derivative references."""
 
+import dataclasses
 import json
 from functools import wraps
 from pathlib import Path
@@ -36,7 +37,12 @@ from queer.models.openmx import OpenMXModel
 from queer.models.wannier import WannierModel
 from queer.observables.geometry import chern_number
 from queer.observables.integration import integrate_unit_box, quadrature_checkpoint
-from queer.observables.nonlinear import shift_current
+from queer.observables.nonlinear import (
+    histogram_rows,
+    shift_current,
+    shift_current_settings,
+    shift_current_spectrum,
+)
 from queer.workflows import run_workflow
 
 PAULI = np.asarray([[[0, 1], [1, 0]], [[0, -1j], [1j, 0]], [[1, 0], [0, -1]]])
@@ -292,6 +298,69 @@ def test_normalized_bins_and_adaptive_width_are_mesh_aware():
         shift_current(model, [2], smearing="adaptive", kpoints=[[0, 0, 0]])
     with pytest.raises(ValueError, match="response units"):
         shift_current(model, [2], integration={"method": "threshold", "threshold_quantity": "curvature"})
+
+
+def _box_spectrum(gap, factor, integrand, centres, width):
+    """The histogram as each row's bounds were tested in floating point before the single index."""
+    difference = centres[:, None, None] - gap
+    lines = ((difference >= -width / 2) & (difference < width / 2)) / width * factor
+    return np.einsum("wnm,abcnm->wabc", lines, integrand)
+
+
+def test_a_histogram_places_every_transition_in_exactly_one_row():
+    """Without smearing each transition's row comes from one integer index (``ceil(x - 1/2)`` for the centred bins,
+    ``ceil(x) - 1`` for the bins above each photon energy that the Generator's binned table holds): energies exactly
+    on the edges, as the photon energies give them and as decimal numbers, land in exactly one row, where the test of
+    each row's bounds in floating point dropped or doubled some of them. Away from the edges the spectrum is
+    bit-identical to that test."""
+    miscounted = 0
+    for start, step, stop in (
+        (0.2, 0.02, 4.5),
+        (0.3, 0.05, 6.5),
+        (0.0, 0.01, 6.0),
+        (0.3, 0.02, 6.5),
+        (-0.5, 0.002, 6.5),
+        (1.5, 0.01, 6.5),
+    ):
+        omega = start + np.arange(int((stop - start) / step) + 1) * step
+        centred = shift_current_settings(None, omega, 0.0, eta=0.01, smearing="none", bin_width=step)
+        above = dataclasses.replace(centred, bin_rows="above")
+        for settings, edges, centres in (
+            (centred, omega + step / 2, omega),
+            (above, omega, omega + step / 2),
+        ):
+            energies = np.concatenate([edges, np.round(edges, 10)])
+            inside = (energies > omega[0] + 2 * step) & (energies < omega[-1] - 2 * step)
+            rows = histogram_rows(energies, settings)
+            assert np.array_equal(rows, np.round(rows)) and rows[inside].min() >= 0
+            # Each transition alone (27 at a time, one per component): its weight over the rows times the width.
+            landed = np.zeros(len(energies))
+            boxed = np.zeros(len(energies))
+            for first in range(0, len(energies), 27):
+                chunk = energies[first : first + 27]
+                gap, factor = chunk[None, :], np.ones((1, len(chunk)))
+                integrand = np.zeros((3, 3, 3, 1, len(chunk)))
+                integrand.reshape(27, 1, -1)[np.arange(len(chunk)), 0, np.arange(len(chunk))] = 1.0
+                point = {"gap": gap, "factor": factor, "integrand": integrand}
+                total = shift_current_spectrum(point, settings, 64).sum(axis=0).reshape(27) * step
+                landed[first : first + 27] = total[: len(chunk)]
+                old = _box_spectrum(gap, factor, integrand, centres, step).sum(axis=0).reshape(27) * step
+                boxed[first : first + 27] = old[: len(chunk)]
+            assert np.allclose(landed[inside], 1.0, rtol=0, atol=1e-12), (start, step, settings.bin_rows)
+            assert set(np.round(landed, 12)) <= {0.0, 1.0}
+            miscounted += int(np.count_nonzero(np.abs(boxed[inside] - 1.0) > 1e-12))
+            # Away from the edges: the same rows and the same arithmetic as the bounds' test, bit for bit.
+            generator = np.random.default_rng(len(omega))
+            gap = generator.choice(edges[1:-1], (4, 6)) + generator.uniform(0.01, 0.99, (4, 6)) * step
+            factor = generator.uniform(-1, 1, (4, 6))
+            integrand = generator.normal(size=(3, 3, 3, 4, 6))
+            point = {"gap": gap, "factor": factor, "integrand": integrand}
+            assert np.array_equal(
+                shift_current_spectrum(point, settings, 7),
+                _box_spectrum(gap, factor, integrand, centres, step),
+            )
+    # The bounds' test placed some of these edge energies in no row or in two.
+    assert miscounted > 0
 
 
 def test_vasp_eigenval_outcar_and_xml_agree_with_independent_records(tmp_path):

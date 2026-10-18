@@ -399,6 +399,33 @@ class ShiftCurrentSettings:
     adaptive_scale: float
     adaptive_min: float
     adaptive_max: float
+    # The rows of a ``none`` smearing: ``centred`` (row i holds w_i - bin_width/2 < E <= w_i + bin_width/2) or
+    # ``above`` (w_i < E <= w_i + bin_width, the weights the Generator's binned table holds).
+    bin_rows: str = "centred"
+
+
+# Photon energies within this many units of the working precision (relative to the largest of them, or 1 eV) of
+# omega_0 + i bin_width tile the axis: each transition's row then comes from one integer index.
+_TILING_ROUNDING = 1024
+
+
+def histogram_rows(gap, settings):
+    """Each transition's row of a ``none`` smearing that tiles its photon energies, from one integer index:
+    ``ceil(x - 1/2)`` for ``centred`` rows and ``ceil(x) - 1`` for rows ``above`` each photon energy, ``x = (E -
+    omega_0) / bin_width``, so that every transition lands in exactly one row (or none of the table). None when the
+    photon energies are not ``omega_0 + i bin_width`` to rounding (the bins then neither tile nor follow an index).
+    """
+    omega, width = np.asarray(settings.omega, float), settings.bin_width
+    if settings.bin_rows not in {"centred", "above"}:
+        raise ValueError("bin_rows must be centred or above")
+    if not len(omega):
+        return None
+    grid = omega[0] + np.arange(len(omega)) * width
+    bound = _TILING_ROUNDING * np.finfo(float).eps * max(1.0, float(np.max(np.abs(omega))))
+    if float(np.max(np.abs(omega - grid))) > bound:
+        return None
+    position = (np.asarray(gap, float) - omega[0]) / width
+    return np.ceil(position) - 1 if settings.bin_rows == "above" else np.ceil(position - 0.5)
 
 
 def shift_current_settings(
@@ -561,16 +588,24 @@ def shift_current_spectrum(point, settings, frequency_batch):
     gap, factor, integrand = point["gap"], point["factor"], point["integrand"]
     width = shift_current_widths(point, settings) if smearing == "adaptive" else None
     bin_width = settings.bin_width
+    # Without smearing each transition's row comes from one integer index (histogram_rows), so a transition on a bin
+    # edge lands in exactly one row; a test of each row's bounds in floating point could drop it or count it twice.
+    rows = histogram_rows(gap, settings) if smearing == "none" else None
     answer = np.empty((len(omega), 3, 3, 3))
     for start in range(0, len(omega), frequency_batch):
         stop = start + frequency_batch
-        difference = omega[start:stop, None, None] - gap
-        if smearing == "none":
-            lines = ((difference >= -bin_width / 2) & (difference < bin_width / 2)) / bin_width
-        elif smearing == "adaptive":
-            lines = _delta(difference, width, "gaussian")
+        if rows is not None:
+            lines = (np.arange(start, min(stop, len(omega)))[:, None, None] == rows) / bin_width
         else:
-            lines = _delta(difference, settings.eta, smearing)
+            difference = omega[start:stop, None, None] - gap
+            if smearing == "none" and settings.bin_rows == "above":
+                lines = ((difference >= -bin_width) & (difference < 0)) / bin_width
+            elif smearing == "none":
+                lines = ((difference >= -bin_width / 2) & (difference < bin_width / 2)) / bin_width
+            elif smearing == "adaptive":
+                lines = _delta(difference, width, "gaussian")
+            else:
+                lines = _delta(difference, settings.eta, smearing)
         lines = lines * factor
         answer[start:stop] = np.einsum("wnm,abcnm->wabc", lines, integrand)
     return answer

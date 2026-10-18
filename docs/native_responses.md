@@ -58,7 +58,11 @@ plane-wave states or omitted high-energy bands.
 Lorentzian `eta` is a half-width; Gaussian `eta` is a standard deviation, both
 in eV. `smearing="none"` represents delta peaks by normalized bins centered
 on the supplied photon energies. Uniform ascending energies determine the
-bin width, or set positive `bin_width` explicitly. Bin edges are half-open.
+bin width, or set positive `bin_width` explicitly. Bin edges are half-open:
+the bin at `w` holds `w - bin_width/2 < E <= w + bin_width/2`. When the
+energies are `w_0 + i bin_width` (to rounding) each transition's bin comes from
+one integer index, `ceil((E - w_0)/bin_width - 1/2)`, so a transition exactly
+on an edge lands in exactly one bin; other energies test each bin's bounds.
 
 `smearing="adaptive"` uses a Gaussian standard deviation from the RMS
 transition-energy variation across the reciprocal cell, multiplied by

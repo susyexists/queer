@@ -27,9 +27,12 @@ twice the spin-up channel.
 **Sign and file.** PyATB's prefactor carries the signed cell volume, so it prints
 ``lattice_handedness`` times the conductivity. ``Out/Shift_Current/shift_current.dat``
 holds ``convention.export_sign`` times QUEER's physical value; without smearing it
-holds QUEER's histogram in PyATB's normalization instead (``binned_uA_V2``: QUEER's
-histogram evaluated half a bin higher, times ``domega``, which is the weight of the
-transitions in ``(omega_i, omega_i + domega]``).
+holds QUEER's histogram in PyATB's normalization instead (``binned_uA_V2``: the
+weight of the transitions in ``(omega_i, omega_i + domega]``, QUEER's histogram with its
+rows above each photon energy times ``domega``). Each transition's row of either
+histogram comes from one integer index
+(:func:`~queer.observables.nonlinear.histogram_rows`), so a transition on a bin edge
+lands in exactly one row.
 
 **Diagnostics** (plain facts, never the result), evaluated on the model PyATB reads
 with QUEER's own transitions: the transitions inside and outside PyATB's window
@@ -163,9 +166,9 @@ def pair_gaps(
 
 @dataclass(frozen=True)
 class ShiftPlan:
-    """What one pass evaluates at each k-point: QUEER's spectrum and, with ``binned``, its histogram half a bin
-    higher (PyATB's bins without smearing); with a ``scheme`` the pass also counts the transitions and spacings
-    of the model PyATB reads."""
+    """What one pass evaluates at each k-point: QUEER's spectrum and, with ``binned``, its histogram with rows
+    ``(w, w + domega]`` (PyATB's bins without smearing); with a ``scheme`` the pass also counts the transitions and
+    spacings of the model PyATB reads."""
 
     settings: ShiftCurrentSettings
     frequency_batch: int
@@ -181,8 +184,8 @@ _COUNTED = ("points", "flagged", "exact", "transitions", "inside", "below", "abo
 def shift_rows(model: Any, plan: ShiftPlan, chunk: Any) -> dict[str, Any]:
     """The k-point sums of a chunk of k-points: ``physical`` sums
     :func:`~queer.observables.nonlinear.shift_current_spectrum` (unconverted, as
-    :func:`~queer.observables.nonlinear.shift_current` sums it) and ``binned`` the same estimator half a bin
-    higher; with a scheme, the transition and spacing facts (:func:`pair_gaps`)."""
+    :func:`~queer.observables.nonlinear.shift_current` sums it) and ``binned`` the same estimator with its rows
+    above each photon energy; with a scheme, the transition and spacing facts (:func:`pair_gaps`)."""
     points = chunk
     settings, scheme = plan.settings, plan.scheme
     count = len(settings.omega)
@@ -348,9 +351,7 @@ class ShiftStep:
         plan = ShiftPlan(
             settings,
             frequency_batch,
-            binned=dataclasses.replace(settings, omega=self.omega + 0.5 * domega, bin_width=domega)
-            if binned
-            else None,
+            binned=dataclasses.replace(settings, bin_width=domega, bin_rows="above") if binned else None,
             scheme=self.scheme if diagnostics else None,
             occupied=self.occupied,
         )
