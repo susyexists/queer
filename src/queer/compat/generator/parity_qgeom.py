@@ -30,12 +30,19 @@ rule, levels, finest cell, seeds, controlled mu, the capped gap rule and the las
 run's vertex count, its keys hashing to its digest, a QUEER run's digest its
 ``integration.vertex_set``'s), and a QUEER candidate without one fails against a
 reference that has one. The stop reason and the convergence flags must be equal.
-Exact symmetric ties are broken by rounding, which another BLAS kernel breaks
-another way: where both runs record bands C3-symmetric to the eigenvalue tolerance
-(``symmetry.c3_band_floor_meV`` on a hexagonal lattice), different meshes make the
-verdict ``not_comparable`` (the reference's adaptive mesh depends on rounding at
-exact symmetric ties: replay on the same BLAS kernel or compare on a fixed uniform
-grid), never ``fail``; without that record a mesh difference fails.
+
+**Mesh attribution.** Where the vertex sets differ, :mod:`~queer.compat.generator.qgeom_mesh`
+locates the first divergence from the runs' decision records (QUEER's
+``integration.decision_ties``: the decisions within rounding of their thresholds) and
+identifies its reason: rounding at decisions tied in both records (or, against a
+driver reference, in the candidate's, by the per-split vertex and leaf increments), or
+a refinement ordered by the error estimates of quantities that vanish identically.
+An identified difference makes the precondition ``mesh_determined`` fail
+(``not_comparable``, naming the point, the rule, the tie count and the difference,
+with the remedy: run both on one BLAS kernel); an unidentified one is compared and
+fails as ``qgeom.mesh``, the analysis in its detail. A decision record that is not its
+run's mesh is never a reason. The symmetry record (``symmetry.c3_band_floor_meV``) is
+informational.
 
 **Quantities.** With δ(T) = 1e-8 max(max A3, max |M|) over both runs at
 temperature T: the occupied manifold's C and C_in to 1e-8 max(1, |C|), K_in, K_diag
@@ -100,6 +107,7 @@ from .parity import (
     _Comparison,
     _shorten,
 )
+from .qgeom_mesh import REMEDY, Attribution, MeshRun, attribute, record_problems
 from .qgeom_step import FULL_RESPONSE_FILE, PROBE_TOLERANCE, VERTICES_FILE, compact
 from .results import WARN_DFT_EIG_UNREADABLE, WARN_DFT_FROZEN_MISMATCH, WARN_QGEOM_PROBE
 
@@ -136,10 +144,8 @@ CHI_ROUNDING = 64.0 * float(np.finfo(float).eps)
 COUNT_ROUNDING = 4.0 * float(np.finfo(float).eps)
 RESIDUAL_TOL = 1e-12
 FULL_RESPONSE_NAME = FULL_RESPONSE_FILE.split("/", 1)[1]
-SYMMETRIC_TIES = (
-    "the reference's adaptive mesh depends on rounding at exact symmetric ties: replay on the same BLAS "
-    "kernel or compare on a fixed uniform grid"
-)
+MESH_ROUNDING = "the meshes differ by rounding at tied decisions"
+MISSING = object()
 
 
 def print_precision(values: Any) -> np.ndarray:
@@ -266,6 +272,7 @@ class QgeomComparison(_Comparison):
         # Per temperature: the candidate's mu_CNP minus the reference's (eV).
         self.cnp_shift: dict[str, float] = {}
         self._mesh: tuple[list[str], list[str], str] | None = None
+        self._attribution: Attribution | None = None
         self._counts: dict[tuple[str, bool], tuple[CountCurve | None, CountCurve | None]] = {}
         # Both runs wrote unrounded curves (each the source of its 5-digit file): no print rounding.
         self.full_curves = False
@@ -588,12 +595,16 @@ class QgeomComparison(_Comparison):
         )
         inconsistent, differing, same = self.mesh_comparison()
         problems = inconsistent or differing
+        detail = "; ".join(problems) or same
+        if differing and not inconsistent:
+            found = self.mesh_attribution()
+            detail = f"{'; '.join(differing)}; first divergence at {found.point}: {found.detail}"
         self.quantity(
             "qgeom.mesh",
             UNEXPLAINED if problems else AGREE,
             float(len(problems)),
             0.0,
-            _shorten("; ".join(problems) or same),
+            _shorten(detail, 1600),
         )
 
     def mesh_comparison(self) -> tuple[list[str], list[str], str]:
@@ -637,6 +648,15 @@ class QgeomComparison(_Comparison):
                 inconsistent.append(f"the {run.role}'s vertex record differs from its integration.vertex_set")
         if self.candidate.engine == "queer" and isinstance(record_a, dict) and not isinstance(record_b, dict):
             inconsistent.append("the candidate wrote no Out/qgeom_vertices.json")
+        for mesh_run, run in zip(self.mesh_runs(), (self.reference, self.candidate)):
+            inconsistent += record_problems(mesh_run)
+            record = (run.block("qgeom").get("integration") or {}).get("decision_ties", MISSING)
+            vertices = run.out("qgeom_vertices.json")
+            creation = isinstance(vertices, dict) and vertices.get("order") == "creation"
+            if (record is not MISSING or creation) and not isinstance(record, dict):
+                inconsistent.append(
+                    f"the {run.role} carries no readable decision record beside its vertex record"
+                )
         differing: list[str] = []
         if isinstance(record_a, dict) and isinstance(record_b, dict):
             differing = [
@@ -675,60 +695,82 @@ class QgeomComparison(_Comparison):
                     if any(x.get(key) != y.get(key) for key in HISTORY_EXACT):
                         differing.append(f"history[{index}]: {x} vs {y}")
                         break
+            kept = min(len(ia.get("history") or []), len(ib.get("history") or []))
             same = (
-                f"recorded meshes equal ({ia.get('vertices')} vertices, by rule {ia.get('vertices_by_rule')}); "
-                "the reference records no vertex keys, so the sets are compared by their record"
+                f"recorded meshes equal ({ia.get('vertices')} vertices, by rule {ia.get('vertices_by_rule')}, "
+                f"{ia.get('seeds')} seeds, {ia.get('mu_subset')} controlled mu, the deepest level and finest cell "
+                f"and the last {kept} history entries); not established: that the vertex sets are equal, since "
+                "without the reference's vertex keys an exchange of leaves that keeps these counts is not seen"
+                + self.recorded_ties()
             )
         self._mesh = (inconsistent, differing, same)
         return self._mesh
 
-    def symmetric_ties(self) -> str | None:
-        """Why rounding decides the adaptive mesh, from the symmetry record both runs carry, or None.
+    def recorded_ties(self) -> str:
+        """What the decision records say about exchanges that keep the recorded counts."""
+        parts = []
+        for run in self.mesh_runs():
+            if run.record is None:
+                continue
+            rounds = run.record.get("rounds") or []
+            tied = sum(int(r.get("tied_count") or 0) for r in rounds if r.get("phase") != "restart")
+            seeds = int((run.record.get("seeds") or {}).get("tied_count") or 0)
+            noisy = sum(1 for r in rounds if (r.get("noise") or {}).get("leaves"))
+            text = f"the {run.role} records {tied} tied mesh decisions and {seeds} tied seed decisions"
+            if noisy:
+                text += f", and {noisy} refinement steps ordered by rounding-level quantities"
+            parts.append(text)
+        return ("; " + "; ".join(parts)) if parts else ""
 
-        Both runs record how far their bands are from C3-symmetric at 512 random
-        k-points (``symmetry.c3_band_floor_meV``). Where both floors lie within the
-        eigenvalue tolerance, symmetry-related k-points tie exactly: the strict local
-        extrema of the occupation pass (the seeds), a band velocity that vanishes by
-        symmetry in the edge rule and the error estimates of symmetry-related cells in the
-        refinement order are then decided by rounding, which another BLAS kernel breaks
-        another way.
-        """
-        self.set_tolerances()
-        tau = self.eigenvalue_tol * 1e3
-        floors = []
+    def mesh_runs(self) -> list[MeshRun]:
+        """Each run's mesh documents: its integration block, its decision record and its vertex keys in
+        creation order (when its vertex record holds them so)."""
+        runs = []
         for run in (self.reference, self.candidate):
-            symmetry = run.block("qgeom").get("symmetry") or {}
-            floor = symmetry.get("c3_band_floor_meV")
-            if symmetry.get("lattice_hexagonal") is not True or not isinstance(floor, (int, float)):
-                return None
-            if isinstance(floor, bool) or not math.isfinite(floor) or floor > tau:
-                return None
-            floors.append(float(floor))
-        return (
-            f"both runs' bands are C3-symmetric to {max(floors):.3g} meV, within the eigenvalue tolerance "
-            f"{tau:.3g} meV, so symmetry-related k-points tie exactly in the occupation pass's extrema and the "
-            "refinement decisions"
-        )
+            integration = run.block("qgeom").get("integration") or {}
+            record = integration.get("decision_ties")
+            vertices = run.out("qgeom_vertices.json")
+            keys = unit = None
+            if isinstance(vertices, dict) and vertices.get("order") == "creation":
+                raw = vertices.get("keys")
+                if isinstance(raw, list) and vertex_digest(raw) == vertices.get("sha256"):
+                    keys, unit = np.asarray(raw, np.int64), vertices.get("unit")
+            runs.append(
+                MeshRun(run.role, integration, record if isinstance(record, dict) else None, keys, unit)
+            )
+        return runs
+
+    def mesh_attribution(self) -> Attribution:
+        """The first divergence of the two meshes and whether rounding at tied decisions explains it."""
+        if self._attribution is None:
+            reference, candidate = self.mesh_runs()
+            self._attribution = attribute(reference, candidate)
+        return self._attribution
 
     def check_mesh_determined(self) -> bool:
-        """Different vertex sets of an exactly symmetric model are rounding at its ties: not comparable."""
+        """Different meshes are not comparable only where the runs' records identify the reason as rounding at
+        tied decisions; an unidentified difference is compared (and fails as qgeom.mesh)."""
         inconsistent, differing, same = self.mesh_comparison()
         if inconsistent:
             return self.precondition(
-                "mesh_determined", True, "a vertex record is not its run's mesh: compared (qgeom.mesh)"
+                "mesh_determined", True, "a mesh record is not its run's mesh: compared (qgeom.mesh)"
             )
         if not differing:
             return self.precondition("mesh_determined", True, same)
-        ties = self.symmetric_ties()
-        if ties is None:
+        found = self.mesh_attribution()
+        if not found.identified:
             return self.precondition(
                 "mesh_determined",
                 True,
-                "the meshes differ and neither run records an exact symmetry that rounding could break: "
-                "compared (qgeom.mesh)",
+                _shorten(
+                    f"the meshes differ for no identified reason, first at {found.point}: compared (qgeom.mesh)"
+                ),
             )
-        detail = f"{SYMMETRIC_TIES} ({ties}; the meshes differ: {'; '.join(differing)})"
-        return self.precondition("mesh_determined", False, _shorten(detail, 1200))
+        detail = (
+            f"{MESH_ROUNDING}: first divergence at {found.point}: {found.detail} (the meshes differ: "
+            f"{'; '.join(differing)}); {REMEDY}"
+        )
+        return self.precondition("mesh_determined", False, _shorten(detail, 1600))
 
     # ---------------------------------------------------- occupied manifold
     def compare_occupied(self, a: Mapping[str, Any], b: Mapping[str, Any]) -> None:

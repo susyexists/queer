@@ -23,7 +23,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from tight_binding_models import haldane
+from tight_binding_models import haldane, qwz, rice_mele
 from wannier90_files import Wannier90Job
 from wannier90_tb import write_tb
 
@@ -46,11 +46,20 @@ from queer.compat.generator.parity import (  # noqa: E402
     UNEXPLAINED,
     compare,
 )
-from queer.compat.generator.parity_qgeom import CHI_PER_M, CHI_SETS, SYMMETRIC_TIES  # noqa: E402
+from queer.compat.generator.parity_qgeom import CHI_PER_M, CHI_SETS, MESH_ROUNDING  # noqa: E402
 from queer.compat.generator.pythtb_params import translate_pythtb  # noqa: E402
+from queer.compat.generator.qgeom_mesh import (  # noqa: E402
+    REMEDY,
+    MeshRun,
+    attribute,
+    creating_splits,
+    history_from_record,
+    record_problems,
+)
 from queer.compat.generator.qgeom_step import compact, decimate  # noqa: E402
 from queer.compat.generator.runner import run  # noqa: E402
 from queer.compat.generator.wannier_steps import WannierStepContext  # noqa: E402
+from queer.observables.qgeom import OUTCOMES, TIE_ROUNDING, seed_id, set_digest  # noqa: E402
 
 PASSING = (PASS, PASS_DOCUMENTED)
 
@@ -969,8 +978,10 @@ def test_a_sign_flipped_or_zeroed_chi_fails(insulator, tmp_path, T, point, conve
     assert quantities(report)[f"qgeom.headline.{T}.{point}.chi.{convention}"] == UNEXPLAINED
 
 
-# A Haldane metal: C3-symmetric bands whose band-edge velocities vanish by symmetry, so rounding decides
-# some of its refinements (OpenBLAS's Sandybridge and SkylakeX kernels give different vertex sets).
+# Two metals whose exact symmetries let rounding steer the adaptive mesh. The Haldane layer has C3 bands
+# whose band-edge velocities vanish by symmetry, so the edge rule ties at those vertices; the Rice-Mele
+# stack's chains give an identically zero Berry curvature and off-diagonal metric, so its error estimate
+# normalises rounding noise. OpenBLAS's Sandybridge and SkylakeX kernels break both differently here.
 SYMMETRIC = {
     "fermi_energy": 0.8,
     "occupation_mesh": 61,
@@ -980,6 +991,90 @@ SYMMETRIC = {
     "qgeom_max_points": 10000,
     "qgeom_tolerance": 0.01,
 }
+MIRROR = {
+    **SYMMETRIC,
+    "fermi_energy": 0.9,
+    "kpath": {"segments": [["G", [0, 0, 0], "X", [0.5, 0, 0]], ["X", [0.5, 0, 0], "M", [0.5, 0.5, 0]]]},
+}
+SQUARE = {**MIRROR, "fermi_energy": 0.5}
+
+
+def mirror_full_job(directory, square=False):
+    """A Rice-Mele stack (chains along a1, stacked along a2), or with ``square`` a QWZ layer on a 3 Å square
+    lattice, with its _tb.dat at diagonal positions."""
+    if square:
+        model = qwz(-1.0, lattice=np.diag([3.0, 3.0, 10.0]))
+        reduced = np.array([[0.0, 0.0, 0.5], [0.0, 0.0, 0.5]])
+    else:
+        model = rice_mele(1.0, 0.6, staggered=0.15)
+        reduced = np.array([[0.0, 0.0, 0.5], [0.5, 0.0, 0.5]])
+    degeneracies = np.ones(len(model.translations), int)
+    job = Wannier90Job(
+        np.asarray(model.translations),
+        np.asarray(model.hopping_matrices),
+        np.asarray(model.lattice),
+        reduced @ np.asarray(model.lattice),
+        degeneracies=degeneracies,
+        mp_grid=(2, 2, 1),
+        win={"dis_froz_min": -5.0, "dis_froz_max": 5.0},
+    )
+    job.write(directory)
+    n = job.num_wann
+    r = np.zeros(job.raw.shape + (3,), complex)
+    home = int(np.flatnonzero(~job.translations.any(axis=1))[0])
+    r[home, np.arange(n), np.arange(n)] = job.centres
+    write_tb(directory / "wannier90_tb.dat", job.lattice, job.translations, degeneracies, job.raw.copy(), r)
+
+
+def inject_defect(name):
+    """A defect in QUEER's mesh decisions, patched into this process (the parameters stay the same).
+
+    ``threshold``: the gap rule's ratio a fifth low; ``dropped``: the first must-split
+    round leaves one leaf the gap rule flags unsplit; ``unrefined``: the first refinement
+    stage never refines the leaf with the largest error estimate (its indicator reads zero).
+    """
+    if not name:
+        return
+    from queer.observables import qgeom as obs
+
+    if name == "threshold":
+        must_split = obs.Integrator.must_split
+
+        def defective_must_split(self, *args, **kwargs):
+            self.gap_ratio *= 0.8
+            return must_split(self, *args, **kwargs)
+
+        obs.Integrator.must_split = defective_must_split
+    elif name == "dropped":
+        rule_flags = obs.Integrator._rule_flags
+        state = {"done": False}
+
+        def defective_rule_flags(self):
+            flags = rule_flags(self)
+            if not state["done"] and "gap" in flags and flags["gap"].any():
+                flags["gap"] = flags["gap"].copy()
+                flags["gap"][int(np.flatnonzero(flags["gap"])[0])] = False
+                state["done"] = True
+            return flags
+
+        obs.Integrator._rule_flags = defective_rule_flags
+    elif name == "unrefined":
+        error_sums = obs.Integrator._error_sums
+        state = {"done": False}
+
+        def defective_error_sums(self, idx, scales, head):
+            ind, total = error_sums(self, idx, scales, head)
+            if not state["done"] and self._totals is None:
+                ind = ind.copy()
+                ind[int(np.argmax(ind))] = 0.0
+                state["done"] = True
+            return ind, total
+
+        obs.Integrator._error_sums = defective_error_sums
+    else:
+        raise ValueError(f"unknown defect {name!r}")
+
+
 KERNEL_RUN = """
 import json, sys
 from pathlib import Path
@@ -987,19 +1082,27 @@ sys.path.insert(0, sys.argv[1])
 import test_generator_qgeom as t
 from generator_golden_cases import write_case
 from queer.compat.generator.runner import run
-directory, what = Path(sys.argv[2]), sys.argv[3]
+directory, what, defect = Path(sys.argv[2]), sys.argv[3], sys.argv[4]
 directory.mkdir(parents=True, exist_ok=True)
+t.inject_defect(defect)
 if what == "symmetric":
     t.haldane_full_job(directory, staggered=0.2)
     params = t.qgeom_params(directory, **t.SYMMETRIC)
+elif what == "mirror":
+    t.mirror_full_job(directory)
+    params = t.qgeom_params(directory, **t.MIRROR)
+elif what == "square":
+    t.mirror_full_job(directory, square=True)
+    params = t.qgeom_params(directory, **t.SQUARE)
 else:
     params = write_case(what, directory)
 sys.exit(run(None, params, directory, log=lambda line: None))
 """
 
 
-def run_under_kernel(kernel, directory, what):
-    """QUEER's step under a forced OpenBLAS kernel (in its own process); skipped where the kernel cannot run."""
+def run_under_kernel(kernel, directory, what, defect=""):
+    """QUEER's step under a forced OpenBLAS kernel (in its own process), with an optional injected defect;
+    skipped where the kernel cannot run."""
     env = {
         **os.environ,
         "OPENBLAS_CORETYPE": kernel,
@@ -1008,7 +1111,7 @@ def run_under_kernel(kernel, directory, what):
         "MPLBACKEND": "Agg",
     }
     result = subprocess.run(
-        [sys.executable, "-c", KERNEL_RUN, str(ROOT / "tests" / "numerical"), str(directory), what],
+        [sys.executable, "-c", KERNEL_RUN, str(ROOT / "tests" / "numerical"), str(directory), what, defect],
         env=env,
         capture_output=True,
         text=True,
@@ -1018,6 +1121,27 @@ def run_under_kernel(kernel, directory, what):
         pytest.skip(f"OpenBLAS's {kernel} kernel does not run on this host (signal {-result.returncode})")
     assert result.returncode == 0, result.stderr[-3000:]
     return Path(directory)
+
+
+def as_driver(source, target):
+    """A QUEER run rewritten as the vendored driver writes it: pythtb_results.json with the vendored
+    producer, no QUEER-only blocks (the decision record, the replay and vertex records) or files."""
+    target = copy(source, target)
+    document = read(target / "queer_results.json")
+    (target / "queer_results.json").unlink()
+    for key in ("engine", "counterpart_step_type", "warning_codes"):
+        document.pop(key, None)
+    document["step_type"] = "PYTHTB_QGEOM"
+    golden = read(GOLDENS / "qgeom_full_metal" / "pythtb_results.json")["provenance"]
+    document["provenance"].update(core_sha256=golden["core_sha256"], qgeom_sha256=golden["qgeom_sha256"])
+    for key in ("decision_ties", "replay", "stop_vertices", "vertex_set"):
+        document["qgeom"]["integration"].pop(key)
+    queer_only = ("Out/qgeom_vertices.json", "Out/qgeom_response_full.json")
+    document["outputs"] = [entry for entry in document["outputs"] if entry["path"] not in queer_only]
+    for name in queer_only:
+        (target / name).unlink()
+    write(target / "pythtb_results.json", document)
+    return target
 
 
 def symmetric_run(directory):
@@ -1047,35 +1171,68 @@ def drop_vertex(directory, keep_keys=True):
     edit(directory, mutate)
 
 
-def test_a_symmetric_models_mesh_difference_is_not_comparable_and_an_asymmetric_ones_fails(
-    symmetric, metal, tmp_path
-):
+def test_the_decision_record_is_its_runs_own(symmetric):
+    """QUEER records its tied decisions beside the kernel's: the record chains its rounds from the base mesh
+    to the run's vertex count, rebuilds the run's history and, with the keys in creation order, each round's
+    splits and tied leaves; its bands come from the run's own scales."""
+    document = read(symmetric / "queer_results.json")
+    integration = document["qgeom"]["integration"]
+    record = integration["decision_ties"]
+    vertices = read(symmetric / "Out" / "qgeom_vertices.json")
+    assert vertices["order"] == "creation" and len(vertices["keys"]) == integration["vertices"]
+    run = MeshRun("candidate", integration, record, np.asarray(vertices["keys"]), vertices["unit"])
+    assert record_problems(run) == []
+    history = history_from_record(record)
+    assert history[-len(integration["history"]) :] == [
+        {key: entry.get(key) for key in ("phase", "vertices", "leaves", "target")}
+        for entry in integration["history"]
+    ]
+    assert record["seeds"]["count"] == integration["seeds"] and not record["truncated"]
+    bands = record["bands"]
+    assert bands["energy_eV"] == TIE_ROUNDING * bands["energy_scale_eV"] and bands["energy_scale_eV"] > 1.0
+    assert bands["velocity_eVA"] == TIE_ROUNDING * bands["velocity_scale_eVA"]
+    # The C3 metal's band-edge velocities vanish at symmetric vertices: the edge rule ties there.
+    tied = [entry for entry in record["rounds"] if entry["phase"] == "must_split" and entry["tied_count"]]
+    assert tied and all(set(entry["tied_by_rule"]) <= {"seed", "gap", "edge"} for entry in tied)
+    assert sum(entry["tied_by_rule"].get("edge", 0) for entry in tied) > 0
+    # A forged tie (a leaf the mesh never had then) or a count that is not the list is never a reason.
+    for forge, fragment in (
+        (lambda entry: entry.update(tied=entry["tied"] + [[vertices["keys"][-1], 9, 0]]), "not a leaf"),
+        (lambda entry: entry.update(tied_count=entry["tied_count"] + 1), "ties"),
+    ):
+        forged = json.loads(json.dumps(record))
+        entry = next(
+            entry for entry in forged["rounds"] if entry["phase"] == "must_split" and entry["tied_count"]
+        )
+        forge(entry)
+        if fragment == "not a leaf":
+            entry["tied_count"] = len(entry["tied"])
+        problems = record_problems(run._replace(record=forged))
+        assert problems and fragment in problems[0]
+
+
+def test_a_dropped_vertex_fails_whatever_the_symmetry(symmetric, metal, tmp_path):
+    """The C3 gate is retired: a vertex dropped from an exactly C3-symmetric model's mesh, with its vertex
+    record, digest and integration block consistent, leaves the decision record off its run's mesh and fails
+    with or without the reference's keys, like the generic layer's."""
     qgeom = read(symmetric / "queer_results.json")["qgeom"]
     assert qgeom["symmetry"]["lattice_hexagonal"] and qgeom["symmetry"]["c3_band_floor_meV"] < 1e-5
     assert compare("QUEER_QGEOM", symmetric, copy(symmetric, tmp_path / "same"))["verdict"] == PASS
     other = copy(symmetric, tmp_path / "other")
     drop_vertex(other)
-    report = compare("QUEER_QGEOM", symmetric, other)
-    assert report["verdict"] == NOT_COMPARABLE
-    determined = preconditions(report)["mesh_determined"]
-    assert not determined["ok"] and SYMMETRIC_TIES in determined["detail"]
-    assert (
-        "C3-symmetric" in determined["detail"] and "1 vertices only in the reference" in determined["detail"]
-    )
-    # Against a record without keys (the driver's), the recorded mesh decides, with the same verdict.
-    bare = copy(symmetric, tmp_path / "bare")
-    (bare / "Out" / "qgeom_vertices.json").unlink()
-    edit(bare, lambda document: document.update(engine="pythtb"))
-    report = compare("QUEER_QGEOM", bare, other)
-    assert report["verdict"] == NOT_COMPARABLE and not preconditions(report)["mesh_determined"]["ok"]
-    # A record that is not its run's mesh fails whatever the symmetry.
+    for reference in (symmetric, as_driver(symmetric, tmp_path / "driver")):
+        report = compare("QUEER_QGEOM", reference, other)
+        assert report["verdict"] == FAIL and quantities(report)["qgeom.mesh"] == UNEXPLAINED
+        assert preconditions(report)["mesh_determined"]["ok"]
+        assert "decision record" in item(report, "qgeom.mesh")["detail"]
+    # A vertex record that is not its run's mesh fails whatever the symmetry.
     forged = copy(symmetric, tmp_path / "forged")
     record = read(forged / "Out" / "qgeom_vertices.json")
     record["keys"][-1] += 1
     write(forged / "Out" / "qgeom_vertices.json", record)
     report = compare("QUEER_QGEOM", symmetric, forged)
     assert report["verdict"] == FAIL and quantities(report)["qgeom.mesh"] == UNEXPLAINED
-    # The generic layer has no exact symmetry: a mesh difference there fails.
+    # The generic layer: a mesh difference against the driver fails.
     reference, candidate = metal
     asymmetric = copy(candidate, tmp_path / "asymmetric")
     drop_vertex(asymmetric)
@@ -1084,17 +1241,146 @@ def test_a_symmetric_models_mesh_difference_is_not_comparable_and_an_asymmetric_
     assert preconditions(report)["mesh_determined"]["ok"]
 
 
-def test_a_symmetric_model_on_two_blas_kernels_is_never_a_failure(tmp_path):
-    """OPENBLAS_CORETYPE=Sandybridge and SkylakeX break the Haldane metal's ties differently here."""
-    first = run_under_kernel("Sandybridge", tmp_path / "sandybridge", "symmetric")
-    second = run_under_kernel("SkylakeX", tmp_path / "skylakex", "symmetric")
-    sets = [read(run / "queer_results.json")["qgeom"]["integration"]["vertex_set"] for run in (first, second)]
+@pytest.fixture(scope="module")
+def kernel_run(tmp_path_factory):
+    """QUEER's step of one model under one OpenBLAS kernel with an optional defect, each run once per module."""
+    base = tmp_path_factory.mktemp("kernels")
+    done: dict[tuple[str, str, str], Path] = {}
+
+    def get(kernel, what, defect=""):
+        key = (kernel, what, defect)
+        if key not in done:
+            done[key] = run_under_kernel(kernel, base / "_".join(filter(None, key)), what, defect)
+        return done[key]
+
+    return get
+
+
+def vertex_sets(*runs):
+    return [read(run / "queer_results.json")["qgeom"]["integration"]["vertex_set"]["sha256"] for run in runs]
+
+
+@pytest.mark.parametrize(
+    "what, point, mechanism",
+    [
+        ("symmetric", "must-split round", "edge"),
+        ("mirror", "refinement step", "vanish identically"),
+        ("square", "", ""),
+    ],
+)
+def test_a_symmetric_model_on_two_blas_kernels_is_not_comparable_for_its_identified_reason(
+    kernel_run, what, point, mechanism
+):
+    """OPENBLAS_CORETYPE=Sandybridge and SkylakeX break the Haldane metal's edge-rule ties and the Rice-Mele
+    stack's rounding-noise error estimates differently here (the QWZ square metal keeps one mesh): the
+    comparator names the first divergence, the tied decisions behind it and the remedy."""
+    first, second = kernel_run("Sandybridge", what), kernel_run("SkylakeX", what)
     report = compare("QUEER_QGEOM", first, second)
-    if sets[0] == sets[1]:
+    if len(set(vertex_sets(first, second))) == 1:
         assert report["verdict"] == PASS, report["summary"]
-    else:
-        assert report["verdict"] == NOT_COMPARABLE, report["summary"]
-        assert SYMMETRIC_TIES in preconditions(report)["mesh_determined"]["detail"]
+        return
+    assert report["verdict"] == NOT_COMPARABLE, report["summary"]
+    detail = preconditions(report)["mesh_determined"]["detail"]
+    assert MESH_ROUNDING in detail and REMEDY in detail and point in detail and mechanism in detail
+
+
+@pytest.mark.parametrize("what", ["symmetric", "mirror"])
+@pytest.mark.parametrize(
+    "defect, fragment",
+    [("threshold", "differ outside the"), ("dropped", "outside their rules' bounds")],
+)
+def test_a_defect_in_the_candidates_mesh_decisions_fails_on_another_kernel(
+    kernel_run, what, defect, fragment
+):
+    """The same pairs with the candidate's gap-rule ratio a fifth low, or one gap-flagged leaf left unsplit:
+    the first divergence is a decision no tie explains (or a record off its own rules), so the mesh is
+    compared and fails, never not_comparable."""
+    reference, candidate = kernel_run("Sandybridge", what), kernel_run("SkylakeX", what, defect)
+    report = compare("QUEER_QGEOM", reference, candidate)
+    assert report["verdict"] == FAIL, report["summary"]
+    assert preconditions(report)["mesh_determined"]["ok"]
+    assert (
+        quantities(report)["qgeom.mesh"] == UNEXPLAINED and fragment in item(report, "qgeom.mesh")["detail"]
+    )
+
+
+def test_a_refinement_the_candidate_drops_fails_on_another_kernel(kernel_run):
+    """The production-like insulator keeps one mesh on every kernel; a candidate whose first stage never
+    refines its worst leaf diverges in a refinement step no tie explains, against QUEER and the driver."""
+    candidate = kernel_run("Prescott", "qgeom_full_insulator", "unrefined")
+    for reference, fragment in (
+        (kernel_run("Sandybridge", "qgeom_full_insulator"), "refinement step"),
+        (GOLDENS / "qgeom_full_insulator", "first divergence"),
+    ):
+        report = compare("QUEER_QGEOM", reference, candidate)
+        assert report["verdict"] == FAIL and quantities(report)["qgeom.mesh"] == UNEXPLAINED, report[
+            "summary"
+        ]
+        assert fragment in item(report, "qgeom.mesh")["detail"]
+
+
+def forge_ties(directory, rounds):
+    """The candidate's record rewritten to call every leaf its given must-split rounds split tied, consistently
+    with its vertex keys (each such leaf a leaf then, its outcome what the keys show)."""
+    vertices = read(Path(directory) / "Out" / "qgeom_vertices.json")
+    keys, unit = np.asarray(vertices["keys"]), vertices["unit"]
+    creator = creating_splits(keys, unit)
+
+    def mutate(document):
+        for entry in document["qgeom"]["integration"]["decision_ties"]["rounds"]:
+            if entry["phase"] != "must_split" or entry.get("history") not in rounds:
+                continue
+            listed = {row[0] for row in entry["tied"]}
+            for rule, (lo, hi) in entry["ranges"].items():
+                code = OUTCOMES.index(rule)
+                for centre in np.unique(creator[lo:hi][creator[lo:hi] >= 0]).tolist():
+                    if centre not in listed:
+                        entry["tied"].append([centre, 1 | 1 << code, code])
+            entry["tied_count"] = len(entry["tied"])
+
+    edit(directory, mutate)
+
+
+def test_a_forged_tie_record_is_never_a_reason(kernel_run, tmp_path):
+    """A candidate whose record is forged to call its defective decisions tied, or whose real tie is struck
+    from its record, fails: a difference is rounding only where both records show the tie."""
+    reference = kernel_run("Sandybridge", "symmetric")
+    defective = copy(kernel_run("SkylakeX", "symmetric", "threshold"), tmp_path / "defective")
+    forge_ties(defective, range(200))
+    report = compare("QUEER_QGEOM", reference, defective)
+    assert report["verdict"] == FAIL and quantities(report)["qgeom.mesh"] == UNEXPLAINED, report["summary"]
+    honest = kernel_run("SkylakeX", "symmetric")
+    if len(set(vertex_sets(reference, honest))) == 1:
+        pytest.skip("these kernels give the Haldane metal one mesh on this host")
+    struck = copy(honest, tmp_path / "struck")
+
+    def strike(document):
+        rounds = document["qgeom"]["integration"]["decision_ties"]["rounds"]
+        entry = next(entry for entry in rounds if entry["phase"] == "must_split" and entry["tied_count"])
+        entry["tied"], entry["tied_count"] = [], 0
+
+    edit(struck, strike)
+    report = compare("QUEER_QGEOM", reference, struck)
+    assert report["verdict"] == FAIL and quantities(report)["qgeom.mesh"] == UNEXPLAINED, report["summary"]
+
+
+@pytest.mark.parametrize("what", ["symmetric", "mirror"])
+def test_a_driver_reference_is_attributed_by_the_candidates_record(kernel_run, tmp_path, what):
+    """Against the driver (no keys, no decision record, its last 12 history entries) the candidate's record
+    alone attributes the difference: a tied round at the first differing history entry, or a refinement the
+    candidate records as ordered by rounding; equal records pass and say what they leave unestablished."""
+    sandybridge, skylakex = kernel_run("Sandybridge", what), kernel_run("SkylakeX", what)
+    same = compare("QUEER_QGEOM", as_driver(sandybridge, tmp_path / "same"), sandybridge)
+    assert same["verdict"] == PASS and "not established" in item(same, "qgeom.mesh")["detail"]
+    defective = kernel_run("Sandybridge", what, "threshold")
+    report = compare("QUEER_QGEOM", as_driver(skylakex, tmp_path / "driver"), defective)
+    assert report["verdict"] == FAIL and quantities(report)["qgeom.mesh"] == UNEXPLAINED, report["summary"]
+    if len(set(vertex_sets(sandybridge, skylakex))) == 1:
+        pytest.skip("these kernels give the model one mesh on this host")
+    report = compare("QUEER_QGEOM", tmp_path / "driver", sandybridge)
+    assert report["verdict"] == NOT_COMPARABLE, report["summary"]
+    detail = preconditions(report)["mesh_determined"]["detail"]
+    assert MESH_ROUNDING in detail and REMEDY in detail
 
 
 @pytest.mark.parametrize("kernel", ["Prescott", "Nehalem", "Sandybridge"])
@@ -1189,3 +1475,181 @@ def test_two_failed_runs_with_the_same_failure_pass(tmp_path):
     assert code == 2 and document["error"]["code"] == "queer_position_unavailable"
     report = compare("QUEER_QGEOM", GOLDENS / "qgeom_position_unavailable", tmp_path)
     assert report["verdict"] == PASS and quantities(report) == {"status": AGREE}
+
+
+# ---------------------------------------------------------------------------
+# The attribution rule on synthetic records
+# ---------------------------------------------------------------------------
+
+
+def decisions(rounds, seeds=(), seed_ties=()):
+    """A decision record with the given rounds and seeds (seed ids, tied seed rows)."""
+    return {
+        "seeds": {
+            "count": len(seeds),
+            "digest": set_digest(np.asarray(seeds, np.int64)),
+            "tied": [list(row) for row in seed_ties],
+            "tied_count": len(seed_ties),
+        },
+        "rounds": rounds,
+        "truncated": False,
+    }
+
+
+def split_round(rule, cells, tied=(), history=0, **extra):
+    """A must-split (or, with rule error, a refinement) round splitting ``cells`` with the given tied rows."""
+    entry = {
+        "phase": "error" if rule == "error" else "must_split",
+        "history": history,
+        "splits": {rule: len(cells)} if cells else {},
+        "digest": {rule: set_digest(np.asarray(cells, np.int64))} if cells else {},
+        "tied": [list(row) for row in tied],
+        "tied_count": len(tied),
+        "stop": {"by": None, "tied": False},
+        **extra,
+    }
+    return entry
+
+
+def bits(*names):
+    return sum(1 << OUTCOMES.index(name) for name in names)
+
+
+def attributed(a, b, integration_a=None, integration_b=None):
+    return attribute(
+        MeshRun("reference", integration_a or {}, a, None, None),
+        MeshRun("candidate", integration_b or {}, b, None, None),
+    )
+
+
+def test_a_difference_is_identified_only_where_both_records_tie_it():
+    edge = OUTCOMES.index("edge")
+    common = split_round("gap", [10, 20])
+    flip_a = split_round("edge", [30, 40], tied=[(40, bits("none", "edge"), edge)], history=1)
+    flip_b = split_round("edge", [30], tied=[(40, bits("none", "edge"), 0)], history=1)
+    found = attributed(decisions([common, flip_a]), decisions([common, flip_b]))
+    assert found.identified and "must-split round 1" in found.point and "none" in found.detail
+    # Tied in one record only, outside the bounds the other allows, or another leaf split: never a reason.
+    for other in (
+        split_round("edge", [30], history=1),
+        split_round("edge", [30], tied=[(40, bits("none", "gap"), 0)], history=1),
+        split_round("edge", [30, 50], tied=[(40, bits("none", "edge"), 0)], history=1),
+    ):
+        assert not attributed(decisions([common, flip_a]), decisions([common, other])).identified
+    # A seed decision tied in both runs that went the other way, and one that is not tied.
+    seed = seed_id(7, "gap", 0, 1)
+    found = attributed(
+        decisions([common], seeds=[seed], seed_ties=[(7, 0, 0, 1, 1)]),
+        decisions([common], seeds=[], seed_ties=[(7, 0, 0, 1, 0)]),
+    )
+    assert found.identified and "seeds" in found.point
+    assert not attributed(decisions([common], seeds=[seed]), decisions([common])).identified
+    # The same seeds with another count inside the mu range: their energies tie its ends, or not.
+    a, b = decisions([common]), decisions([common])
+    a["seeds"].update(mu_seeds=2, mu_seeds_tied=1)
+    b["seeds"].update(mu_seeds=1, mu_seeds_tied=1)
+    assert attributed(a, b).identified and "controlled mu" in attributed(a, b).point
+    b["seeds"]["mu_seeds_tied"] = 0
+    assert not attributed(a, b).identified
+
+
+def test_a_refinement_stop_or_maximum_differs_only_where_tied_or_set_by_rounding():
+    def step(by, tied, noise=None, cells=()):
+        entry = split_round("error", list(cells), history=3, target=0.01)
+        entry["stop"] = {"by": by, "tied": tied, "worst": 0.01, "band": 1e-9}
+        if noise:
+            entry["noise"] = noise
+        return entry
+
+    common = split_round("gap", [10])
+    assert attributed(
+        decisions([common, step("target", True)]), decisions([common, step(None, True, cells=[5])])
+    ).identified
+    assert not attributed(
+        decisions([common, step("target", True)]), decisions([common, step(None, False, cells=[5])])
+    ).identified
+    rounding = {"columns": 8, "leaves": 3, "worst_real": 0.01, "worst_rounding": 0.2}
+    found = attributed(
+        decisions([common, step(None, False, rounding, [5, 6])]),
+        decisions([common, step(None, False, rounding, [5, 7])]),
+    )
+    assert found.identified and "vanish identically" in found.detail
+    assert not attributed(
+        decisions([common, step(None, False, cells=[5, 6])]),
+        decisions([common, step(None, False, cells=[5, 7])]),
+    ).identified
+
+    def restart(chosen, tied):
+        return {
+            "phase": "restart",
+            "history": None,
+            "chosen_mu_eV": chosen,
+            "tied_mu_eV": tied,
+            "tied_count": len(tied) - 1,
+        }
+
+    assert attributed(
+        decisions([common, restart(0.01, [0.01, 0.02])]), decisions([common, restart(0.02, [0.01, 0.02])])
+    ).identified
+    assert not attributed(
+        decisions([common, restart(0.01, [0.01])]), decisions([common, restart(0.02, [0.01, 0.02])])
+    ).identified
+
+
+def test_against_a_driver_reference_the_candidates_record_bounds_the_difference():
+    """One record: the first differing history entry's round must tie at least |d leaves| / 3 split decisions
+    and 8 vertices per tied decision; a count beyond them fails."""
+    first = split_round("gap", [10, 20], history=0, vertices=[512, 528], leaves=[256, 262])
+    second = split_round(
+        "edge", [30], tied=[(40, bits("none", "edge"), 0)], history=1, vertices=[528, 536], leaves=[262, 265]
+    )
+    record = decisions([first, second])
+    mine = {"seeds": 0, "history": history_from_record(record)}
+    other = {
+        "seeds": 0,
+        "history": [dict(mine["history"][0]), {"phase": "must_split", "vertices": 542, "leaves": 268}],
+    }
+    found = attributed(None, record, other, mine)
+    assert found.identified and "history entry 1" in found.point
+    other["history"][1].update(vertices=560, leaves=271)
+    assert not attributed(None, record, other, mine).identified
+    other["history"][1].update(vertices=542, leaves=268)
+    assert not attributed(None, record, {**other, "seeds": 2}, mine).identified
+
+
+def test_the_second_stage_records_every_a3_maximum_within_its_band():
+    from types import SimpleNamespace
+
+    from queer.observables.qgeom import TIE_INDICATOR, Integrator
+
+    integ = SimpleNamespace(
+        mesh=SimpleNamespace(lvl=np.zeros(4), nv=9), mu_subset=np.zeros(3), decision_rounds=[]
+    )
+    mu = np.array([-0.01, 0.0, 0.01, 0.02])
+    A3 = np.array([1.0, 1.0 + 0.5 * TIE_INDICATOR, 0.5, 1.0 - 3.0 * TIE_INDICATOR])
+    Integrator.record_restart(integ, mu, A3, int(np.argmax(A3)), 1.0)
+    entry = integ.decision_rounds[0]
+    assert entry["chosen_mu_eV"] == 0.0 and entry["tied_mu_eV"] == [-0.01, 0.0] and entry["tied_count"] == 1
+
+
+@pytest.fixture(scope="module")
+def mirror(tmp_path_factory):
+    directory = tmp_path_factory.mktemp("qgeom") / "mirror"
+    mirror_full_job(directory)
+    assert run(None, qgeom_params(directory, **MIRROR), directory, log=lambda line: None) == 0
+    return directory
+
+
+def test_quantities_that_vanish_identically_are_recorded_as_rounding(mirror, symmetric):
+    """The Rice-Mele chains have no Berry curvature and no off-diagonal metric: the record names those
+    controlled quantities, whose scales are rounding, and the leaves and worst sum they set; the Haldane
+    metal controls none."""
+    rounds = read(mirror / "queer_results.json")["qgeom"]["integration"]["decision_ties"]["rounds"]
+    steps = [entry for entry in rounds if entry["phase"] == "error"]
+    named = steps[0]["noise_quantities"]
+    assert {"sea omega", "Fermi-surface v_x omega", "Fermi-surface v_x G_xy"} <= set(named)
+    assert "Fermi-surface v_x G_xx" not in named and "Fermi-surface count" not in named
+    assert all(entry["noise"]["leaves"] > 0 for entry in steps)
+    assert all(entry["noise"]["worst_rounding"] > entry["noise"]["worst_real"] for entry in steps)
+    rounds = read(symmetric / "queer_results.json")["qgeom"]["integration"]["decision_ties"]["rounds"]
+    assert all(not entry.get("noise_quantities") and "noise" not in entry for entry in rounds)
