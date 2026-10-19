@@ -39,6 +39,7 @@ from queer.compat.generator.environment import (  # noqa: E402
     BLAS_FIELDS,
     ENVIRONMENT_FIELDS,
     environment_differences,
+    numeric_environment,
 )
 from queer.compat.generator.parity import (  # noqa: E402
     AGREE,
@@ -1128,9 +1129,10 @@ def run_under_kernel(kernel, directory, what, defect=""):
     return Path(directory)
 
 
-def as_driver(source, target):
+def as_driver(source, target, environment=False):
     """A QUEER run rewritten as the vendored driver writes it: pythtb_results.json with the vendored
-    producer, no QUEER-only blocks (the decision record, the replay and vertex records) or files."""
+    producer, no QUEER-only blocks (the decision record, the replay and vertex records) or files; with
+    ``environment`` it keeps the numeric environment, as the driver records it from core 497beb4c… on."""
     target = copy(source, target)
     document = read(target / "queer_results.json")
     (target / "queer_results.json").unlink()
@@ -1139,7 +1141,8 @@ def as_driver(source, target):
     document["step_type"] = "PYTHTB_QGEOM"
     golden = read(GOLDENS / "qgeom_full_metal" / "pythtb_results.json")["provenance"]
     document["provenance"].update(core_sha256=golden["core_sha256"], qgeom_sha256=golden["qgeom_sha256"])
-    document["provenance"].pop("numeric_environment")
+    if not environment:
+        document["provenance"].pop("numeric_environment")
     for key in ("decision_ties", "replay", "stop_vertices", "vertex_set"):
         document["qgeom"]["integration"].pop(key)
     queer_only = ("Out/qgeom_vertices.json", "Out/qgeom_response_full.json")
@@ -1235,6 +1238,9 @@ def test_a_dropped_vertex_fails_whatever_the_symmetry(symmetric, metal, tmp_path
     assert report["verdict"] == NOT_COMPARABLE, report["summary"]
     detail = preconditions(report)["mesh_determined"]["detail"]
     assert "unrecorded" in detail and "blas (reference)" in detail and REMEDY in detail
+    # A driver that records its numeric environment, here the candidate's own, makes the difference decisive.
+    report = compare("QUEER_QGEOM", as_driver(symmetric, tmp_path / "recording", environment=True), other)
+    assert report["verdict"] == FAIL and quantities(report)["qgeom.mesh"] == UNEXPLAINED, report["summary"]
     # A vertex record that is not its run's mesh fails whatever the symmetry.
     forged = copy(symmetric, tmp_path / "forged")
     record = read(forged / "Out" / "qgeom_vertices.json")
@@ -1415,6 +1421,14 @@ def test_each_run_records_its_numeric_environment(kernel_run):
     differing, unrecorded = environment_differences(driver, environments[1])
     assert any("numpy" in text for text in differing)
     assert unrecorded == ["machine (reference)", "simd (reference)", "blas (reference)"]
+
+
+def test_the_driver_records_queers_numeric_environment_field_for_field(generator_core):
+    """The vendored driver writes provenance.numeric_environment as QUEER does: in one process the two records
+    are one environment, so a driver reference and a QUEER candidate of one host and build compare meshes."""
+    ours, theirs = numeric_environment(), generator_core.numeric_environment()
+    assert set(ours) == set(theirs)
+    assert environment_differences(theirs, ours) == ([], [])
 
 
 def test_a_reported_weyl_bound_widens_no_tolerance(insulator, tmp_path):

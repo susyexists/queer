@@ -12,7 +12,7 @@ when those values differ, which fails them.
 
 **Producer.** A PythTB reference must come from the vendored kernel
 (``provenance.qgeom_sha256`` 4fb51a38…) and a core whose quantum-geometry code is
-the vendored one (:data:`QGEOM_CORES`, 56fda912… to 0efcc4b3…); any other revision
+the vendored one (:data:`QGEOM_CORES`, 56fda912… to 497beb4c…); any other revision
 is ``not_comparable``.
 
 **Replay.** The adaptive mesh is the integration's sampling, so it must be the
@@ -123,6 +123,7 @@ QGEOM_CORES = frozenset(
         "d75fb8fc3c08b87d776023f804fe0e6d122d231cd655ef61ba9fecb86544d49b",
         "f4a73779a891de356cc53e55d8c077f0fdc6befce931a6ed0bf9782973f5551b",
         "0efcc4b3079266a8d35644d3d06f648857e31d86b12be173c6f03298a5d505c0",
+        "497beb4c22142a6b34a5759469d5036b8cf7508eb217fc95e929ef9abfe0587c",
     }
 )
 RELATIVE = 1e-8

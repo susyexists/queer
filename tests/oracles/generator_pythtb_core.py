@@ -3524,6 +3524,67 @@ def _package_version(name: str) -> Optional[str]:
         return None
 
 
+def _numpy_simd() -> Optional[List[str]]:
+    """The SIMD extensions numpy dispatches to on this machine (numpy 2 and 1.26 module paths)."""
+    import importlib
+
+    for name in ("numpy._core._multiarray_umath", "numpy.core._multiarray_umath"):
+        try:
+            module = importlib.import_module(name)
+        except ImportError:
+            continue
+        dispatch = getattr(module, "__cpu_dispatch__", None)
+        features = getattr(module, "__cpu_features__", None)
+        if dispatch is not None and features is not None:
+            return sorted(str(item) for item in dispatch if features.get(item))
+    return None
+
+
+def _blas_libraries() -> Optional[List[Dict[str, Any]]]:
+    """Every BLAS library loaded (numpy's and SciPy's), with its build, version and core type."""
+    try:
+        import scipy.linalg  # noqa: F401  (loads SciPy's own BLAS, so it is listed)
+        from threadpoolctl import threadpool_info
+    except ImportError:
+        return None
+    libraries = []
+    for entry in threadpool_info():
+        if entry.get("user_api") != "blas":
+            continue
+        libraries.append(
+            {
+                "internal_api": entry.get("internal_api"),
+                "library": os.path.basename(str(entry.get("filepath") or "")),
+                "version": entry.get("version"),
+                "architecture": entry.get("architecture"),
+                "threading_layer": entry.get("threading_layer"),
+                "num_threads": entry.get("num_threads"),
+            }
+        )
+    return sorted(libraries, key=lambda library: str(library["library"]))
+
+
+def numeric_environment() -> Dict[str, Any]:
+    """What decides this process's floating-point rounding.
+
+    On one numpy and BLAS build and core type, rounding breaks a model's exact ties the
+    same way in every run, so two runs of the adaptive quantum-geometry integrator on an
+    exactly symmetric model give one mesh; another core type or build can give another.
+    The record matches QUEER's ``provenance.numeric_environment``, field for field, so a
+    parity comparison can tell whether two runs shared one. Without threadpoolctl the
+    BLAS libraries are not recorded (null).
+    """
+    return {
+        "python": platform.python_version(),
+        "numpy": np.__version__,
+        "scipy": _package_version("scipy"),
+        "machine": platform.machine(),
+        "simd": _numpy_simd(),
+        "blas": _blas_libraries(),
+        "openblas_coretype": os.environ.get("OPENBLAS_CORETYPE"),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Steps
 # ---------------------------------------------------------------------------
@@ -5418,6 +5479,7 @@ def run(params_path: str = PARAMS_FILENAME) -> int:
         results["provenance"]["pythtb"] = _package_version("pythtb")
         results["provenance"]["scipy"] = _package_version("scipy")
         results["provenance"]["matplotlib"] = _package_version("matplotlib")
+        results["provenance"]["numeric_environment"] = numeric_environment()
         if os.path.exists(QGEOM_MODULE_FILENAME):
             results["provenance"]["qgeom_sha256"] = sha256_file(QGEOM_MODULE_FILENAME)
         os.makedirs(OUT_DIR, exist_ok=True)

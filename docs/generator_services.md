@@ -723,7 +723,7 @@ parameters, E_F; derived decisions: the position level, the band window, the
 occupied count and its source, the occupied manifold's applicability):
 
 - *producer*: a PythTB reference must come from the vendored kernel (4fb51a38…) and a
-  core whose quantum-geometry code is the vendored one (56fda912… to 0efcc4b3…);
+  core whose quantum-geometry code is the vendored one (56fda912… to 497beb4c…);
 - *stop rule*: a reference stopped on its vertex budget, the depth limit or not at all
   is deterministic and the candidate must not have stopped on its own time budget; a
   reference stopped on its time budget needs a candidate replayed at its vertex
@@ -1001,9 +1001,10 @@ BLAS build, every mesh difference is `not_comparable` with the unrecorded fields
 
 *Out of reach, and what closes it.* Between environments a mesh defect is
 `not_comparable`, never a pass; the remedy, a rerun in the reference's environment,
-then decides it. Against a driver reference that is every mesh difference, until the
-driver also records its BLAS build (a change to the Generator's `_pythtb_core.py`,
-for backend R2). For a QGEOM pair to be decisive on the Generator, the QUEER
+then decides it. The driver records the same `provenance.numeric_environment` from core
+497beb4c… on (field for field, tested against the vendored driver in one process);
+against an older driver reference, which records no BLAS build, every mesh difference
+is `not_comparable`. For a QGEOM pair to be decisive on the Generator, the QUEER
 environment on the host must equal the PythTB one (the same Python, NumPy and SciPy
 wheels, which carry their OpenBLAS builds) on the same node type. Real Wannier models
 carry no exact symmetry (the production model is 9.2 meV from C3) and replay exactly

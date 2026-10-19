@@ -8,12 +8,14 @@ mypy skip them, and they are not part of the installed package.
 
 | File | Generator source | SHA-256 |
 |---|---|---|
-| `generator_pythtb_core.py` | `generator-backend/engines/pythtb_core.py` | `0efcc4b3079266a8d35644d3d06f648857e31d86b12be173c6f03298a5d505c0` |
+| `generator_pythtb_core.py` | `generator-backend/engines/pythtb_core.py` | `497beb4c22142a6b34a5759469d5036b8cf7508eb217fc95e929ef9abfe0587c` |
 | `generator_pythtb_qgeom.py` | `generator-backend/engines/pythtb_qgeom.py` | `4fb51a38691931f2b687d731619a21ae2caa094b1dd4681d1d97073041f23ee3` |
 
-- **Source.** `generator_pythtb_core.py`: copied on 2026-10-17 from generator-backend
-  branch `feat/queer-r2` at commit `c59f3b68cbc40a6eee8634de894bbe0593bfea8a` (edge
-  crossings as a weighted spectral flow of half-ribbon weight across the bulk gap,
+- **Source.** `generator_pythtb_core.py`: copied on 2026-10-19 from generator-backend
+  branch `feat/queer-r2` at commit `b49118b`, which records the driver's numeric
+  environment (`provenance.numeric_environment`, QUEER's record field for field) on
+  top of core `0efcc4b3…` (`c59f3b68cbc40a6eee8634de894bbe0593bfea8a`, rebased as
+  `8b48e93`: edge crossings as a weighted spectral flow of half-ribbon weight across the bulk gap,
   certified only where the bulk k mesh resolves the gap and checked against the bulk
   Chern number, never from absence, with a hopping resolved only from 8 points per
   period; core `f4a73779…` at `f236e92` also certified an empty gap on a bulk Chern
