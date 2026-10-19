@@ -1,5 +1,56 @@
 # Migration notes
 
+## QUEER 1.6.0 Generator OpenMX and quantum-geometry runners
+
+QUEER now also runs the Generator's PyATB steps and its quantum-geometry step:
+
+- `QUEER_AHC` and `QUEER_CHERN_NUMBER` read the OpenMX `scf.scfout` through
+  `OpenMXModel` and integrate the anomalous Hall conductivity and the Chern number
+  with QUEER's own engines (direct, Kubo, FHS). `export_run` writes PyATB's layouts:
+  the one-line AHC vector, the FHS table and `Out/Chern_Num/chern_number.dat`.
+- `QUEER_SHIFT_CURRENT` computes the physical shift current (both spin channels of a
+  collinear run, with the spin-up channel reported beside it as PyATB's legacy single
+  channel) and writes PyATB's `shift_current.dat` layout.
+- `QUEER_QGEOM` is a port of the Generator's quantum-geometry driver: the layer
+  geometry, the triangle rules and the adaptive integrator (`physics.qgeom`,
+  `observables.qgeom`), with the `_tb.dat` full position level and the `.eig` check.
+  `qgeom_replay_vertices` and `qgeom_time_stop` make a run replay a reference's
+  sampling. The run also writes QUEER-only comparison records: `Out/qgeom_vertices.json`
+  (the mesh's vertex keys), `Out/qgeom_response_full.json` (the unrounded curves) and
+  `qgeom.integration.decision_ties`.
+
+Every Generator run records `provenance.numeric_environment`: the Python, NumPy and
+SciPy versions, the machine, NumPy's SIMD targets and each BLAS library's build and
+core type.
+
+The comparator (`python -m queer generator compare`) covers the new steps:
+
+- PyATB's AHC and Chern runs, in their Grid and refined-Grid tiers;
+- the shift current, by a full independent recomputation from the scfout (it needs
+  `--scfout`);
+- the quantum geometry, by deterministic replay. A mesh difference fails between runs
+  of one numeric environment and is not comparable between different ones.
+
+`docs/generator_services.md` gives each rule, its tolerances and its measured
+outcomes.
+
+Corrections that change values:
+
+- `translate_pyatb`: the Hall export sign was inverted, and the default convention is
+  now `auto`, resolved per package. `adaptive_grid_threshold` is in square angstroms
+  and is no longer converted from Bohr^2. Explicit Fermi energies move from PyATB's
+  Hartree (27.211324570273 eV) to QUEER's.
+- `shift_current_spectrum` without smearing places each transition in one histogram
+  row by an integer index. Before, a transition exactly on a bin edge could land in no
+  row or in two. Away from the edges, and with every smearing, the values are
+  bit-identical. `ShiftCurrentSettings` gains `bin_rows`.
+- The Generator SLAB edge count follows the driver's rewritten rule: the weighted
+  flow of half-ribbon weight with rank alignment, counted only where the bulk k mesh
+  resolves the gap. A gap without edge levels is never certified.
+
+Algorithm identity is `1.6.0-histogram-rows-v1`: older partial runs require a fresh
+run; completed artifacts remain renderable.
+
 ## QUEER 1.5.0 Generator parity runner
 
 QUEER now runs the Generator's PythTB steps itself. `python -m queer generator run

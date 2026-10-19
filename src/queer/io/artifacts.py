@@ -23,7 +23,7 @@ import numpy as np
 
 from ..execution import ExecutionOptions
 
-ALGORITHM_VERSION = "1.4.1-refactor-v1"
+ALGORITHM_VERSION = "1.6.0-histogram-rows-v1"
 RUNSTORE_LOCK_MODES = ("flock", "none")
 # The repository root when this module runs from a source checkout.
 _SOURCE_ROOT = Path(__file__).resolve().parents[3]
