@@ -676,7 +676,9 @@ def test_counts_at_e_f_follow_a_step_shift_within_tolerance_of_flipping(runs, tm
     # step shift of 0.35 eV in the reference and 0.25 eV in the candidate, which moves the reach
     # and the levels taking part at E_F, and with them the right edge's tallies there (one
     # crossing each way against one up); nothing at E_F itself is near a flip.
-    # Levels on a 0.05 eV grid, as integers times 0.05 (the tie is one of rounding).
+    # Levels on a 0.05 eV grid, as integers times 0.05, where the two offsets tie exactly: each run's
+    # level is moved 0.2 τ_E off the grid, the reference's down and the candidate's up, so the tie is
+    # decided by construction and not by the rounding of one NumPy build's sums.
     levels = [
         [float(n * 0.05) for n in row]
         for row in ([-6, -4, -2, -1, 2], [-7, -3, 2, 6, 8], [-8, -6, -5, 6], [-6, -2])
@@ -690,9 +692,11 @@ def test_counts_at_e_f_follow_a_step_shift_within_tolerance_of_flipping(runs, tm
     middle = [[0.3, 0.3, 0.3, 0.1, 0.3], [0.3, 0.0, 0.0, 0.1, 0.0], [0.1, 0.1, 0.3, 0.3], [0.1, 0.0]]
     bulk = {"metal": False, "gap_eV": [-0.25, 0.3], "k_points": [4, 8], "chern": -1, "berry_phase_step": 0.3}
     source = runs["haldane_slab"][1]
-    reference = synthetic_levels(source, tmp_path / "reference", levels, half, middle, bulk)
+    lowered = [list(row) for row in levels]
+    lowered[1][2] -= 2e-9
+    reference = synthetic_levels(source, tmp_path / "reference", lowered, half, middle, bulk)
     moved = [list(row) for row in levels]
-    moved[1][2] += 4e-9
+    moved[1][2] += 2e-9
     candidate = synthetic_levels(source, tmp_path / "candidate", moved, half, middle, bulk)
     blocks = [read(run / QUEER_RESULTS)["slab"]["edge_crossings_at_fermi"] for run in (reference, candidate)]
     assert blocks[0]["step_shift_eV"] == pytest.approx(0.35)
