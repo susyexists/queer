@@ -31,17 +31,16 @@ run's vertex count, its keys hashing to its digest, a QUEER run's digest its
 ``integration.vertex_set``'s), and a QUEER candidate without one fails against a
 reference that has one. The stop reason and the convergence flags must be equal.
 
-**Mesh attribution.** Where the vertex sets differ, :mod:`~queer.compat.generator.qgeom_mesh`
-locates the first divergence from the runs' decision records (QUEER's
-``integration.decision_ties``: the decisions within rounding of their thresholds) and
-identifies its reason: rounding at decisions tied in both records (or, against a
-driver reference, in the candidate's, by the per-split vertex and leaf increments), or
-a refinement ordered by the error estimates of quantities that vanish identically.
-An identified difference makes the precondition ``mesh_determined`` fail
-(``not_comparable``, naming the point, the rule, the tie count and the difference,
-with the remedy: run both on one BLAS kernel); an unidentified one is compared and
-fails as ``qgeom.mesh``, the analysis in its detail. A decision record that is not its
-run's mesh is never a reason. The symmetry record (``symmetry.c3_band_floor_meV``) is
+**Numeric environment.** Each QUEER run records ``provenance.numeric_environment``
+(:mod:`~queer.compat.generator.environment`). Where the vertex sets differ between runs
+of one recorded environment, rounding is the same in both (the driver and QUEER give
+identical meshes there, even on exactly symmetric models), so the difference is
+compared and fails as ``qgeom.mesh``. Where the environments differ or are not both
+recorded (the driver records no BLAS build), the precondition ``mesh_determined``
+fails (``not_comparable``) with the environments, the first divergence described by
+:mod:`~queer.compat.generator.qgeom_mesh` from QUEER's decision records, and the remedy:
+rerun the candidate in the reference's environment. The decision records describe;
+they decide nothing. The symmetry record (``symmetry.c3_band_floor_meV``) is
 informational.
 
 **Quantities.** With δ(T) = 1e-8 max(max A3, max |M|) over both runs at
@@ -97,6 +96,7 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
+from .environment import environment_differences, recorded_environment
 from .parity import (
     AGREE,
     DOCUMENTED,
@@ -105,7 +105,9 @@ from .parity import (
     RunDirectory,
     _array,
     _Comparison,
+    _max_magnitude,
     _shorten,
+    eigenvalue_tolerance,
 )
 from .qgeom_mesh import REMEDY, Attribution, MeshRun, attribute, record_problems
 from .qgeom_step import FULL_RESPONSE_FILE, PROBE_TOLERANCE, VERTICES_FILE, compact
@@ -144,7 +146,12 @@ CHI_ROUNDING = 64.0 * float(np.finfo(float).eps)
 COUNT_ROUNDING = 4.0 * float(np.finfo(float).eps)
 RESIDUAL_TOL = 1e-12
 FULL_RESPONSE_NAME = FULL_RESPONSE_FILE.split("/", 1)[1]
-MESH_ROUNDING = "the meshes differ by rounding at tied decisions"
+MESH_ROUNDING = (
+    "the meshes differ between runs that did not share a numeric environment, whose rounding breaks exact "
+    "ties another way"
+)
+# The driver's verdict reason that rounding can decide at a headline row whose A3 and M are rounding.
+A3_ERROR_REASON = "A3 error above max(5% A3, 1e-3 of its scale) at a headline point"
 MISSING = object()
 
 
@@ -272,6 +279,7 @@ class QgeomComparison(_Comparison):
         # Per temperature: the candidate's mu_CNP minus the reference's (eV).
         self.cnp_shift: dict[str, float] = {}
         self._mesh: tuple[list[str], list[str], str] | None = None
+        self.record_notes: list[str] = []
         self._attribution: Attribution | None = None
         self._counts: dict[tuple[str, bool], tuple[CountCurve | None, CountCurve | None]] = {}
         # Both runs wrote unrounded curves (each the source of its 5-digit file): no print rounding.
@@ -337,6 +345,21 @@ class QgeomComparison(_Comparison):
             True,
             f"deterministic: the reference stopped with {stop_a!r}, the candidate with {stop_b!r}",
         )
+
+    def set_tolerances(self) -> None:
+        """The family's tolerances with the eigenvalue tolerance from the reference alone and no Weyl bound.
+
+        Both producers hermitize H(k) the same way, so the Weyl bound of the R-table describes
+        no difference between them, and a bound or eigenvalue a candidate reports must never
+        widen a tolerance.
+        """
+        super().set_tolerances()
+        self.weyl = 0.0
+        magnitude = _max_magnitude(
+            self.reference.block("bands").get("eigenvalues_eV"),
+            self.reference.block("model").get("fermi_energy"),
+        )
+        self.eigenvalue_tol = eigenvalue_tolerance(0.0, magnitude)
 
     # ------------------------------------------------------------ helpers
     def response(self, run: RunDirectory) -> dict[str, Any]:
@@ -597,8 +620,7 @@ class QgeomComparison(_Comparison):
         problems = inconsistent or differing
         detail = "; ".join(problems) or same
         if differing and not inconsistent:
-            found = self.mesh_attribution()
-            detail = f"{'; '.join(differing)}; first divergence at {found.point}: {found.detail}"
+            detail = f"{'; '.join(differing)}; {self.environment_note()}; {self.divergence()}"
         self.quantity(
             "qgeom.mesh",
             UNEXPLAINED if problems else AGREE,
@@ -648,15 +670,13 @@ class QgeomComparison(_Comparison):
                 inconsistent.append(f"the {run.role}'s vertex record differs from its integration.vertex_set")
         if self.candidate.engine == "queer" and isinstance(record_a, dict) and not isinstance(record_b, dict):
             inconsistent.append("the candidate wrote no Out/qgeom_vertices.json")
-        for mesh_run, run in zip(self.mesh_runs(), (self.reference, self.candidate)):
-            inconsistent += record_problems(mesh_run)
-            record = (run.block("qgeom").get("integration") or {}).get("decision_ties", MISSING)
-            vertices = run.out("qgeom_vertices.json")
-            creation = isinstance(vertices, dict) and vertices.get("order") == "creation"
-            if (record is not MISSING or creation) and not isinstance(record, dict):
-                inconsistent.append(
-                    f"the {run.role} carries no readable decision record beside its vertex record"
-                )
+        # The decision records only describe a difference: their problems are reported, never judged.
+        self.record_notes = []
+        for mesh_run in self.mesh_runs():
+            try:
+                self.record_notes += record_problems(mesh_run)
+            except Exception as error:  # a malformed record is described, never fatal
+                self.record_notes.append(f"the {mesh_run.role}'s decision record cannot be read: {error}")
         differing: list[str] = []
         if isinstance(record_a, dict) and isinstance(record_b, dict):
             differing = [
@@ -747,9 +767,36 @@ class QgeomComparison(_Comparison):
             self._attribution = attribute(reference, candidate)
         return self._attribution
 
+    def environments(self) -> tuple[list[str], list[str]]:
+        """What the two runs' numeric environments record differently, and what either leaves unrecorded."""
+        return environment_differences(
+            recorded_environment(self.reference.document), recorded_environment(self.candidate.document)
+        )
+
+    def environment_note(self) -> str:
+        differing, unrecorded = self.environments()
+        if not differing and not unrecorded:
+            numpy = recorded_environment(self.reference.document).get("numpy")
+            return f"both runs computed in one numeric environment (numpy {numpy}, the same BLAS builds and core type)"
+        parts = differing + ([f"unrecorded: {', '.join(unrecorded)}"] if unrecorded else [])
+        return "the numeric environments differ: " + "; ".join(parts)
+
+    def divergence(self) -> str:
+        """Where the meshes first differ and what the decision records show there (a description only)."""
+        try:
+            found = self.mesh_attribution()
+            text = f"first divergence at {found.point}: {found.detail}"
+        except Exception as error:  # the description must never decide or break the comparison
+            text = f"the first divergence could not be located ({type(error).__name__}: {error})"
+        if self.record_notes:
+            text += "; decision records: " + "; ".join(self.record_notes)
+        return text + " (the decision records describe the difference; they decide nothing)"
+
     def check_mesh_determined(self) -> bool:
-        """Different meshes are not comparable only where the runs' records identify the reason as rounding at
-        tied decisions; an unidentified difference is compared (and fails as qgeom.mesh)."""
+        """A mesh difference is compared (and fails as qgeom.mesh) between runs that computed in one numeric
+        environment, where the producers' meshes are identical even on exactly symmetric models; between
+        runs whose environments differ, or are not both recorded, it is not comparable, with the
+        environments, the first divergence and the remedy."""
         inconsistent, differing, same = self.mesh_comparison()
         if inconsistent:
             return self.precondition(
@@ -757,18 +804,19 @@ class QgeomComparison(_Comparison):
             )
         if not differing:
             return self.precondition("mesh_determined", True, same)
-        found = self.mesh_attribution()
-        if not found.identified:
+        environments, unrecorded = self.environments()
+        if not environments and not unrecorded:
             return self.precondition(
                 "mesh_determined",
                 True,
                 _shorten(
-                    f"the meshes differ for no identified reason, first at {found.point}: compared (qgeom.mesh)"
+                    f"{self.environment_note()}, where rounding is the same in both, so the mesh difference is "
+                    "no rounding: compared (qgeom.mesh)"
                 ),
             )
         detail = (
-            f"{MESH_ROUNDING}: first divergence at {found.point}: {found.detail} (the meshes differ: "
-            f"{'; '.join(differing)}); {REMEDY}"
+            f"{MESH_ROUNDING}: {self.environment_note()}; the meshes differ ({'; '.join(differing)}); "
+            f"{self.divergence()}; {REMEDY}"
         )
         return self.precondition("mesh_determined", False, _shorten(detail, 1600))
 
@@ -1660,10 +1708,63 @@ class QgeomComparison(_Comparison):
             tolerance = tolerances.get(key, 1e-9 * _max_abs(checks_a[key], checks_b[key]) + 1e-15)
             self.values(f"qgeom.position.checks.{key}", checks_a[key], checks_b[key], tolerance)
 
+    def quotable_by_rounding(self) -> str | None:
+        """Why the verdicts differ only in the A3-error reason, decided by rounding, or None.
+
+        The producer drops 'quotable' when a headline row's A3_err exceeds max(5% A3, 1e-3
+        of max |M| there). Where that error and its threshold lie within 3 δ(T) of each
+        other (inside a gap A3, A3_err and M are all rounding), rounding decides the
+        reason; anywhere else it is determined.
+        """
+        reasons = [
+            list(run.block("qgeom").get("verdict_reasons") or []) for run in (self.reference, self.candidate)
+        ]
+        if set(reasons[0]) ^ set(reasons[1]) != {A3_ERROR_REASON}:
+            return None
+        if [r for r in reasons[0] if r != A3_ERROR_REASON] != [r for r in reasons[1] if r != A3_ERROR_REASON]:
+            return None
+        for run, own in zip((self.reference, self.candidate), reasons):
+            if run.block("qgeom").get("verdict") != ("indicative" if own else "quotable"):
+                return None
+        decided: list[str] = []
+        for run, own in zip((self.reference, self.candidate), reasons):
+            if A3_ERROR_REASON not in own:
+                continue
+            headline = run.block("qgeom").get("headline") or {}
+            for T, points in headline.items():
+                delta = self.delta(T)
+                for point, row in (points or {}).items():
+                    A3, err = _finite(row.get("A3_A_per_eV")), _finite(row.get("A3_err"))
+                    j = self.file_index(run, float(row.get("mu_meV", math.nan)))
+                    M = self.level_curve(run, T, self.main_level(run), "M")
+                    if A3 is None or err is None or j is None or M is None or M.ndim != 2 or j >= len(M):
+                        return None
+                    scale = float(np.max(np.abs(M[j])))
+                    threshold = max(0.05 * A3, 1e-3 * scale)
+                    if err <= threshold:
+                        continue
+                    allowance = 3.0 * delta + 1e-3 * float(np.max(self.printing(M[j])))
+                    if err - threshold > allowance:
+                        return None
+                    decided.append(
+                        f"the {run.role}'s {T} {point} row (A3_err {err:.3g}, threshold {threshold:.3g})"
+                    )
+        if not decided:
+            return None
+        return (
+            "the verdicts differ only in the A3-error reason, which rounding decides: "
+            + "; ".join(decided)
+            + " lie within 3 δ of their threshold"
+        )
+
     def compare_settings(self, qa: Mapping[str, Any], qb: Mapping[str, Any]) -> None:
         for key in ("approximation_level", "verdict", "verdict_reasons", "conventions", "files"):
             if qa.get(key) == qb.get(key):
                 self.quantity(f"qgeom.{key}", AGREE, detail=_shorten(repr(qa.get(key)), 120))
+                continue
+            why = self.quotable_by_rounding() if key in ("verdict", "verdict_reasons") else None
+            if why:
+                self.not_determined(f"qgeom.{key}", f"{qa.get(key)!r} vs {qb.get(key)!r}: {why}")
             else:
                 self.quantity(
                     f"qgeom.{key}", UNEXPLAINED, detail=_shorten(f"{qa.get(key)!r} vs {qb.get(key)!r}")

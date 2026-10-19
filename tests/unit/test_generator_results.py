@@ -44,6 +44,7 @@ PROVENANCE_KEYS = {
     "host",
     "cpus",
     "memory_available_bytes",
+    "numeric_environment",
     "inputs",
     "parallel",
     "wall_seconds",

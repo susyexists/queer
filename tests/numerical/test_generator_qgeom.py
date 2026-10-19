@@ -35,6 +35,11 @@ sys.path.insert(0, str(ROOT / "tests" / "numerical"))
 
 from generator_golden_cases import write_case  # noqa: E402
 
+from queer.compat.generator.environment import (  # noqa: E402
+    BLAS_FIELDS,
+    ENVIRONMENT_FIELDS,
+    environment_differences,
+)
 from queer.compat.generator.parity import (  # noqa: E402
     AGREE,
     DOCUMENTED,
@@ -1134,6 +1139,7 @@ def as_driver(source, target):
     document["step_type"] = "PYTHTB_QGEOM"
     golden = read(GOLDENS / "qgeom_full_metal" / "pythtb_results.json")["provenance"]
     document["provenance"].update(core_sha256=golden["core_sha256"], qgeom_sha256=golden["qgeom_sha256"])
+    document["provenance"].pop("numeric_environment")
     for key in ("decision_ties", "replay", "stop_vertices", "vertex_set"):
         document["qgeom"]["integration"].pop(key)
     queer_only = ("Out/qgeom_vertices.json", "Out/qgeom_response_full.json")
@@ -1213,18 +1219,22 @@ def test_the_decision_record_is_its_runs_own(symmetric):
 
 def test_a_dropped_vertex_fails_whatever_the_symmetry(symmetric, metal, tmp_path):
     """The C3 gate is retired: a vertex dropped from an exactly C3-symmetric model's mesh, with its vertex
-    record, digest and integration block consistent, leaves the decision record off its run's mesh and fails
-    with or without the reference's keys, like the generic layer's."""
+    record, digest and integration block consistent, fails against a run of the same numeric environment;
+    against a driver reference, which records no BLAS build, it is not comparable with the remedy."""
     qgeom = read(symmetric / "queer_results.json")["qgeom"]
     assert qgeom["symmetry"]["lattice_hexagonal"] and qgeom["symmetry"]["c3_band_floor_meV"] < 1e-5
     assert compare("QUEER_QGEOM", symmetric, copy(symmetric, tmp_path / "same"))["verdict"] == PASS
     other = copy(symmetric, tmp_path / "other")
     drop_vertex(other)
-    for reference in (symmetric, as_driver(symmetric, tmp_path / "driver")):
-        report = compare("QUEER_QGEOM", reference, other)
-        assert report["verdict"] == FAIL and quantities(report)["qgeom.mesh"] == UNEXPLAINED
-        assert preconditions(report)["mesh_determined"]["ok"]
-        assert "decision record" in item(report, "qgeom.mesh")["detail"]
+    report = compare("QUEER_QGEOM", symmetric, other)
+    assert report["verdict"] == FAIL and quantities(report)["qgeom.mesh"] == UNEXPLAINED
+    assert preconditions(report)["mesh_determined"]["ok"]
+    assert "one numeric environment" in preconditions(report)["mesh_determined"]["detail"]
+    assert "decision record" in item(report, "qgeom.mesh")["detail"]
+    report = compare("QUEER_QGEOM", as_driver(symmetric, tmp_path / "driver"), other)
+    assert report["verdict"] == NOT_COMPARABLE, report["summary"]
+    detail = preconditions(report)["mesh_determined"]["detail"]
+    assert "unrecorded" in detail and "blas (reference)" in detail and REMEDY in detail
     # A vertex record that is not its run's mesh fails whatever the symmetry.
     forged = copy(symmetric, tmp_path / "forged")
     record = read(forged / "Out" / "qgeom_vertices.json")
@@ -1232,13 +1242,16 @@ def test_a_dropped_vertex_fails_whatever_the_symmetry(symmetric, metal, tmp_path
     write(forged / "Out" / "qgeom_vertices.json", record)
     report = compare("QUEER_QGEOM", symmetric, forged)
     assert report["verdict"] == FAIL and quantities(report)["qgeom.mesh"] == UNEXPLAINED
-    # The generic layer: a mesh difference against the driver fails.
+    # The generic layer: the driver's golden records another numpy build and no BLAS build.
     reference, candidate = metal
     asymmetric = copy(candidate, tmp_path / "asymmetric")
     drop_vertex(asymmetric)
     report = compare("QUEER_QGEOM", reference, asymmetric)
+    assert (
+        report["verdict"] == NOT_COMPARABLE and REMEDY in preconditions(report)["mesh_determined"]["detail"]
+    )
+    report = compare("QUEER_QGEOM", candidate, asymmetric)
     assert report["verdict"] == FAIL and quantities(report)["qgeom.mesh"] == UNEXPLAINED
-    assert preconditions(report)["mesh_determined"]["ok"]
 
 
 @pytest.fixture(scope="module")
@@ -1282,6 +1295,7 @@ def test_a_symmetric_model_on_two_blas_kernels_is_not_comparable_for_its_identif
     assert report["verdict"] == NOT_COMPARABLE, report["summary"]
     detail = preconditions(report)["mesh_determined"]["detail"]
     assert MESH_ROUNDING in detail and REMEDY in detail and point in detail and mechanism in detail
+    assert "numeric environments differ" in detail and "SkylakeX" in detail
 
 
 @pytest.mark.parametrize("what", ["symmetric", "mirror"])
@@ -1289,34 +1303,36 @@ def test_a_symmetric_model_on_two_blas_kernels_is_not_comparable_for_its_identif
     "defect, fragment",
     [("threshold", "differ outside the"), ("dropped", "outside their rules' bounds")],
 )
-def test_a_defect_in_the_candidates_mesh_decisions_fails_on_another_kernel(
+def test_a_defect_in_the_candidates_mesh_decisions_fails_in_one_numeric_environment(
     kernel_run, what, defect, fragment
 ):
-    """The same pairs with the candidate's gap-rule ratio a fifth low, or one gap-flagged leaf left unsplit:
-    the first divergence is a decision no tie explains (or a record off its own rules), so the mesh is
-    compared and fails, never not_comparable."""
-    reference, candidate = kernel_run("Sandybridge", what), kernel_run("SkylakeX", what, defect)
-    report = compare("QUEER_QGEOM", reference, candidate)
+    """The candidate's gap-rule ratio a fifth low, or one gap-flagged leaf left unsplit: on the reference's
+    kernel the mesh is compared and fails, with the decision records' description; on another kernel the
+    difference is not comparable, and the remedy is the same-environment rerun that fails it."""
+    reference = kernel_run("Sandybridge", what)
+    report = compare("QUEER_QGEOM", reference, kernel_run("Sandybridge", what, defect))
     assert report["verdict"] == FAIL, report["summary"]
     assert preconditions(report)["mesh_determined"]["ok"]
     assert (
         quantities(report)["qgeom.mesh"] == UNEXPLAINED and fragment in item(report, "qgeom.mesh")["detail"]
     )
+    report = compare("QUEER_QGEOM", reference, kernel_run("SkylakeX", what, defect))
+    assert report["verdict"] == NOT_COMPARABLE, report["summary"]
+    assert REMEDY in preconditions(report)["mesh_determined"]["detail"]
 
 
-def test_a_refinement_the_candidate_drops_fails_on_another_kernel(kernel_run):
+def test_a_refinement_the_candidate_drops_fails_in_one_numeric_environment(kernel_run):
     """The production-like insulator keeps one mesh on every kernel; a candidate whose first stage never
-    refines its worst leaf diverges in a refinement step no tie explains, against QUEER and the driver."""
+    refines its worst leaf fails against a run of its environment, and is not comparable against another
+    kernel's run or the driver's golden (another numpy build, no BLAS record)."""
     candidate = kernel_run("Prescott", "qgeom_full_insulator", "unrefined")
-    for reference, fragment in (
-        (kernel_run("Sandybridge", "qgeom_full_insulator"), "refinement step"),
-        (GOLDENS / "qgeom_full_insulator", "first divergence"),
-    ):
+    report = compare("QUEER_QGEOM", kernel_run("Prescott", "qgeom_full_insulator"), candidate)
+    assert report["verdict"] == FAIL and quantities(report)["qgeom.mesh"] == UNEXPLAINED, report["summary"]
+    assert "refinement step" in item(report, "qgeom.mesh")["detail"]
+    for reference in (kernel_run("Sandybridge", "qgeom_full_insulator"), GOLDENS / "qgeom_full_insulator"):
         report = compare("QUEER_QGEOM", reference, candidate)
-        assert report["verdict"] == FAIL and quantities(report)["qgeom.mesh"] == UNEXPLAINED, report[
-            "summary"
-        ]
-        assert fragment in item(report, "qgeom.mesh")["detail"]
+        assert report["verdict"] == NOT_COMPARABLE, report["summary"]
+        assert REMEDY in preconditions(report)["mesh_determined"]["detail"]
 
 
 def forge_ties(directory, rounds):
@@ -1341,11 +1357,12 @@ def forge_ties(directory, rounds):
     edit(directory, mutate)
 
 
-def test_a_forged_tie_record_is_never_a_reason(kernel_run, tmp_path):
-    """A candidate whose record is forged to call its defective decisions tied, or whose real tie is struck
-    from its record, fails: a difference is rounding only where both records show the tie."""
+def test_a_forged_tie_record_decides_nothing(kernel_run, tmp_path):
+    """A defective candidate whose record is forged to call its decisions tied still fails in the
+    reference's environment, and an honest run of another kernel whose real tie is struck from its record is
+    still not comparable: the decision records only describe."""
     reference = kernel_run("Sandybridge", "symmetric")
-    defective = copy(kernel_run("SkylakeX", "symmetric", "threshold"), tmp_path / "defective")
+    defective = copy(kernel_run("Sandybridge", "symmetric", "threshold"), tmp_path / "defective")
     forge_ties(defective, range(200))
     report = compare("QUEER_QGEOM", reference, defective)
     assert report["verdict"] == FAIL and quantities(report)["qgeom.mesh"] == UNEXPLAINED, report["summary"]
@@ -1361,26 +1378,90 @@ def test_a_forged_tie_record_is_never_a_reason(kernel_run, tmp_path):
 
     edit(struck, strike)
     report = compare("QUEER_QGEOM", reference, struck)
-    assert report["verdict"] == FAIL and quantities(report)["qgeom.mesh"] == UNEXPLAINED, report["summary"]
+    assert report["verdict"] == NOT_COMPARABLE, report["summary"]
 
 
 @pytest.mark.parametrize("what", ["symmetric", "mirror"])
-def test_a_driver_reference_is_attributed_by_the_candidates_record(kernel_run, tmp_path, what):
-    """Against the driver (no keys, no decision record, its last 12 history entries) the candidate's record
-    alone attributes the difference: a tied round at the first differing history entry, or a refinement the
-    candidate records as ordered by rounding; equal records pass and say what they leave unestablished."""
+def test_a_driver_reference_leaves_a_mesh_difference_not_comparable(kernel_run, tmp_path, what):
+    """The driver records its numpy build but no BLAS build: equal records pass and say what they leave
+    unestablished, and any mesh difference (a defect or another kernel's rounding) is not comparable, with
+    the unrecorded fields and the remedy."""
     sandybridge, skylakex = kernel_run("Sandybridge", what), kernel_run("SkylakeX", what)
     same = compare("QUEER_QGEOM", as_driver(sandybridge, tmp_path / "same"), sandybridge)
     assert same["verdict"] == PASS and "not established" in item(same, "qgeom.mesh")["detail"]
-    defective = kernel_run("Sandybridge", what, "threshold")
-    report = compare("QUEER_QGEOM", as_driver(skylakex, tmp_path / "driver"), defective)
-    assert report["verdict"] == FAIL and quantities(report)["qgeom.mesh"] == UNEXPLAINED, report["summary"]
-    if len(set(vertex_sets(sandybridge, skylakex))) == 1:
-        pytest.skip("these kernels give the model one mesh on this host")
-    report = compare("QUEER_QGEOM", tmp_path / "driver", sandybridge)
-    assert report["verdict"] == NOT_COMPARABLE, report["summary"]
-    detail = preconditions(report)["mesh_determined"]["detail"]
-    assert MESH_ROUNDING in detail and REMEDY in detail
+    for candidate in (kernel_run("Sandybridge", what, "threshold"), sandybridge):
+        report = compare("QUEER_QGEOM", as_driver(skylakex, tmp_path / f"driver_{candidate.name}"), candidate)
+        if candidate == sandybridge and len(set(vertex_sets(sandybridge, skylakex))) == 1:
+            continue
+        assert report["verdict"] == NOT_COMPARABLE, report["summary"]
+        detail = preconditions(report)["mesh_determined"]["detail"]
+        assert MESH_ROUNDING in detail and REMEDY in detail and "unrecorded" in detail
+
+
+def test_each_run_records_its_numeric_environment(kernel_run):
+    """Python, numpy, SciPy, the machine, numpy's SIMD targets and every BLAS library with its core type."""
+    first, second = kernel_run("Sandybridge", "symmetric"), kernel_run("SkylakeX", "symmetric")
+    environments = [
+        read(run / "queer_results.json")["provenance"]["numeric_environment"] for run in (first, second)
+    ]
+    for environment in environments:
+        assert set(ENVIRONMENT_FIELDS) <= set(environment) and environment["blas"]
+        assert all(set(BLAS_FIELDS) <= set(library) for library in environment["blas"])
+    assert {library["architecture"] for library in environments[0]["blas"]} == {"Sandybridge"}
+    assert environment_differences(environments[0], environments[0]) == ([], [])
+    differing, unrecorded = environment_differences(*environments)
+    assert unrecorded == [] and len(differing) == 1 and "SkylakeX" in differing[0]
+    driver = {"python": "3.12.12", "numpy": "2.5.4", "scipy": "1.18.1"}
+    differing, unrecorded = environment_differences(driver, environments[1])
+    assert any("numpy" in text for text in differing)
+    assert unrecorded == ["machine (reference)", "simd (reference)", "blas (reference)"]
+
+
+def test_a_reported_weyl_bound_widens_no_tolerance(insulator, tmp_path):
+    """QGEOM hermitizes H(k) alike in both producers: a Weyl bound the candidate reports (and the driver never
+    writes) leaves the count tolerance as it is, so the 20 K mu_CNP moved along its thermal tail still fails."""
+    reference, candidate = insulator
+    moved = copy(candidate, tmp_path / "moved")
+    move_cnp(moved, "20K", 162.0)
+    edit(moved, lambda document: document["model"].update(hermiticity_weyl_bound=1e-3))
+    report = compare("QUEER_QGEOM", reference, moved)
+    assert report["verdict"] == FAIL
+    assert quantities(report)["qgeom.electron_count.mu_cnp_meV.20K"] == UNEXPLAINED
+
+
+def test_a_quotable_flag_rounding_decides_is_undetermined(insulator, tmp_path):
+    """The insulator golden loses 'quotable' at its in-gap CNP rows, where A3, A3_err and M are rounding; a
+    run whose rounding there is zero is quotable. That difference is undetermined; the same difference at a
+    determined row fails."""
+    reference, candidate = insulator
+    zeroed = copy(candidate, tmp_path / "zeroed")
+
+    def quotable(document):
+        qgeom = document["qgeom"]
+        for T in ("0K", "5K", "20K"):
+            row = qgeom["headline"][T]["CNP"]
+            row.update(A3_A_per_eV=0.0, A3_err=0.0)
+            row["chi_mA_nm_per_V2"] = {key: 0.0 for key in row["chi_mA_nm_per_V2"]}
+            row["chi_err"] = {key: 0.0 for key in row["chi_err"]}
+        qgeom["verdict"], qgeom["verdict_reasons"] = "quotable", []
+
+    edit(zeroed, quotable)
+    assert read(reference / "pythtb_results.json")["qgeom"]["verdict"] == "indicative"
+    report = compare("QUEER_QGEOM", reference, zeroed)
+    assert report["verdict"] in PASSING, report["summary"]
+    assert quantities(report)["qgeom.verdict"] == NOT_APPLICABLE
+    assert "rounding decides" in item(report, "qgeom.verdict")["detail"]
+    determined = copy(candidate, tmp_path / "determined")
+    edit(determined, lambda document: document["qgeom"].update(verdict="quotable", verdict_reasons=[]))
+    # The reference's 0K E_F row now fails 'quotable' by 0.01 against a threshold of 0.0033: determined.
+    loud = copy(reference, tmp_path / "reference")
+    edit(
+        loud,
+        lambda document: document["qgeom"]["headline"]["0K"]["E_F"].update(A3_err=0.01),
+        name="pythtb_results.json",
+    )
+    report = compare("QUEER_QGEOM", loud, determined)
+    assert quantities(report)["qgeom.verdict"] == UNEXPLAINED
 
 
 @pytest.mark.parametrize("kernel", ["Prescott", "Nehalem", "Sandybridge"])

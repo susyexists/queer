@@ -35,6 +35,7 @@ from typing import Any
 import numpy as np
 
 from ...physics.validation import NumericalError
+from .environment import numeric_environment
 from .memory import available_cpus, available_memory_bytes, peak_rss
 
 SCHEMA_VERSION = 1
@@ -363,6 +364,7 @@ def provenance(params_path: str | Path | None) -> dict[str, Any]:
         "host": platform.node(),
         "cpus": available_cpus(),
         "memory_available_bytes": available_memory_bytes(),
+        "numeric_environment": numeric_environment(),
     }
 
 

@@ -1,5 +1,10 @@
 """Why two QGEOM adaptive meshes differ: the first divergence and the tied decisions behind it.
 
+This is a description. The comparator decides a mesh difference by the runs' numeric
+environments (:mod:`~queer.compat.generator.environment`): it fails in one recorded
+environment and is not comparable in different or unrecorded ones. What follows is
+written into that reason and into ``qgeom.mesh``'s detail, and decides nothing.
+
 QUEER records every decision of its integration that rounding can flip
 (``qgeom.integration.decision_ties``, :meth:`queer.observables.qgeom.Integrator.decision_record`):
 the occupation pass's seeds, each must-split round, each refinement step and the second
@@ -31,7 +36,7 @@ must chain from the base mesh to the run's vertex count, its history entries mus
 the run's, its counts its lists, and, with the vertex keys in creation order, each
 round's splits must be the cells whose child centres that round created, each tied
 leaf a leaf of the mesh then and its recorded outcome what the keys show. A record that
-is not its run's is never a reason.
+is not its run's is reported in the description.
 """
 
 from __future__ import annotations
@@ -46,7 +51,10 @@ from ...observables.qgeom import OUTCOMES, SEED_KINDS, AdaptiveMesh, key_hashes,
 HISTORY_EXACT = ("phase", "vertices", "leaves", "target")
 # The driver keeps the last entries of its history.
 HISTORY_KEPT = 12
-REMEDY = "run both on one BLAS kernel (the same OPENBLAS_CORETYPE and numpy build) to compare the meshes"
+REMEDY = (
+    "rerun the candidate in the reference's numeric environment (the same Python, numpy, SciPy and BLAS "
+    "builds on the same core type) to compare the meshes"
+)
 _MOD = 1 << 64
 
 
