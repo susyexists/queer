@@ -1231,7 +1231,7 @@ class _Sums:
         above = place(here, here + 2 * EDGE_EV)
         jump = above - below
         amounts = np.abs(signed[chosen])
-        empty_below = ~below.any(axis=0)
+        empty_below = np.asarray(~below.any(axis=0), bool)
         outer = empty_below ^ ~above.any(axis=0)
         inner = ~outer
         self.tables[prefix + ".edge"] += np.abs(jump) @ amounts
@@ -1244,7 +1244,7 @@ class _Sums:
         )
         current = kernel.value(here[outer])
         inside = np.where(empty_below, above, below)[:, outer]
-        counted = current.any(axis=0)
+        counted = np.asarray(current.any(axis=0), bool)
         transitions = chosen[outer]
         kpoint = transitions // pairs
         lower = empty_below[outer]
