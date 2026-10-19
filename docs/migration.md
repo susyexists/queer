@@ -1,5 +1,17 @@
 # Migration notes
 
+## QUEER 1.6.1 Generator driver environment
+
+The Generator's PythTB driver records `provenance.numeric_environment` from core
+`497beb4c…` on, field for field as QUEER does. The quantum-geometry comparator accepts
+that core, so a mesh difference between a driver reference and a QUEER candidate of
+one numeric environment fails instead of being not comparable. No values change, and
+the algorithm identity stays `1.6.0-histogram-rows-v1`.
+
+1.6.1 also carries the 1.5.1 Wigner-Seitz certification, which 1.6.0 lacks: on 1.6.0,
+`io.wannier_ws.recompute_wsvec` still refuses a correct image search in a supercell much
+longer along one axis than the others.
+
 ## QUEER 1.6.0 Generator OpenMX and quantum-geometry runners
 
 QUEER now also runs the Generator's PyATB steps and its quantum-geometry step:
@@ -50,6 +62,20 @@ Corrections that change values:
 
 Algorithm identity is `1.6.0-histogram-rows-v1`: older partial runs require a fresh
 run; completed artifacts remain renderable.
+
+## QUEER 1.5.1 Wigner-Seitz certification in long supercells
+
+`io.wannier_ws.recompute_wsvec` no longer refuses a correct image search in a
+supercell much longer along one axis than the others, such as a 6x6x6 mesh on a
+54 Å cell. The per-axis plane bound that proves no image outside the
+`[-search_size, search_size]` cube can tie or beat the selected one could not
+decide such cells. Pairs it leaves open now go through an exact lattice walk over
+the images within that distance. The selected images are unchanged, so models that
+certified before give identical tables, and a search that is genuinely too small
+still raises `increase search_size`.
+
+Existing workflows keep their values. Checkpoints keep the `1.4.1-refactor-v1`
+algorithm identity.
 
 ## QUEER 1.5.0 Generator parity runner
 

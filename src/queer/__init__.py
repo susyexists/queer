@@ -8,7 +8,7 @@ from types import ModuleType as _ModuleType
 try:
     __version__ = version("queer")
 except PackageNotFoundError:
-    __version__ = "1.6.0"
+    __version__ = "1.6.1"
 
 _EXPORTS = {
     "CapabilityError": (".capabilities", "CapabilityError"),
