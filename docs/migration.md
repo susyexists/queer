@@ -1,5 +1,19 @@
 # Migration notes
 
+## QUEER 1.5.1 Wigner-Seitz certification in long supercells
+
+`io.wannier_ws.recompute_wsvec` no longer refuses a correct image search in a
+supercell much longer along one axis than the others, such as a 6x6x6 mesh on a
+54 Å cell. The per-axis plane bound that proves no image outside the
+`[-search_size, search_size]` cube can tie or beat the selected one could not
+decide such cells. Pairs it leaves open now go through an exact lattice walk over
+the images within that distance. The selected images are unchanged, so models that
+certified before give identical tables, and a search that is genuinely too small
+still raises `increase search_size`.
+
+Existing workflows keep their values. Checkpoints keep the `1.4.1-refactor-v1`
+algorithm identity.
+
 ## QUEER 1.5.0 Generator parity runner
 
 QUEER now runs the Generator's PythTB steps itself. `python -m queer generator run
