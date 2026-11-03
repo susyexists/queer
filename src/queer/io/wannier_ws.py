@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
+from itertools import permutations
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -240,6 +241,66 @@ class ComputedWignerSeitzShifts(Mapping[WSKey, np.ndarray]):
         return np.asarray(ordered, dtype=np.int64), output
 
 
+def _search_walks(supercell) -> list[tuple[list[int], np.ndarray]]:
+    """Axis orders (inner, middle, outer) with the Cholesky factor of each, longest plane spacing outermost first.
+
+    In an order's factor ``u`` (upper triangular, ``G = u.T @ u``), the squared
+    length of ``x @ basis`` is ``sum_i (sum_{j>=i} u[i, j] x_j)**2``.
+    """
+    spacing = 1 / np.linalg.norm(np.linalg.inv(supercell), axis=0)
+    walks = []
+    for order in sorted(permutations(range(3)), key=lambda axes: tuple(-spacing[list(axes)])):
+        axes = list(order[::-1])
+        basis = supercell[axes]
+        walks.append((axes, np.linalg.cholesky(basis @ basis.T).T))
+    return walks
+
+
+def _integers_outside(low, high, search):
+    """Whether ``[low, high]``, widened against rounding, holds an integer outside ``[-search, search]``."""
+    first = np.ceil(low - 1e-9)
+    last = np.floor(high + 1e-9)
+    return (first <= last) & ((first < -search) | (last > search))
+
+
+def _images_within_search(fractional, radius, walks, search) -> bool:
+    """Whether every supercell image within ``radius`` of each pair lies in the searched cube.
+
+    Image ``n`` of a pair sits at ``(n + fractional) @ supercell``. A
+    Fincke--Pohst walk bounds one coordinate at a time from the integer values
+    of the coordinates outside it. That decides a supercell much longer along
+    one axis than the others, where the per-axis plane bound lets the short
+    axes run out to half the long axis. A pair is certified by the first axis
+    order whose intervals all stay within ``[-search, search]``. The radii and
+    intervals are widened, so rounding can refuse a pair but never certify one.
+    """
+    levels = np.arange(-search, search + 1, dtype=float)
+    radius_sq = np.asarray(radius, float) ** 2 * (1 + 1e-9)
+    pending = np.ones(len(radius_sq), dtype=bool)
+    for axes, u in walks:
+        f = fractional[pending][:, axes]
+        r2 = radius_sq[pending]
+        # Outer coordinate x2 = n2 + f2: |u22 x2| <= r.
+        half = np.sqrt(r2) / u[2, 2]
+        escapes = _integers_outside(-f[:, 2] - half, -f[:, 2] + half, search)
+        x2 = levels + f[:, 2:3]
+        rest = r2[:, None] - (u[2, 2] * x2) ** 2
+        # Middle, for each n2 in the cube: |u11 x1 + u12 x2| <= sqrt(rest).
+        centre = -u[1, 2] * x2 / u[1, 1] - f[:, 1:2]
+        half = np.sqrt(np.maximum(rest, 0)) / u[1, 1]
+        escapes |= np.any((rest >= 0) & _integers_outside(centre - half, centre + half, search), axis=1)
+        x1 = levels + f[:, 1:2]
+        rest = rest[:, :, None] - (u[1, 1] * x1[:, None, :] + u[1, 2] * x2[:, :, None]) ** 2
+        # Inner, for each (n2, n1) in the cube: |u00 x0 + u01 x1 + u02 x2| <= sqrt(rest).
+        centre = -(u[0, 1] * x1[:, None, :] + u[0, 2] * x2[:, :, None]) / u[0, 0] - f[:, 0, None, None]
+        half = np.sqrt(np.maximum(rest, 0)) / u[0, 0]
+        escapes |= np.any((rest >= 0) & _integers_outside(centre - half, centre + half, search), axis=(1, 2))
+        pending[np.flatnonzero(pending)[~escapes]] = False
+        if not pending.any():
+            return True
+    return False
+
+
 def recompute_wsvec(
     data: WannierData,
     centres,
@@ -259,7 +320,9 @@ def recompute_wsvec(
 
     Search integers span ``[-search_size,search_size]`` on all three axes.
     A reciprocal-plane bound verifies that no omitted image can tie or beat
-    the selected images; increase ``search_size`` if the bound is inconclusive.
+    the selected images, and where it is inconclusive an exact lattice walk
+    over the images within that distance does; increase ``search_size`` if
+    neither is conclusive.
     ``chunk_bytes`` bounds estimated temporary distance workspace, excluding
     inputs and the returned compact numeric mapping. Normalization retains
     that chunk layout and applies both HR degeneracy and image weights once.
@@ -329,6 +392,7 @@ def recompute_wsvec(
     supercell = grid[:, None] * lat
     inverse_supercell = np.linalg.inv(supercell)
     inverse_plane_norm = np.linalg.norm(inverse_supercell, axis=0)
+    walks = _search_walks(supercell)
     pairs_per_r = nbnd**2
     offsets = np.empty(len(translations) * pairs_per_r + 1, dtype=np.int64)
     offsets[0] = 0
@@ -352,7 +416,10 @@ def recompute_wsvec(
                 np.maximum(0, search + 1 - abs(fractional)) / inverse_plane_norm,
                 axis=1,
             )
-            if np.any(outside_lower_bound <= nearest + tolerance):
+            unproven = outside_lower_bound <= nearest + tolerance
+            if np.any(unproven) and not _images_within_search(
+                fractional[unproven], nearest[unproven] + tolerance, walks, search
+            ):
                 raise ValueError(
                     "WS search_size cannot exclude closer or tied images outside the search; increase search_size"
                 )
