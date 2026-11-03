@@ -170,6 +170,75 @@ def test_wannier_metadata_mismatch_is_rejected_before_normalizing():
             normalized_operators(changed, "ws_distance", mapping)
 
 
+def brute_force_images(translation, centres, lattice, grid, i, j, radius):
+    """Every supercell shift tied with the nearest image, from a cube shown to hold all within ``radius``."""
+    supercell = np.asarray(grid)[:, None] * np.asarray(lattice, float)
+    vector = np.asarray(translation) @ lattice + centres[j] - centres[i]
+    fractional = vector @ np.linalg.inv(supercell)
+    spacing = 1 / np.linalg.norm(np.linalg.inv(supercell), axis=0)
+    reach = int(np.max(np.ceil(np.abs(fractional) + radius / spacing))) + 1
+    # The cube grows as (radius / spacing)**3: refuse rather than exhaust memory.
+    assert reach <= 30
+    candidates = np.array(list(product(range(-reach, reach + 1), repeat=3)))
+    distances = np.linalg.norm(candidates @ supercell + vector, axis=1)
+    assert distances.min() <= radius
+    return candidates[distances - distances.min() < 1e-5] * grid
+
+
+def test_long_supercell_axis_certifies_images_the_plane_bound_cannot():
+    # A hexagonal layer cell repeated far along c, as for a 6x6x6 mesh on a 54 A cell: the
+    # nearest images lie half a long supercell away, beyond the short axes' plane bound.
+    lattice = np.array([[1, 0, 0], [-0.5, np.sqrt(3) / 2, 0], [0, 0, 12.8]])
+    grid = np.array([2, 2, 2])
+    centres = np.array([[0, 0, 0], [0.3, 0.2, 12.0], [0.1, -0.4, 6.1]])
+    translations = [[0, 0, 0], [1, 0, 0], [0, 0, 1], [-1, 1, -1]]
+    raw = source(translations, np.ones((4, 3, 3)))
+    supercell = grid[:, None] * lattice
+    vector = centres[1] - centres[0]
+    spacing = 1 / np.linalg.norm(np.linalg.inv(supercell), axis=0)
+    plane_bound = np.min((3 - np.abs(vector @ np.linalg.inv(supercell))) * spacing)
+    assert plane_bound < 12.0 < np.linalg.norm(vector)
+    mapping = recompute_wsvec(raw, centres, lattice, grid)
+    for translation, i, j in product(translations, range(3), range(3)):
+        expected = brute_force_images(translation, centres, lattice, grid, i, j, 30.0)
+        got = mapping.shifts[(*translation, i + 1, j + 1)]
+        assert sorted(map(tuple, got)) == sorted(map(tuple, expected))
+
+
+def test_search_certification_is_sound_on_random_cells():
+    rng = np.random.default_rng(20261103)
+    beyond_plane_bound = refused = 0
+    for case in range(200):
+        lattice = rng.normal(size=(3, 3)) + 2 * np.eye(3)
+        lattice[case % 3] *= rng.choice([1, 4, 12])
+        if case % 4 == 0:
+            lattice[1] += rng.integers(-3, 4) * lattice[0]
+        grid = rng.integers(1, 4, size=3)
+        centres = rng.normal(size=(2, 3)) @ lattice
+        translations = [[0, 0, 0], [int(x) for x in rng.integers(-2, 3, size=3)]]
+        if translations[1] == [0, 0, 0]:
+            translations[1] = [1, 0, 0]
+        raw = source(translations, np.ones((2, 2, 2)))
+        search = int(rng.choice([1, 2]))
+        try:
+            mapping = recompute_wsvec(raw, centres, lattice, grid, search_size=search)
+        except ValueError as error:
+            assert "increase search_size" in str(error)
+            refused += 1
+            continue
+        inverse = np.linalg.inv(grid[:, None] * lattice)
+        spacing = 1 / np.linalg.norm(inverse, axis=0)
+        for translation, i, j in product(translations, range(2), range(2)):
+            got = mapping.shifts[(*translation, i + 1, j + 1)]
+            vector = np.asarray(translation) @ lattice + centres[j] - centres[i]
+            nearest = np.linalg.norm(got[0] @ lattice + vector)
+            expected = brute_force_images(translation, centres, lattice, grid, i, j, nearest + 1e-5)
+            assert sorted(map(tuple, got)) == sorted(map(tuple, expected))
+            plane_bound = np.min(np.maximum(0, search + 1 - np.abs(vector @ inverse)) * spacing)
+            beyond_plane_bound += plane_bound <= nearest + 1e-5
+    assert beyond_plane_bound > 20 and refused > 0
+
+
 def test_search_certification_detects_unresolved_skew_lattice_images():
     raw = source([[0, 0, 0]], [[[0, 1], [1, 0]]])
     # Highly oblique primitive vectors admit short images far outside a small
